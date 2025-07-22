@@ -38,7 +38,7 @@ jobs:
 
       # 6. Upload artifact for download
       - name: Upload artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: proteoviewer-windows
           path: proteoviewer-windows.zip
