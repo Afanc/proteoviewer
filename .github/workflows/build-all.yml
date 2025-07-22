@@ -65,7 +65,8 @@ jobs:
 
       - name: Package result
         run: |
-          zip -r proteoviewer-macos.zip dist/proteoviewer/
+          cd dist
+          zip -r ../proteoviewer-macos.zip dist/proteoviewer/ ProteoViewer.app
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4

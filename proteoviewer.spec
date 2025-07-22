@@ -47,3 +47,11 @@ coll = COLLECT(
     upx=True,
     name='proteoviewer',
 )
+
+if sys.platform == 'darwin':
+    app = BUNDLE(
+        coll,
+        name='ProteoViewer.app',
+        icon=None,
+        bundle_identifier='com.afanc.proteoviewer',
+    )
