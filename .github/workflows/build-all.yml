@@ -1,0 +1,76 @@
+name: Build ProteoViewer (Windows)
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+
+    steps:
+      # 1. Check out
+      - uses: actions/checkout@v4
+
+      # 2. Set up Python 3.12
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.12'
+
+      # 3. Install dependencies
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip setuptools wheel
+          pip install panel bokeh tornado scanpy anndata hatchling pyinstaller polars pillow seaborn matplotlib plotly
+
+      # 4. Build with PyInstaller
+      - name: Build EXE
+        run: |
+          pyinstaller proteoviewer.spec
+
+      # 5. Package the result
+      - name: Zip executable
+        run: |
+          powershell -Command "Compress-Archive -Path dist\\proteoviewer\\* -DestinationPath proteoviewer-windows.zip"
+
+      # 6. Upload artifact for download
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: proteoviewer-windows
+          path: proteoviewer-windows.zip
+
+  build-macos:
+    runs-on: macos-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip setuptools wheel
+          pip install -r requirements.txt
+
+      - name: Build EXE
+        run: |
+          pyinstaller proteoviewer.spec
+
+      - name: Package result
+        run: |
+          cd dist
+          zip -r ../proteoviewer-macos.zip dist/proteoviewer/ ProteoViewer.app
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: proteoviewer-macos
+          path: proteoviewer-macos.zip
+
