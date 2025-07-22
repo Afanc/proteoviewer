@@ -3,7 +3,7 @@ block_cipher = None
 
 from PyInstaller.utils.hooks import copy_metadata
 
-datas=copy_metadata('anndata') + copy_metadata('scanpy') + copy_metadata('scikit-learn') + copy_metadata('fastcluster')
+datas=copy_metadata('anndata') + copy_metadata('scanpy') + copy_metadata('scikit-learn')
 a = Analysis(
     ['app.py'],           # your entry-point
     pathex=[],
