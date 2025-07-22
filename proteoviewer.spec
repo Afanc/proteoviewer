@@ -14,6 +14,7 @@ a = Analysis(
         'panel.io.server',
         'hatchling',
         'PIL._tkinter_finder',
+        'sklearn._cyutility',
     ],
     hookspath=[],
     runtime_hooks=[],
