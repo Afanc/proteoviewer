@@ -48,6 +48,7 @@ coll = COLLECT(
     name='proteoviewer',
 )
 
+import sys
 if sys.platform == 'darwin':
     app = BUNDLE(
         coll,
