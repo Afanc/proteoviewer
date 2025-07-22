@@ -7,7 +7,7 @@ datas=copy_metadata('anndata') + copy_metadata('scanpy') + copy_metadata('scikit
 a = Analysis(
     ['app.py'],           # your entry-point
     pathex=[],
-    binaries=[],          # let PyInstaller auto-collect
+    #binaries=[],          # let PyInstaller auto-collect
     # copy_metadata returns a list of (src, dest) pairs—exactly what PyInstaller wants
     datas=datas,
     hiddenimports=[
