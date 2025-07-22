@@ -1,0 +1,11 @@
+panel
+bokeh
+tornado
+scanpy
+anndata
+hatchling
+pyinstaller
+plotly
+polars
+Pillow
+fastcluster
