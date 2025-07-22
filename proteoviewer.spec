@@ -16,6 +16,7 @@ a = Analysis(
         'PIL._tkinter_finder',
         'sklearn._cyutility',
         'fastcluster',
+        'binascii',
     ],
     hookspath=[],
     runtime_hooks=[],
