@@ -400,7 +400,7 @@ def plot_pca_2d(
     df[color_key] = adata.obs[color_key].values
 
     # pick colors
-    levels = df[color_key].unique().tolist()
+    levels = sorted(df[color_key].unique().tolist())
     palette = get_color_map(levels, px.colors.qualitative.Plotly)
 
     fig = go.Figure()
@@ -451,7 +451,7 @@ def plot_umap_2d(
     )
     df[color_key] = adata.obs[color_key].values
 
-    levels = df[color_key].unique().tolist()
+    levels = sorted(df[color_key].unique().tolist())
     palette = get_color_map(levels, px.colors.qualitative.Plotly)
 
     fig = go.Figure()

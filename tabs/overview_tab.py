@@ -5,7 +5,8 @@ from components.overview_plots import (
     plot_violin_cv_rmad_per_condition,
     plot_h_clustering_heatmap,
     plot_volcanoes_wrapper,
-    plot_intensity_by_protein
+    plot_intensity_by_protein,
+    get_protein_info
 )
 from components.plot_utils import plot_pca_2d, plot_umap_2d
 from components.texts import (
@@ -129,10 +130,32 @@ def overview_tab(state: SessionState):
     def detail_panel(protein, contrast):
         if not protein:
             # an inert box *exactly* the size of your eventual plot
-            return pn.Spacer(width=400, height=350)
+            return pn.Spacer(width=900, height=800)
+
         # otherwise build & return the real Plotly pane
         fig = plot_intensity_by_protein(state, contrast, protein)
-        return pn.pane.Plotly(fig, width=400, height=350)
+        barplot_pane = pn.pane.Plotly(fig,
+                                      width=700,
+                                      height=400,
+                                      margin=(-30, 0, 0, 0),
+                                      )
+        protein_info = get_protein_info(state, contrast, protein)
+
+        info_col = pn.Column(
+            pn.pane.Markdown(f"""**Uniprot ID:** {protein_info['uniprot_id']}<br>
+                             **q-value:** {protein_info['qval']:.3e}<br>
+                             **log₂ FC:** {protein_info['logfc']:.3f}<br>
+                             **Avg intensity:** {protein_info['avg_int']:.3f}<br>
+                             """),
+            width=150,
+            sizing_mode="fixed",
+            margin=(10, 10, 10, 30),
+        )
+
+        detailed_pane = pn.Row(info_col, barplot_pane)
+        #detailed_pane = pn.Row(barplot_pane, info_col)
+
+        return detailed_pane
 
     # 3) assemble into a layout, no legend‐based toggles
     volcano_pane = pn.Column(
@@ -156,15 +179,6 @@ def overview_tab(state: SessionState):
         ),
         pn.Row(
             volcano_plot,
-            #pn.panel(volcano_dmap,
-            #width=900,
-            #height=800,
-            #margin=(-50, 0, 0, 0),
-            #sizing_mode="fixed",
-            #max_states=20,
-            #),
-            #detail_pane,
-            #detail_container,
             detail_panel,
         ),
         width=1200,

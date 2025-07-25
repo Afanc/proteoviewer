@@ -167,10 +167,61 @@ def plot_intensity_by_protein(state, contrast, protein):
         "condition": ad.obs["CONDITION"],
         "intensity": layer[:, col].A1 if hasattr(layer, "A1") else layer[:, col]
     })
+
+    grp1, grp2 = contrast.split("_vs_")
+    df = df[df["condition"].isin([grp1, grp2])]
+
+    conditions = sorted(ad.obs["CONDITION"].unique())
+    color_map = get_color_map(conditions,
+                              palette=px.colors.qualitative.Plotly)
     fig = px.bar(
         df, x="sample", y="intensity", color="condition",
-        title=f"{protein} intensities", labels={"intensity":"Intensity"}
+        labels={"intensity":"Intensity"},
+        color_discrete_map=color_map,
     )
-    fig.update_layout(margin={"t":40,"b":40,"l":40,"r":40})
+    fig.update_layout(margin={"t":40,"b":40,"l":40,"r":40},
+                      title=dict(text=f"{protein}",x=0.5)
+    )
     return fig
 
+def get_protein_info(state, contrast, protein):
+    ad   = state.adata
+    names = ad.var["GENE_NAMES"].astype(str)
+    mask  = names == protein
+    uniprot_id = ad.var_names[mask][0]
+
+    # log2FC & q-value
+    df_fc = pd.DataFrame(
+        ad.varm["log2fc"],
+        index=ad.var_names,
+        columns=ad.uns["contrast_names"],
+    )
+    df_q  = pd.DataFrame(
+        ad.varm.get("q_ebayes", ad.varm["q"]),
+        index=ad.var_names,
+        columns=ad.uns["contrast_names"],
+    )
+
+    logfc = df_fc.loc[uniprot_id, contrast]
+    qval  = df_q.loc[uniprot_id, contrast]
+
+    # average intensity (of the same layer you plotted)
+    layer = ad.layers.get("lognorm", ad.X)
+
+    mat   = layer.toarray() if hasattr(layer, "toarray") else layer
+    # pick samples for this contrast
+    grp1, grp2 = contrast.split("_vs_")
+    idx1 = ad.obs["CONDITION"] == grp1
+    idx2 = ad.obs["CONDITION"] == grp2
+    # compute mean across all samples
+    col_idx = list(ad.var["GENE_NAMES"]).index(protein)
+    vals = mat[np.logical_or(idx1, idx2), col_idx]
+    avg_int = float(np.nanmean(vals))
+
+    protein_info = {
+        'uniprot_id': uniprot_id,
+        'qval': qval,
+        'logfc': logfc,
+        'avg_int': avg_int,
+    }
+    return protein_info
