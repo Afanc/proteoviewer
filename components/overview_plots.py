@@ -150,11 +150,16 @@ def plot_volcanoes_wrapper(
 
     return fig
 
-def plot_intensity_by_protein(state, contrast, protein):
+def plot_intensity_by_protein(state, contrast, protein, layer):
 
     ad = state.adata
     # pick your normalized layer (fallback to .X)
-    layer = ad.layers.get("lognorm", ad.X)
+    layer_data = ad.X
+    intensity_scale = "Log Intensity"
+    if layer.value == "Raw":
+        layer_data = ad.layers.get('raw')
+        intensity_scale = "Intensity"
+
     # find column index by GENE_NAMES
     try:
         col = list(ad.var["GENE_NAMES"]).index(protein)
@@ -165,7 +170,7 @@ def plot_intensity_by_protein(state, contrast, protein):
     df = pd.DataFrame({
         "sample": ad.obs_names,
         "condition": ad.obs["CONDITION"],
-        "intensity": layer[:, col].A1 if hasattr(layer, "A1") else layer[:, col]
+        "intensity": layer_data[:, col].A1 if hasattr(layer_data, "A1") else layer_data[:, col]
     })
 
     grp1, grp2 = contrast.split("_vs_")
@@ -176,7 +181,7 @@ def plot_intensity_by_protein(state, contrast, protein):
                               palette=px.colors.qualitative.Plotly)
     fig = px.bar(
         df, x="sample", y="intensity", color="condition",
-        labels={"intensity":"Intensity"},
+        labels={"intensity":f"{intensity_scale}"},
         color_discrete_map=color_map,
     )
     fig.update_layout(margin={"t":40,"b":40,"l":40,"r":40},
@@ -184,11 +189,15 @@ def plot_intensity_by_protein(state, contrast, protein):
     )
     return fig
 
-def get_protein_info(state, contrast, protein):
+def get_protein_info(state, contrast, protein, layer):
     ad   = state.adata
     names = ad.var["GENE_NAMES"].astype(str)
     mask  = names == protein
     uniprot_id = ad.var_names[mask][0]
+
+    layer_data = ad.X
+    if layer.value == "Raw":
+        layer_data = ad.layers.get('raw')
 
     # log2FC & q-value
     df_fc = pd.DataFrame(
@@ -206,9 +215,9 @@ def get_protein_info(state, contrast, protein):
     qval  = df_q.loc[uniprot_id, contrast]
 
     # average intensity (of the same layer you plotted)
-    layer = ad.layers.get("lognorm", ad.X)
+    #layer = ad.layers.get("lognorm", ad.X)
 
-    mat   = layer.toarray() if hasattr(layer, "toarray") else layer
+    mat   = layer_data.toarray() if hasattr(layer_data, "toarray") else layer_data
     # pick samples for this contrast
     grp1, grp2 = contrast.split("_vs_")
     idx1 = ad.obs["CONDITION"] == grp1

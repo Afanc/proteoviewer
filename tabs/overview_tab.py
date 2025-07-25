@@ -85,7 +85,7 @@ def overview_tab(state: SessionState):
     _update_toggle_labels()
 
     contrast_sel.param.watch(_update_toggle_labels, "value")
-    color_by.param.watch(_update_toggle_labels, "value")
+    #color_by.param.watch(_update_toggle_labels, "value")
 
     # search widget
     search_input = pn.widgets.AutocompleteInput(
@@ -115,7 +115,7 @@ def overview_tab(state: SessionState):
         click = event.new        # the new click_data dict
         if click and click.get("points"):
             gene = click["points"][0]["text"]
-            search_input.value = gene   # reuse your existing search box
+            search_input.value = gene
 
     volcano_plot = pn.pane.Plotly(
         volcano_dmap,
@@ -126,34 +126,52 @@ def overview_tab(state: SessionState):
     volcano_plot.param.watch(_on_volcano_click, "click_data")
 
     # bind a detail‐plot function to the same contrast & search_input
-    @pn.depends(protein=search_input, contrast=contrast_sel)
-    def detail_panel(protein, contrast):
+    layers = ["Processed", "Raw"]
+
+    layers_sel = pn.widgets.Select(
+        name="Data",
+        options=layers,
+        value=layers[0],
+        width=100,
+        margin=(20, 0, 0, 20),
+    )
+
+    @pn.depends(protein=search_input, contrast=contrast_sel, layer=layers_sel)
+    def detail_panel(protein, contrast, layer):
         if not protein:
             # an inert box *exactly* the size of your eventual plot
             return pn.Spacer(width=900, height=800)
 
         # otherwise build & return the real Plotly pane
-        fig = plot_intensity_by_protein(state, contrast, protein)
+
+        fig = plot_intensity_by_protein(state, contrast, protein, layers_sel)
         barplot_pane = pn.pane.Plotly(fig,
                                       width=700,
                                       height=400,
-                                      margin=(-30, 0, 0, 0),
+                                      margin=(-30, 0, 0, 20),
                                       )
-        protein_info = get_protein_info(state, contrast, protein)
+        protein_info = get_protein_info(state, contrast, protein, layers_sel)
+
+        intensity_scale = "Avg Log Intensity"
+        if layer == "Raw":
+            intensity_scale = "Avg Intensity"
 
         info_col = pn.Column(
             pn.pane.Markdown(f"""**Uniprot ID:** {protein_info['uniprot_id']}<br>
                              **q-value:** {protein_info['qval']:.3e}<br>
                              **log₂ FC:** {protein_info['logfc']:.3f}<br>
-                             **Avg intensity:** {protein_info['avg_int']:.3f}<br>
+                             **{intensity_scale}:** {protein_info['avg_int']:.3f}<br>
                              """),
             width=150,
             sizing_mode="fixed",
-            margin=(10, 10, 10, 30),
+            margin=(10, 10, 0, 0),
         )
 
-        detailed_pane = pn.Row(info_col, barplot_pane)
-        #detailed_pane = pn.Row(barplot_pane, info_col)
+        detailed_pane = pn.Row(
+                            pn.Column(
+                                layers_sel,
+                                info_col),
+                            barplot_pane)
 
         return detailed_pane
 
