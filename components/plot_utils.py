@@ -257,23 +257,28 @@ def compute_metric_by_condition(
 
     # 2) choose the right function (operate on axis=0 for proteins)
     def _cv(x: np.ndarray) -> np.ndarray:
-        # x: samples × proteins
-        n_valid = np.sum(~np.isnan(x), axis=0)
-        mean    = np.nanmean(x,    axis=0)
-        std     = np.nanstd(x,     axis=0, ddof=1)
-        with np.errstate(divide="ignore", invalid="ignore"):
-            return np.where((n_valid > 1) & (mean != 0),
-                            std/mean*100,
-                            np.nan)
+        """
+        Geometric CV on log2-normalized data (samples × proteins),
+        returned as a percentage.
+        """
+        linear_values = 2**x
+
+        std = np.nanstd(linear_values, axis=0)
+        mean = np.clip(np.nanmean(linear_values, axis=0), 1e-6, None)
+
+        cv = 100*std/mean
+
+        return cv
 
     def _rmad(x: np.ndarray) -> np.ndarray:
-        n_valid = np.sum(~np.isnan(x), axis=0)
-        med     = np.nanmedian(x,                 axis=0)
-        mad     = np.nanmedian(np.abs(x - med),   axis=0)
-        with np.errstate(divide="ignore", invalid="ignore"):
-            return np.where((n_valid > 0) & (med != 0),
-                            mad/med*100,
-                            np.nan)
+        linear = 2 ** x
+
+        med = np.nanmedian(linear, axis=0)
+        mad = np.nanmedian(np.abs(linear - med), axis=0)
+
+        rmad = 100 * mad / np.clip(med, 1e-6, None)
+
+        return rmad
 
     compute_fn = _cv if metric == "CV" else _rmad
 
@@ -284,61 +289,6 @@ def compute_metric_by_condition(
     # Per‐condition
     for cond, subdf in df.groupby(conditions, axis=0):
         out[cond] = compute_fn(subdf.values)
-
-    return out
-
-def compute_metric_by_condition_old(
-    df_mat: pd.DataFrame,
-    cond_map: pd.Series,
-    metric: Literal["CV", "rMAD"] = "CV",
-) -> Dict[str, np.ndarray]:
-    """
-    Fast, safe, truly warning-free computation of %CV or rMAD per condition.
-    """
-    out: Dict[str, np.ndarray] = {}
-    arr = df_mat.values
-
-    def compute_cv(x: np.ndarray) -> np.ndarray:
-        valid = ~np.isnan(x)
-        n_valid = valid.sum(axis=1)
-        # Mask rows with <= 1 valid values
-        mask = n_valid > 1
-        mean = np.full(x.shape[0], np.nan)
-        std = np.full(x.shape[0], np.nan)
-
-        if np.any(mask):
-            mean[mask] = np.nanmean(x[mask], axis=1)
-            std[mask] = np.nanstd(x[mask], axis=1, ddof=1)
-
-        with np.errstate(invalid="ignore", divide="ignore"):
-            result = np.where(mean != 0, std / mean * 100, np.nan)
-        return result
-
-    def compute_rmad(x: np.ndarray) -> np.ndarray:
-        valid = ~np.isnan(x)
-        n_valid = valid.sum(axis=1)
-        mask = n_valid > 0
-        med = np.full(x.shape[0], np.nan)
-        mad = np.full(x.shape[0], np.nan)
-
-        if np.any(mask):
-            med[mask] = np.nanmedian(x[mask], axis=1)
-            mad[mask] = np.nanmedian(np.abs(x[mask] - med[mask][:, None]), axis=1)
-
-        with np.errstate(invalid="ignore", divide="ignore"):
-            result = np.where(med != 0, mad / med * 100, np.nan)
-        return result
-
-    compute_fn = compute_cv if metric == "CV" else compute_rmad
-
-    # Global ("Total")
-    out["Total"] = compute_fn(arr)
-
-    # Per-condition
-    for cond in cond_map.unique():
-        cols = cond_map[cond_map == cond].index
-        sub_arr = df_mat[cols].values
-        out[cond] = compute_fn(sub_arr)
 
     return out
 
@@ -757,12 +707,13 @@ def plot_volcanoes(
     show_imp_cond1: bool = True,
     show_imp_cond2: bool = True,
     highlight: str = None,
+    color_by: str = "SNR",
 ) -> go.Figure:
     """
     Single‐contrast volcano with separate toggles for:
-      • measured in both
-      • imputed in condition1
-      • imputed in condition2
+      - measured in both
+      - imputed in condition1
+      - imputed in condition2
     """
     adata = state.adata
     genes = np.array(adata.var["GENE_NAMES"])
@@ -805,50 +756,66 @@ def plot_volcanoes(
     # significance coloring
     sig_up   = (df_q[contrast] < sign_threshold) & (x > 0)
     sig_down = (df_q[contrast] < sign_threshold) & (x < 0)
-    colors   = np.where(sig_up, "red",
-                np.where(sig_down, "blue", "gray"))
+
+    # --- prepare color arrays/scales based on color_by ---
+    if color_by == "Significance":
+        # discrete red/blue/gray
+        color_vals = np.where(sig_up, "red",
+                      np.where(sig_down, "blue", "gray"))
+        colorscale = None
+        colorbar   = None
+
+    elif color_by == "Avg Expression":
+        # placeholder: average of some expression layer (e.g. lognorm)
+        expr_layer = adata.X
+        mat = expr_layer.toarray() if hasattr(expr_layer, "toarray") else expr_layer
+        idx1 = adata.obs["CONDITION"] == grp1
+        idx2 = adata.obs["CONDITION"] == grp2
+        mean1 = mat[idx1, :].mean(axis=0)
+        mean2 = mat[idx2, :].mean(axis=0)
+        avg_expr = pd.Series((mean1 + mean2) / 2, index=adata.var_names)
+        color_vals = avg_expr
+        colorscale = "thermal"
+        colorbar = dict(title="Mean log expr", len=0.5)
+
+    else:
+        raise ValueError(f"Unknown color_by mode: {color_by!r}")
+
+    # helper to build a trace
+    def add_group_trace(mask, name, symbol):
+        trace_kwargs = dict(
+            x=x[mask], y=y[mask],
+            mode="markers",
+            marker=dict(
+                symbol=symbol,
+                size=6,
+                opacity=base_opacity[mask],
+            ),
+            name=name,
+            text=adata.var["GENE_NAMES"][mask],
+            hovertemplate="Gene: %{text}<br>log2FC: %{x:.2f}<br>-log10(q): %{y:.2f}<extra></extra>"
+        )
+        # continuous coloring
+        add_colorbar = False
+        if color_by != "Significance" and name == "Observed in both":
+            add_colorbar = True
+        if color_by != "significance":
+            trace_kwargs["marker"].update(
+                color=color_vals[mask],
+                colorscale=colorscale,
+                showscale = True if add_colorbar else False,
+                colorbar=colorbar if add_colorbar else None,
+            )
+        else:
+            trace_kwargs["marker"]["color"] = color_vals[mask]
+
+        fig.add_trace(go.Scattergl(**trace_kwargs))
 
     fig = go.Figure()
 
-    # measured
-    if show_measured:
-        fig.add_trace(go.Scattergl(
-            x=x[measured_mask], y=y[measured_mask],
-            mode="markers",
-            marker=dict(symbol="circle",
-                        color=colors[measured_mask],
-                        size=6,
-                        opacity=base_opacity[measured_mask]),
-            name="Observed in both",
-            text=adata.var["GENE_NAMES"][measured_mask],
-            hovertemplate="Gene: %{text}<br>log2FC: %{x:.2f}<br>-log10(q): %{y:.2f}<extra></extra>"
-        ))
-    # imputed cond1
-    if show_imp_cond1:
-        fig.add_trace(go.Scattergl(
-            x=x[imp1_mask], y=y[imp1_mask],
-            mode="markers",
-            marker=dict(symbol="triangle-up",
-                        color=colors[imp1_mask],
-                        size=6,
-                        opacity=base_opacity[imp1_mask]),
-            name=f"Imputed in {grp1}",
-            text=adata.var["GENE_NAMES"][imp1_mask],
-            hovertemplate="Gene: %{text}<br>log2FC: %{x:.2f}<br>-log10(q): %{y:.2f}<extra></extra>"
-        ))
-    # imputed cond2
-    if show_imp_cond2:
-        fig.add_trace(go.Scattergl(
-            x=x[imp2_mask], y=y[imp2_mask],
-            mode="markers",
-            marker=dict(symbol="triangle-down",
-                        color=colors[imp2_mask],
-                        size=6,
-                        opacity=base_opacity[imp2_mask]),
-            name=f"Imputed in {grp2}",
-            text=adata.var["GENE_NAMES"][imp2_mask],
-            hovertemplate="Gene: %{text}<br>log2FC: %{x:.2f}<br>-log10(q): %{y:.2f}<extra></extra>"
-        ))
+    if show_measured:   add_group_trace(measured_mask, "Observed in both", "circle")
+    if show_imp_cond1:  add_group_trace(imp1_mask, f"Imputed in {grp1}", "triangle-up")
+    if show_imp_cond2:  add_group_trace(imp2_mask, f"Imputed in {grp2}", "triangle-down")
 
     # threshold & axes with padding
     thr_y = -np.log10(sign_threshold)
@@ -912,6 +879,13 @@ def plot_volcanoes(
         annos.append(arrow_ann)
 
     fig.update_layout(
+        margin=dict(
+            l=60,
+            r=120,
+            t=60,
+            b=60,
+            autoexpand=False   # <- disable legends/colorbars pushing the plot area
+        ),
         annotations=annos,
         title=dict(text=f"{contrast}",
                         x=0.5),
@@ -927,7 +901,7 @@ def plot_volcanoes(
                  line=dict(color="black", dash="dash")),
         ],
         xaxis=dict(title="log2 Fold Change", autorange=True),
-        yaxis=dict(title="-log10(q-value)",    autorange=True),
+        yaxis=dict(title="-log10(q-value)", autorange=True),
         width=width, height=height,
     )
 

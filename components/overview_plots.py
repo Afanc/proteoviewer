@@ -100,51 +100,26 @@ def plot_h_clustering_heatmap(adata):
 
     # 4) Draw the heatmap using those linkages
 
-    # so much faster than plotly. maybe plotly overkill.
-    import seaborn as sns
-    import matplotlib.pyplot as plt
-    fig = sns.clustermap(df_z, method="ward", metric="euclidean", figsize=(12,10), cmap="RdBu_r")
-    return fig.figure
-    #fig = plot_cluster_heatmap_plotly(
-    #    data=df_z,
-    #    y_labels=y_labels,
-    #    cond_series=cond_ser,
-    #    colorscale="RdBu",
-    #    title="Clustergram of All Samples",
-    #    sample_linkage=sample_linkage,
-    #    feature_linkage=feature_linkage,
-    #)
-    #return fig
+    # --- seaborn version
+    #import seaborn as sns
+    #import matplotlib.pyplot as plt
+    #fig = sns.clustermap(df_z, method="ward", metric="euclidean", figsize=(12,10), cmap="RdBu_r")
+    #return fig.figure
+    # ---
 
-
-def plot_h_clustering_heatmap_old(im):
-
-    meta = im.dfs["protein_metadata"].to_pandas()
-    df = pd.DataFrame(im.matrices["imputed"],
-                      index=meta["INDEX"].tolist(),
-                      columns=im.columns)
-
-    df_z = df.sub(df.mean(axis=1), axis=0)
-
-    gene_map = meta.set_index("INDEX")["GENE_NAMES"]
-    y_labels = gene_map.reindex(df_z.index).tolist()
-
-    cond_ser = (
-        im.dfs["condition_pivot"]
-          .to_pandas()
-          .set_index("Sample")["CONDITION"]
-    )
-
+    # --- plotly version
     fig = plot_cluster_heatmap_plotly(
         data=df_z,
         y_labels=y_labels,
-        method="ward",
-        metric="euclidean",
+        cond_series=cond_ser,
         colorscale="RdBu",
-        cond_series=cond_ser.reindex(df_z.columns),
-        title="Clustergram of All Samples"
+        title="Clustergram of All Samples",
+        sample_linkage=sample_linkage,
+        feature_linkage=feature_linkage,
     )
     return fig
+    # ---
+
 
 @log_time("Plotting Volcano Plots")
 def plot_volcanoes_wrapper(
@@ -156,6 +131,7 @@ def plot_volcanoes_wrapper(
     show_imp_cond1:  bool = True,
     show_imp_cond2:  bool = True,
     highlight: str = None,
+    color_by: str = None,
     contrast: str = None,
 ) -> go.Figure:
     # simply forward the SessionState + args into the pure util
@@ -169,6 +145,32 @@ def plot_volcanoes_wrapper(
         show_imp_cond1=show_imp_cond1,
         show_imp_cond2=show_imp_cond2,
         highlight=highlight,
+        color_by=color_by,
     )
 
     return fig
+
+def plot_intensity_by_protein(state, contrast, protein):
+
+    ad = state.adata
+    # pick your normalized layer (fallback to .X)
+    layer = ad.layers.get("lognorm", ad.X)
+    # find column index by GENE_NAMES
+    try:
+        col = list(ad.var["GENE_NAMES"]).index(protein)
+    except ValueError:
+        return px.bar(pd.DataFrame({"x":[],"y":[]}))  # empty plot
+
+    # build a frame: one row per cell/sample
+    df = pd.DataFrame({
+        "sample": ad.obs_names,
+        "condition": ad.obs["CONDITION"],
+        "intensity": layer[:, col].A1 if hasattr(layer, "A1") else layer[:, col]
+    })
+    fig = px.bar(
+        df, x="sample", y="intensity", color="condition",
+        title=f"{protein} intensities", labels={"intensity":"Intensity"}
+    )
+    fig.update_layout(margin={"t":40,"b":40,"l":40,"r":40})
+    return fig
+

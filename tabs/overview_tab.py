@@ -4,7 +4,8 @@ from components.overview_plots import (
     plot_barplot_proteins_per_sample,
     plot_violin_cv_rmad_per_condition,
     plot_h_clustering_heatmap,
-    plot_volcanoes_wrapper
+    plot_volcanoes_wrapper,
+    plot_intensity_by_protein
 )
 from components.plot_utils import plot_pca_2d, plot_umap_2d
 from components.texts import (
@@ -46,11 +47,12 @@ def overview_tab(state: SessionState):
                                sizing_mode="stretch_width")
 
     #h_clustering_pane = pn.pane.Plotly(plot_h_clustering_heatmap(adata),
-    h_clustering_pane = pn.pane.Matplotlib(plot_h_clustering_heatmap(adata),
-                                       height=800,
-                                       sizing_mode="stretch_width")
+    ##h_clustering_pane = pn.pane.Matplotlib(plot_h_clustering_heatmap(adata),
+    #                                   height=800,
+    #                                   sizing_mode="stretch_width")
 
     ## Volcanoes
+    # Contrast selector
     contrasts = state.adata.uns["contrast_names"].tolist()
 
     contrast_sel = pn.widgets.Select(
@@ -63,6 +65,15 @@ def overview_tab(state: SessionState):
     show_imp_cond1 = pn.widgets.Checkbox(name=f"", value=True)
     show_imp_cond2 = pn.widgets.Checkbox(name=f"", value=True)
 
+    # Color selector
+    color_options = ["Significance", "Avg Expression"]
+
+    color_by = pn.widgets.Select(
+        name="Color by",
+        options=color_options,
+        value=color_options[0],
+        width=200,
+    )
     # 3) Function to update toggle labels whenever contrast changes
     def _update_toggle_labels(event=None):
         grp1, grp2 = contrast_sel.value.split("_vs_")
@@ -71,21 +82,25 @@ def overview_tab(state: SessionState):
 
     # initialize labels and watch for changes
     _update_toggle_labels()
-    contrast_sel.param.watch(_update_toggle_labels, "value")
 
+    contrast_sel.param.watch(_update_toggle_labels, "value")
+    color_by.param.watch(_update_toggle_labels, "value")
+
+    # search widget
     search_input = pn.widgets.AutocompleteInput(
         name="Search Protein",
         options=list(state.adata.var["GENE_NAMES"]),
         placeholder="Type gene name…",
     )
+
     clear_search = pn.widgets.Button(name="Clear Search", width=100)
-    # clicking it empties the search box
     clear_search.on_click(lambda event: setattr(search_input, "value", ""))
 
     volcano_dmap = pn.bind(
         plot_volcanoes_wrapper,
         state=state,
         contrast=contrast_sel,
+        color_by=color_by,
         show_measured=show_measured,
         show_imp_cond1=show_imp_cond1,
         show_imp_cond2=show_imp_cond2,
@@ -95,31 +110,63 @@ def overview_tab(state: SessionState):
         height=800,
     )
 
+    def _on_volcano_click(event):
+        click = event.new        # the new click_data dict
+        if click and click.get("points"):
+            gene = click["points"][0]["text"]
+            search_input.value = gene   # reuse your existing search box
+
+    volcano_plot = pn.pane.Plotly(
+        volcano_dmap,
+        width=900, height=800,
+        margin=(-50, 0, 0, 0),
+        sizing_mode="fixed",
+    )
+    volcano_plot.param.watch(_on_volcano_click, "click_data")
+
+    # bind a detail‐plot function to the same contrast & search_input
+    @pn.depends(protein=search_input, contrast=contrast_sel)
+    def detail_panel(protein, contrast):
+        if not protein:
+            # an inert box *exactly* the size of your eventual plot
+            return pn.Spacer(width=400, height=350)
+        # otherwise build & return the real Plotly pane
+        fig = plot_intensity_by_protein(state, contrast, protein)
+        return pn.pane.Plotly(fig, width=400, height=350)
+
     # 3) assemble into a layout, no legend‐based toggles
     volcano_pane = pn.Column(
         pn.Row(
             contrast_sel,
-            pn.Spacer(width=140),
+            pn.Spacer(width=50),
+            color_by,
+            pn.Spacer(width=50),
             pn.Row(
                 show_measured,
                 show_imp_cond1,
                 show_imp_cond2,
                 margin=(25,0,0,0),
             ),
-            pn.Spacer(width=400),
+            pn.Spacer(width=300),
             search_input,
             pn.Row(clear_search, margin = (17,0,0,0)),
             sizing_mode="fixed",
             width=300,
             height=160,
         ),
-        pn.panel(volcano_dmap,
-                 width=900,
-                 height=800,
-                 margin=(-50, 0, 0, 0),
-                 sizing_mode="fixed",
-                 max_states=20,
-                 ),
+        pn.Row(
+            volcano_plot,
+            #pn.panel(volcano_dmap,
+            #width=900,
+            #height=800,
+            #margin=(-50, 0, 0, 0),
+            #sizing_mode="fixed",
+            #max_states=20,
+            #),
+            #detail_pane,
+            #detail_container,
+            detail_panel,
+        ),
         width=1200,
         height=900,
         sizing_mode="fixed",
@@ -142,7 +189,7 @@ def overview_tab(state: SessionState):
         pn.Row(rmad_pane, cv_pane, sizing_mode="stretch_width"),
         pn.pane.Markdown("##   Clustering"),
         pn.Row(pca_pane, umap_pane, sizing_mode="stretch_width"),
-        h_clustering_pane,
+        #h_clustering_pane,
         pn.pane.Markdown("##   Volcano plots"),
         volcano_pane,
 
