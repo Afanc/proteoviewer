@@ -13,9 +13,12 @@ from components.texts import (
     intro_preprocessing_text,
     log_transform_text
 )
+from components.string_links import get_string_link
 from utils import logger, log_time
+import textwrap
 
 pn.extension("plotly")
+pn.extension("indicator")
 
 
 @log_time("Preparing Overview Tab")
@@ -31,21 +34,122 @@ def overview_tab(state: SessionState):
     # Plots
     adata = state.adata
 
+    ## Config Pane
+    # Texts
+    preproc_cfg = adata.uns["preprocessing"]
+    analysis_cfg = adata.uns["analysis"]
+    filtering      = preproc_cfg.get("filtering", {})
+    normalization  = preproc_cfg.get("normalization", {})
+    imputation     = preproc_cfg.get("imputation", {})
+    ebayes_method  = analysis_cfg.get("ebayes_method", "limma")
+    analysis_type  = analysis_cfg.get("analysis_type", "")
+
+    # numbers of PSM removed (as you do in PDF)
+    n_cont   = len(adata.uns.get("removed_contaminants", {}).get("INDEX", []))
+    n_q      = len(adata.uns.get("removed_qvalue", {}).get("INDEX", []))
+    n_pep    = len(adata.uns.get("removed_pep", {}).get("INDEX", []))
+    n_re     = len(adata.uns.get("removed_RE", {}).get("INDEX", []))
+
+    # build a single Markdown string
+    summary_md = textwrap.dedent(f"""
+        **Analysis Type**: {analysis_type}
+
+        **Pipeline steps**
+        - **Filtering**:
+            - Contaminants ({', '.join(filtering.get('contaminants_files', []))}): {n_cont:,} PSM removed
+            - q-value ≤ {filtering.get('qvalue_threshold', 0.0)}: {n_q:,} PSM removed
+            - PEP ≤ {filtering.get('pep_threshold', 0.0)}: {n_pep:,} PSM removed
+            - Min. run evidence count = {filtering.get('run_evidence_count', 0)}: {n_re:,} PSM removed
+        - **Normalization**: {normalization.get('method', '')}
+        - **Imputation**: {imputation.get('method', '')}
+        - **Differential expression**: eBayes via {ebayes_method}
+    """).strip()
+
+    # replace your intro_text / intro_pane:
+    summary_pane = pn.pane.Markdown(summary_md,
+        sizing_mode="stretch_width",
+        margin=(0, 0, 0, 20),
+        styles={
+            "line-height":"1.4em"
+            #"white-space": "pre-wrap",
+        }
+    )
+
+    intro_pane = pn.Column(
+        pn.pane.Markdown("###   Summary of analysis"),
+        summary_pane,
+        height=280,
+        margin=(0, 0, 0, 20),
+        sizing_mode="fixed",
+        styles={
+            'border-radius':  '15px',
+            'box-shadow':     '3px 3px 5px #bcbcbc',
+            'width': '98vw',
+        }
+    )
+
     ## IDs barplot
     hist_ID_fig = plot_barplot_proteins_per_sample(adata)
+    hist_pane = pn.Row(
+            pn.pane.Markdown("##   Identifications",
+                               styles={"flex":"0.1"}),
+            hist_ID_fig,
+            height=530,
+            margin=(0, 0, 0, 20),
+            sizing_mode="stretch_width",
+            styles={
+                'border-radius':  '15px',
+                'box-shadow':     '3px 3px 5px #bcbcbc',
+                'width': '98vw',
+            }
+    )
 
     ## Metric Violins
     cv_fig, rmad_fig = plot_violin_cv_rmad_per_condition(adata)
-    rmad_pane = pn.pane.Plotly(rmad_fig, height=500, sizing_mode="stretch_width")
-    cv_pane   = pn.pane.Plotly(cv_fig,  height=500, sizing_mode="stretch_width")
+    rmad_pane = pn.pane.Plotly(rmad_fig, height=500, sizing_mode="stretch_width",
+                               styles={"flex":"1"}, config={'responsive':True})
+    cv_pane = pn.pane.Plotly(cv_fig, height=500, sizing_mode="stretch_width",
+                               styles={"flex":"1"}, config={'responsive':True})
 
+    metrics_pane = pn.Row(
+        pn.pane.Markdown("##   Metrics", styles={"flex":"0.1"}),
+        rmad_pane,
+        pn.Spacer(width=50),
+        cv_pane,
+        pn.Spacer(width=50),
+        #width=1400,
+        height=530,
+        margin=(0, 0, 0, 20),
+        sizing_mode="fixed",
+        styles={
+            'border-radius':  '15px',
+            'box-shadow':     '3px 3px 5px #bcbcbc',
+            'width': '98vw',
+        },
+    )
     ## UMAP and PCA
     pca_pane = pn.pane.Plotly(plot_pca_2d(state.adata),
                               height=500,
-                              sizing_mode="stretch_width")
+                              sizing_mode="stretch_width",
+                              styles={"flex":"1"})
     umap_pane = pn.pane.Plotly(plot_umap_2d(state.adata),
                                height=500,
-                               sizing_mode="stretch_width")
+                               sizing_mode="stretch_width",
+                               styles={"flex":"1"})
+    clustering_pane = pn.Row(
+            pn.pane.Markdown("##   Clustering", styles={"flex": "0.1"}),
+            pca_pane,
+            umap_pane,
+            #width=2400,
+            height=530,
+            margin=(0, 0, 0, 20),
+            sizing_mode="stretch_width",
+            styles={
+                'border-radius':  '15px',
+                'box-shadow':     '3px 3px 5px #bcbcbc',
+                'width': '98vw',
+            }
+        )
 
     #h_clustering_pane = pn.pane.Plotly(plot_h_clustering_heatmap(adata),
     ##h_clustering_pane = pn.pane.Matplotlib(plot_h_clustering_heatmap(adata),
@@ -119,22 +223,32 @@ def overview_tab(state: SessionState):
 
     volcano_plot = pn.pane.Plotly(
         volcano_dmap,
-        width=900, height=800,
-        margin=(-50, 0, 0, 0),
+        width=900,
+        height=800,
+        margin=(-50, 0, 0, 20),
         sizing_mode="fixed",
+        styles={
+            'border-radius':  '8px',
+            'box-shadow':     '3px 3px 5px #bcbcbc',
+        }
     )
     volcano_plot.param.watch(_on_volcano_click, "click_data")
 
     # bind a detail‐plot function to the same contrast & search_input
-    layers = ["Processed", "Raw"]
+    layers = ["Processed", "Log-Normalized", "Raw"]
 
     layers_sel = pn.widgets.Select(
-        name="Data",
+        name="Data Layer",
         options=layers,
         value=layers[0],
         width=100,
         margin=(20, 0, 0, 20),
     )
+    def _toggle_layers_visibility(event):
+        layers_sel.visible = bool(event.new)
+
+    search_input.param.watch(_toggle_layers_visibility, "value")
+    layers_sel.visible = bool(search_input.value)
 
     @pn.depends(protein=search_input, contrast=contrast_sel, layer=layers_sel)
     def detail_panel(protein, contrast, layer):
@@ -146,83 +260,208 @@ def overview_tab(state: SessionState):
 
         fig = plot_intensity_by_protein(state, contrast, protein, layers_sel)
         barplot_pane = pn.pane.Plotly(fig,
-                                      width=700,
-                                      height=400,
-                                      margin=(-30, 0, 0, 20),
+                                      width=800,
+                                      height=500,
+                                      margin=(-30, 0, 0, 0),
+                                      styles={
+                                                  'border-radius':  '8px',
+                                                  'box-shadow':     '3px 3px 5px #bcbcbc',
+                                              }
                                       )
         protein_info = get_protein_info(state, contrast, protein, layers_sel)
+        uniprot_id = protein_info['uniprot_id']
 
         intensity_scale = "Avg Log Intensity"
         if layer == "Raw":
             intensity_scale = "Avg Intensity"
 
-        info_col = pn.Column(
-            pn.pane.Markdown(f"""**Uniprot ID:** {protein_info['uniprot_id']}<br>
-                             **q-value:** {protein_info['qval']:.3e}<br>
-                             **log₂ FC:** {protein_info['logfc']:.3f}<br>
-                             **{intensity_scale}:** {protein_info['avg_int']:.3f}<br>
-                             """),
-            width=150,
-            sizing_mode="fixed",
-            margin=(10, 10, 0, 0),
+        Number = pn.indicators.Number
+
+        # create one Number widget per metric
+        q_ind = Number(
+            name="q-value",
+            value=protein_info["qval"],
+            format="{value:.3e}",
+            default_color="red",
+            font_size="12pt",
+            styles= {'flex': '1'}
+            )
+        lfc_ind = Number(
+            name="log₂ FC",
+            value=protein_info["logfc"],
+            format="{value:.3f}",
+            default_color="red",
+            font_size= "14pt",
+            styles= {'flex': '1'}
+        )
+        prot_avg_val = protein_info["avg_int"]
+        prot_avg_val = f"{prot_avg_val:.3f}" if prot_avg_val <= 100 else f"{prot_avg_val:.0f}"
+        int_ind = Number(
+            name=intensity_scale,
+            value=protein_info["avg_int"],
+            format=prot_avg_val,
+            default_color="darkorange",
+            font_size= "16pt",
+            styles= {'flex': '1'}
         )
 
-        detailed_pane = pn.Row(
-                            pn.Column(
-                                layers_sel,
-                                info_col),
-                            barplot_pane)
+        base_size = 18
+        max_len   = 10
+        length    = len(protein)
+        top_padding = 6
+        if length <= max_len:
+            size = base_size
+        else:
+            # scale down linearly, but clamp at 10px minimum
+            size = max(10, int(base_size * (max_len / length)**0.5))
+            top_padding = max(10, top_padding * (max_len / length)**0.5)
+
+        item_styles = {
+            "font-size": f"{size}px",
+            "margin": "0px",
+            "padding": f"{top_padding}px 0px 0px 0px",
+            "line-height": "0px",
+            "flex": "1",
+            "min-width": "0",
+        }
+        sep_styles = {
+            **item_styles,
+            "flex": "0.1",
+            "margin": "0px 0px",
+        }
+        # header with gene name + UniProt
+        gene_md = pn.pane.Markdown(f"**Gene(s)**: {protein}", styles=item_styles)
+        sep1    = pn.pane.Markdown("|", styles=sep_styles)
+        uid_md  = pn.pane.Markdown(f"**Uniprot ID**: {uniprot_id}", styles=item_styles)
+        sep2    = pn.pane.Markdown("|", styles=sep_styles)
+        idx_md  = pn.pane.Markdown(f"**Protein Index**: {protein_info['index']+1}",
+                                   styles=item_styles) #correct for non-pythony users
+
+        # 3) Flex container that centers everything
+        header = pn.Row(
+            gene_md, sep1, uid_md, sep2, idx_md,
+            sizing_mode="stretch_width",
+            height=50,
+            styles={
+                "display":         "flex",
+                "align-items":     "space-evenly",
+                "justify-content": "space-evenly",
+                "background":      "#f9f9f9",
+                "margin": "0px",
+                "padding": "0px",
+                "border-bottom":   "1px solid #ddd",
+            }
+        )
+
+        try:
+            string_link = get_string_link(uniprot_id)
+        except:
+            string_link = ""
+
+        footer_links = pn.Row(
+            pn.pane.HTML(
+                f'<span style="font-size: 12px;">'
+                f'🔗 <a href="https://www.uniprot.org/uniprotkb/{uniprot_id}/entry" target="_blank" rel="noopener">UniProt Entry</a>'
+                f' &nbsp;|&nbsp; '
+                f'<a href="{string_link}" target="_blank" rel="noopener">STRING Entry</a>'
+                f'</span>'
+            ),
+            sizing_mode="stretch_width",
+            styles={
+                "justify-content": "flex-end",
+                "padding": "2px 8px 4px 0px",
+                "margin-top": "-6px",  # Optional: pull up slightly to hug bottom
+            }
+        )
+
+        hr = pn.Spacer(height=1, sizing_mode="stretch_width", styles={
+            "background": "#ccc",
+            "margin": "6px 0"
+        })
+
+        card_style = {
+            'background':     '#f9f9f9',       # light gray, like Plotly default
+            "align-items":     "center",
+            'border-radius':  '8px',
+            'text-align': "center",
+            'padding':        '5px',
+            'box-shadow':     '3px 3px 5px #bcbcbc',
+            'justify-content': 'space-evenly',
+        }
+
+        # assemble them in a Card
+        info_card = pn.Card(
+            header,
+            pn.Row(q_ind, lfc_ind, int_ind, sizing_mode="stretch_width"),
+            hr,
+            footer_links,
+            width=800,
+            styles=card_style,
+            collapsible=False,
+            hide_header=True,
+        )
+
+        #detailed_pane = pn.Row(
+        detailed_pane = pn.Column(
+            info_card,
+            pn.Spacer(height=50),
+            barplot_pane,
+        )
 
         return detailed_pane
 
     # 3) assemble into a layout, no legend‐based toggles
     volcano_pane = pn.Column(
+        pn.pane.Markdown("##   Volcano plots"),
         pn.Row(
             contrast_sel,
-            pn.Spacer(width=50),
+            pn.Spacer(width=40),
             color_by,
-            pn.Spacer(width=50),
+            pn.Spacer(width=40),
             pn.Row(
                 show_measured,
                 show_imp_cond1,
                 show_imp_cond2,
                 margin=(25,0,0,0),
             ),
-            pn.Spacer(width=300),
+            pn.Spacer(width=240),
             search_input,
             pn.Row(clear_search, margin = (17,0,0,0)),
+            pn.Spacer(width=30),
+            pn.Row(layers_sel, margin = (-17,0,0,0), ),
             sizing_mode="fixed",
             width=300,
             height=160,
         ),
         pn.Row(
             volcano_plot,
+            pn.Spacer(width=50),
             detail_panel,
         ),
-        width=1200,
-        height=900,
+        #width=2400,
+        height=1000,
+        margin=(0, 0, 0, 20),
         sizing_mode="fixed",
-    )
+        styles={
+            'border-radius':  '15px',
+            'box-shadow':     '3px 3px 5px #bcbcbc',
+            'width': '98vw',
+        }
 
-    # Texts
-    intro_text = pn.pane.Markdown("some config text",
-        width=1200,
-        margin=(10, 0, 15, 0),
     )
 
     # Tab layout
 
     layout = pn.Column(
-        pn.pane.Markdown("#   Summary of analysis"),
-        intro_text,
-        pn.pane.Markdown("##   Proteins Identified"),
-        hist_ID_fig,
-        pn.pane.Markdown("##   Metrics per Condition"),
-        pn.Row(rmad_pane, cv_pane, sizing_mode="stretch_width"),
-        pn.pane.Markdown("##   Clustering"),
-        pn.Row(pca_pane, umap_pane, sizing_mode="stretch_width"),
-        #h_clustering_pane,
-        pn.pane.Markdown("##   Volcano plots"),
+        pn.Spacer(height=10),
+        intro_pane,
+        pn.Spacer(height=30),
+        hist_pane,
+        pn.Spacer(height=30),
+        metrics_pane,
+        pn.Spacer(height=30),
+        clustering_pane,
+        pn.Spacer(height=30),
         volcano_pane,
 
         sizing_mode="stretch_both",

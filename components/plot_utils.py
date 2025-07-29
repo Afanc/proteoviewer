@@ -367,6 +367,7 @@ def plot_violins(
         violinmode="group",
         template="plotly_white",
         title=dict(text=title, x=0.5) or "",
+        autosize=True,
         width=width, height=height,
         xaxis=dict(title=x_title or "", showgrid=True),
         yaxis=dict(title=y_title or "", showgrid=True),

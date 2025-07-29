@@ -66,8 +66,8 @@ def plot_violin_cv_rmad_per_condition(
                    data=rmad_dict,
                    colors=color_map,
                    title="%rMAD per Condition",
-                   width=width,
-                   height=height,
+                   #width=width,
+                   #height=height,
                    x_title="Condition",
                    y_title="%rMAD",
                    showlegend=False,
@@ -151,41 +151,93 @@ def plot_volcanoes_wrapper(
     return fig
 
 def plot_intensity_by_protein(state, contrast, protein, layer):
-
     ad = state.adata
+
     # pick your normalized layer (fallback to .X)
-    layer_data = ad.X
+    proc_data = ad.X
     intensity_scale = "Log Intensity"
     if layer.value == "Raw":
-        layer_data = ad.layers.get('raw')
+        proc_data = ad.layers.get('raw')
         intensity_scale = "Intensity"
+    elif layer.value == "Log-Normalized":
+        proc_data = ad.layers.get('lognorm')
 
     # find column index by GENE_NAMES
     try:
         col = list(ad.var["GENE_NAMES"]).index(protein)
     except ValueError:
-        return px.bar(pd.DataFrame({"x":[],"y":[]}))  # empty plot
+        return px.bar(pd.DataFrame({"x":[],"y":[]}))
 
-    # build a frame: one row per cell/sample
+    # extract processed and raw values for this protein
+    y_vals = proc_data[:, col].A1 if hasattr(proc_data, "A1") else proc_data[:, col]
+    raw_layer = ad.layers.get('raw', ad.X)
+    raw_vals = raw_layer[:, col].A1 if hasattr(raw_layer, "A1") else raw_layer[:, col]
+    imputed_mask = np.isnan(raw_vals)
+
+    # build DataFrame
     df = pd.DataFrame({
         "sample": ad.obs_names,
         "condition": ad.obs["CONDITION"],
-        "intensity": layer_data[:, col].A1 if hasattr(layer_data, "A1") else layer_data[:, col]
+        "intensity": y_vals,
+        "imputed": imputed_mask
     })
 
+    # filter by contrast
     grp1, grp2 = contrast.split("_vs_")
     df = df[df["condition"].isin([grp1, grp2])]
 
+    # color mapping
     conditions = sorted(ad.obs["CONDITION"].unique())
-    color_map = get_color_map(conditions,
-                              palette=px.colors.qualitative.Plotly)
+    color_map = get_color_map(conditions, palette=px.colors.qualitative.Plotly)
+
+    # create initial bar chart
     fig = px.bar(
-        df, x="sample", y="intensity", color="condition",
-        labels={"intensity":f"{intensity_scale}"},
+        df,
+        x="sample",
+        y="intensity",
+        color="condition",
+        pattern_shape="imputed",
+        pattern_shape_map={False: "", True: "/"},
+        labels={"intensity": f"{intensity_scale}", "sample": "Sample"},
         color_discrete_map=color_map,
     )
-    fig.update_layout(margin={"t":40,"b":40,"l":40,"r":40},
-                      title=dict(text=f"{protein}",x=0.5)
+    fig.update_traces(
+        marker_pattern_fillmode="overlay",
+        marker_pattern_size=6,
+        marker_pattern_solidity=0.3
+    )
+
+    # adjust legend: show each condition once, hide imputed from condition traces
+    for trace in fig.data:
+        trace.showlegend = False
+
+    # 2) re-add one dummy bar per condition
+    for cond in [grp1, grp2]:
+        fig.add_trace(go.Bar(
+            x=[None], y=[None],
+            name=cond,
+            marker_color=color_map[cond],
+            showlegend=True
+        ))
+
+    # add a custom legend entry for imputed pattern
+    fig.add_trace(go.Bar(
+        x=[None], y=[None],
+        name="Imputed",
+        marker_color="white",
+        marker_pattern_shape="/",
+        marker_pattern_fillmode="overlay",
+        marker_pattern_size=6,
+        marker_pattern_solidity=0.3,
+        showlegend=True
+    ))
+
+    fig.update_layout(
+        margin={"t":40,"b":40,"l":40,"r":40},
+        title="",
+        legend_title_text="Conditions",
+        legend_itemclick=False,
+        legend_itemdoubleclick=False,
     )
     return fig
 
@@ -198,6 +250,8 @@ def get_protein_info(state, contrast, protein, layer):
     layer_data = ad.X
     if layer.value == "Raw":
         layer_data = ad.layers.get('raw')
+    elif layer.value == "Log-Normalized":
+        layer_data = ad.layers.get('lognorm')
 
     # log2FC & q-value
     df_fc = pd.DataFrame(
@@ -214,9 +268,6 @@ def get_protein_info(state, contrast, protein, layer):
     logfc = df_fc.loc[uniprot_id, contrast]
     qval  = df_q.loc[uniprot_id, contrast]
 
-    # average intensity (of the same layer you plotted)
-    #layer = ad.layers.get("lognorm", ad.X)
-
     mat   = layer_data.toarray() if hasattr(layer_data, "toarray") else layer_data
     # pick samples for this contrast
     grp1, grp2 = contrast.split("_vs_")
@@ -232,5 +283,6 @@ def get_protein_info(state, contrast, protein, layer):
         'qval': qval,
         'logfc': logfc,
         'avg_int': avg_int,
+        'index': col_idx,
     }
     return protein_info

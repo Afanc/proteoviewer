@@ -27,6 +27,8 @@ logging.getLogger().setLevel(logging.INFO)
 # 2) Enable any Panel extensions you need
 pn.extension('plotly')
 
+DEV = True
+
 def get_free_port(start=5006, end=5099):
     """Find an open port so users can run multiple instances."""
     for port in range(start, end):
@@ -40,6 +42,85 @@ def get_free_port(start=5006, end=5099):
 
 def build_app():
     """
+    - Always shows: FileInput | Load another | Exit | Status
+    - Content area below gets replaced with the Tabs once a file is loaded.
+    """
+    # widgets
+    file_input   = pn.widgets.FileInput(accept=".h5ad", name="Choose file…")
+    load_another = pn.widgets.Button(name="Load another file", button_type="primary")
+    exit_btn     = pn.widgets.Button(name="Exit", button_type="danger")
+    status       = pn.pane.Markdown("### Please upload a .h5ad Proteoflux file.")
+    content      = pn.Column()  # placeholder for tabs
+
+    load_another.visible = False
+
+    # shared content‐loader
+    def _load(adata, fname):
+        state = SessionState.initialize(adata)
+        tabs  = pn.Tabs(("Overview", overview_tab(state)))
+        content.clear()
+        content.append(tabs)
+        status.object      = f"**Loaded:** {fname}"
+        load_another.visible = True
+
+    # when user picks a file
+    def _on_upload(event):
+        try:
+            status.object = "Loading…"
+            adata = read_h5ad(io.BytesIO(file_input.value))
+            _load(adata, getattr(file_input, "filename", "uploaded file"))
+        except Exception as e:
+            status.object = f"Error: {e}"
+
+    file_input.param.watch(_on_upload, "value")
+
+    # reset to upload state
+    def _on_load_another(event):
+        file_input.value = None
+        status.object    = "### Please upload a .h5ad Proteoflux file."
+        content.clear()
+        load_another.visible = False
+
+    load_another.on_click(_on_load_another)
+
+    # exit process
+    def _on_exit(event):
+        # hide all controls
+        file_input.visible = False
+        load_another.visible = False
+        exit_btn.visible = False
+        status.visible = False
+
+        # show farewell message in the content area
+        content.clear()
+        content.append(
+            pn.pane.Markdown(
+                "## \nThank you for using ProteoViewer!"
+            )
+        )
+
+        # after ~1s, kill the process
+        pn.state.curdoc.add_timeout_callback(lambda: sys.exit(0), 1000)
+
+    exit_btn.on_click(_on_exit)
+
+    # dev‐mode: load default without clicking
+    if DEV:
+        adata = read_h5ad("proteoflux_results.h5ad")
+        _load(adata, "proteoflux_results.h5ad")
+
+    # assemble
+    controls = pn.Row(
+        file_input,
+        load_another,
+        exit_btn,
+        status,
+        sizing_mode="stretch_width",
+    )
+    return pn.Column("# ProteoViewer", controls, content, sizing_mode="stretch_width")
+
+def build_app_old():
+    """
     Build the root Panel layout.
     - First shows a FileInput + status.
     - Once a .h5ad is uploaded, replaces itself with a Tabs layout.
@@ -49,8 +130,7 @@ def build_app():
     layout     = pn.Column("# ProteoViewer", file_input, status, sizing_mode="stretch_width")
 
     #def on_upload(event):
-    #    try:
-    #        status.object = "Loading…"
+    #    try: #        status.object = "Loading…"
     #        adata = read_h5ad(io.BytesIO(file_input.value))
 
     #        state = SessionState.initialize(adata)
