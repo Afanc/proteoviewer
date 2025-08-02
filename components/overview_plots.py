@@ -233,7 +233,7 @@ def plot_intensity_by_protein(state, contrast, protein, layer):
     ))
 
     fig.update_layout(
-        margin={"t":40,"b":40,"l":40,"r":40},
+        margin={"t":40,"b":40,"l":60,"r":60},
         title="",
         legend_title_text="Conditions",
         legend_itemclick=False,

@@ -1,23 +1,4 @@
 intro_preprocessing_text="""
-Before any downstream analysis, raw proteomics intensity data must undergo rigorous preprocessing to reduce technical noise and improve biological interpretability. This involves several sequential steps:
-
----
-
-#### Filtering
-
-Low-confidence peptide-spectrum matches (PSMs) are removed based on the following criteria:
-
-- **PEP (Posterior Error Probability):**
-  The estimated probability that a PSM is incorrect.
-
-- **Q-value:**
-  The minimum false discovery rate at which a PSM is considered significant.
-
-- **Minimum number of PSMs per feature**
-  (sometimes referred to as `run_evidence_count`):
-  Ensures that each peptide or protein is supported by enough independent observations across samples.
-
----
 
 #### Normalization
 
@@ -32,19 +13,6 @@ Normalization is performed in **two steps** to reduce systematic variation:
    - Linear fitting (local or global)
    - LOESS fitting (local or global)
 
----
-
-#### Imputation
-
-Missing values are imputed using methods such as **truncated k-nearest neighbors (KNN)**.
-This fills in gaps by borrowing information from similar proteins or samples, without inflating variance.
-
----
-
-### What Follows
-
-Each of the following visualizations corresponds to a key step in this preprocessing pipeline — from raw data filtering to final imputed intensities.
-Together, they help diagnose artifacts, monitor sample quality, and assess whether normalization behaved as expected.
 
 """
 log_transform_text="""

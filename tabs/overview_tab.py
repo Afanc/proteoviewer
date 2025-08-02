@@ -1,3 +1,4 @@
+import os
 import panel as pn
 from session_state import SessionState
 from components.overview_plots import (
@@ -44,11 +45,42 @@ def overview_tab(state: SessionState):
     ebayes_method  = analysis_cfg.get("ebayes_method", "limma")
     analysis_type  = analysis_cfg.get("analysis_type", "")
 
+
     # numbers of PSM removed (as you do in PDF)
-    n_cont   = len(adata.uns.get("removed_contaminants", {}).get("INDEX", []))
-    n_q      = len(adata.uns.get("removed_qvalue", {}).get("INDEX", []))
-    n_pep    = len(adata.uns.get("removed_pep", {}).get("INDEX", []))
-    n_re     = len(adata.uns.get("removed_RE", {}).get("INDEX", []))
+    flt_cfg = adata.uns.get("preprocessing", {}).get("filtering", [])
+    n_cont   = flt_cfg.get("cont", {}).get("number_dropped", [])
+    n_q   = flt_cfg.get("qvalue", {}).get("number_dropped", [])
+    n_pep   = flt_cfg.get("pep", {}).get("number_dropped", [])
+    n_re   = flt_cfg.get("rec", {}).get("number_dropped", [])
+    thresh_q = flt_cfg.get("qvalue", {}).get("threshold", 0)
+    thresh_pep = flt_cfg.get("pep", {}).get("threshold", 0)
+    thresh_re = flt_cfg.get("rec", {}).get("threshold", 0)
+
+    contaminants_files = [os.path.basename(p) for p in flt_cfg.get('cont', {}).get('files', [])]
+
+    # Norm condensation
+    norm_methods = normalization.get("method", [])
+    if isinstance(norm_methods, list):
+        norm_methods = "+".join(norm_methods)
+    if "loess" in norm_methods:
+        loess_span = preproc.get("normalization").get("loess_span")
+        norm_methods += f" (loess_span={loess_span})"
+
+    # Imputation condensation
+    imp_method = imputation.get("method", "")
+    if "knn" in imp_method:
+        extras = []
+        if "knn_k" in imputation:
+            extras.append(f"k={imputation['knn_k']}")
+        if "tnknn" in imp_method and "knn_tn_perc" in imputation:
+            extras.append(f"tn_perc={imputation['knn_tn_perc']}")
+        if extras:
+            imp_method += " (" + ", ".join(extras) + ")"
+
+    if "rf" in imp_method:
+        rf_max_iter = preproc.get("imputation").get("rf_max_iter")
+        imp_method += f", rf_max_iter={rf_max_iter}"
+
 
     # build a single Markdown string
     summary_md = textwrap.dedent(f"""
@@ -56,29 +88,50 @@ def overview_tab(state: SessionState):
 
         **Pipeline steps**
         - **Filtering**:
-            - Contaminants ({', '.join(filtering.get('contaminants_files', []))}): {n_cont:,} PSM removed
-            - q-value ≤ {filtering.get('qvalue_threshold', 0.0)}: {n_q:,} PSM removed
-            - PEP ≤ {filtering.get('pep_threshold', 0.0)}: {n_pep:,} PSM removed
-            - Min. run evidence count = {filtering.get('run_evidence_count', 0)}: {n_re:,} PSM removed
-        - **Normalization**: {normalization.get('method', '')}
-        - **Imputation**: {imputation.get('method', '')}
+            - Contaminants ({', '.join(contaminants_files)}): {n_cont:,} PSM removed
+            - q-value ≤ {thresh_q}: {n_q:,} PSM removed
+            - PEP ≤ {thresh_pep}: {n_pep:,} PSM removed
+            - Min. run evidence count = {thresh_re}: {n_re:,} PSM removed
+        - **Normalization**: {norm_methods}
+        - **Imputation**: {imp_method}
         - **Differential expression**: eBayes via {ebayes_method}
     """).strip()
 
-    # replace your intro_text / intro_pane:
+    # intro_pane:
     summary_pane = pn.pane.Markdown(summary_md,
         sizing_mode="stretch_width",
-        margin=(0, 0, 0, 20),
+        margin=(-10, 0, 0, 20),
         styles={
             "line-height":"1.4em"
             #"white-space": "pre-wrap",
         }
     )
 
-    intro_pane = pn.Column(
-        pn.pane.Markdown("###   Summary of analysis"),
-        summary_pane,
-        height=280,
+    hist_ID_fig = plot_barplot_proteins_per_sample(adata)
+    vr = pn.Spacer(width=1, sizing_mode="stretch_height", styles={
+            "background": "#ccc",
+            "margin": "6px 0"
+        })
+
+    intro_pane = pn.Row(
+        pn.Column(
+            pn.pane.Markdown("##   Summary"),
+            summary_pane,
+            styles={"flex":"0.32"}
+        ),
+        vr,
+        pn.Spacer(width=20),
+        pn.pane.Plotly(hist_ID_fig,
+                       height=500,
+                       #sizing_mode="stretch_width",
+                       #styles={"flex":"0.8"}
+                       margin=(0, 20, 0, 0),
+                       styles={"flex":"1",
+                               #'border-radius':  '15px',
+                               #'box-shadow':     '3px 3px 5px #bcbcbc',
+                              }
+        ),
+        height=530,
         margin=(0, 0, 0, 20),
         sizing_mode="fixed",
         styles={
@@ -114,7 +167,9 @@ def overview_tab(state: SessionState):
     metrics_pane = pn.Row(
         pn.pane.Markdown("##   Metrics", styles={"flex":"0.1"}),
         rmad_pane,
-        pn.Spacer(width=50),
+        pn.Spacer(width=25),
+        vr,
+        pn.Spacer(width=25),
         cv_pane,
         pn.Spacer(width=50),
         #width=1400,
@@ -131,7 +186,8 @@ def overview_tab(state: SessionState):
     pca_pane = pn.pane.Plotly(plot_pca_2d(state.adata),
                               height=500,
                               sizing_mode="stretch_width",
-                              styles={"flex":"1"})
+                              styles={"flex":"1"},
+                              )
     umap_pane = pn.pane.Plotly(plot_umap_2d(state.adata),
                                height=500,
                                sizing_mode="stretch_width",
@@ -139,6 +195,9 @@ def overview_tab(state: SessionState):
     clustering_pane = pn.Row(
             pn.pane.Markdown("##   Clustering", styles={"flex": "0.1"}),
             pca_pane,
+            #pn.Spacer(width=25),
+            vr,
+            pn.Spacer(width=60),
             umap_pane,
             #width=2400,
             height=530,
@@ -455,8 +514,8 @@ def overview_tab(state: SessionState):
     layout = pn.Column(
         pn.Spacer(height=10),
         intro_pane,
-        pn.Spacer(height=30),
-        hist_pane,
+        #pn.Spacer(height=30),
+        #hist_pane,
         pn.Spacer(height=30),
         metrics_pane,
         pn.Spacer(height=30),
