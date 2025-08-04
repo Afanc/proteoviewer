@@ -6,12 +6,15 @@ from panel.pane import Placeholder
 from session_state import SessionState
 from components.normalization_plots import (
     plot_filter_histograms,
+    plot_dynamic_range,
     plot_intensities_histogram,
     plot_violin_intensity_by_condition,
     plot_violin_intensity_by_sample,
     plot_cv_by_condition,
     plot_rmad_by_condition,
     plot_ma,
+    plot_mv_barplots,
+    plot_mv_heatmaps,
 )
 from components.texts import (
     intro_preprocessing_text,
@@ -113,10 +116,32 @@ def normalization_tab(state: SessionState):
     )
 
     # Quantification
+    dyn_fig = pn.pane.Plotly(
+        plot_dynamic_range(state.adata),
+        sizing_mode="stretch_width",
+        height=400,
+        config={"responsive": True},
+        styles={"background":"white"}
+    )
+
+    dyn_fig_pane = pn.Row(
+        pn.pane.Markdown("##   Dynamic Range", styles={"flex": "0.05"}),
+        dyn_fig,
+        height=420,
+        sizing_mode="fixed",
+        margin=(0, 0, 0, 20),
+        styles={
+            'border-radius':  '15px',
+            'box-shadow':     '3px 3px 5px #bcbcbc',
+            'width': '95vw',
+            'background': 'white',
+        }
+    )
+
     quant_pane = pn.Column(
         pn.pane.Markdown("##   Quantification", styles={"flex": "0.05"}),
-        pn.pane.Markdown(" blabla-method, dynamic range plot"),
-        height=200,
+        dyn_fig_pane,
+        height=500,
         margin=(0,0,0,20),
         styles={
             'border-radius':  '15px',
@@ -257,7 +282,6 @@ def normalization_tab(state: SessionState):
     # Spinner + status text (off by default)
     #spinner     = pn.widgets.LoadingSpinner(visible=False, width=24, height=24)
     status_text = pn.pane.Markdown("Computing…",
-                                   styles={"text-align": "center"},
                                    visible=False)
 
     # A Column to hold the MA plots (give it a fixed/min height so it never collapses)
@@ -345,33 +369,67 @@ def normalization_tab(state: SessionState):
     )
 
     # Imputation
-    imput_viol_cond  = plot_violin_intensity_by_condition(adata)
-    imput_viol_sample = plot_violin_intensity_by_sample(adata)
-    imput_violin_by_condition = pn.pane.Plotly(
-        imput_viol_cond,
+    mv_cond_fig, mv_sample_fig  = plot_mv_barplots(adata)
+
+    mv_cond_pane = pn.pane.Plotly(
+        mv_cond_fig,
         height=500,
         sizing_mode="stretch_width",
         styles={"flex":"0.5"},
         config={'responsive':True}
         )
 
-    imput_violin_by_sample = pn.pane.Plotly(
-        imput_viol_sample,
+    mv_sample_pane = pn.pane.Plotly(
+        mv_sample_fig,
         height=500,
         sizing_mode="stretch_width",
         styles={"flex":"1"},
         config={'responsive':True}
         )
 
+    binary_heatmap_fig, corr_heatmap_fig = plot_mv_heatmaps(adata)
 
-    imput_violins_pane = pn.Row(
-        pn.pane.Markdown("##   Distributions", styles={"flex":"0.1"}),
-        imput_violin_by_condition,
-        pn.Spacer(width=10),
-        make_vr(),
-        pn.Spacer(width=10),
-        imput_violin_by_sample,
-        height=530,
+    mv_binary_heatmap_pane = pn.pane.Matplotlib(
+        binary_heatmap_fig,
+        tight=True,
+        height=700,
+        sizing_mode="stretch_width",
+        styles={"flex":"1"},
+        )
+
+    mv_corr_heatmap_pane = pn.pane.Plotly(
+        corr_heatmap_fig,
+        height=700,
+        sizing_mode="stretch_width",
+        styles={"flex":"1"},
+        config={'responsive':True}
+        )
+
+    mv_pane = pn.Row(
+        pn.pane.Markdown("##   Missing Values", styles={"flex":"0.05"}),
+        pn.Column(
+            pn.Row(
+                mv_cond_pane,
+                pn.Spacer(width=10),
+                make_vr(),
+                pn.Spacer(width=10),
+                mv_sample_pane,
+                height=530,
+                margin=(0, 0, 0, 0),
+            ),
+            make_hr(),
+            pn.Spacer(width=20),
+            pn.Row(
+                mv_corr_heatmap_pane,
+                pn.Spacer(width=10),
+                make_vr(),
+                mv_binary_heatmap_pane,
+                height=700,
+                margin=(0, 0, 0, 0),
+            ),
+            height=1260,
+        ),
+        height=1260,
         margin=(0, 0, 0, 20),
         sizing_mode="fixed",
         styles={
@@ -382,28 +440,10 @@ def normalization_tab(state: SessionState):
         }
     )
 
-    imput_metrics_pane = pn.Row(
-        pn.pane.Markdown("##   Metrics", styles={"flex":"0.1"}),
-        rmad_pane,
-        #pn.Spacer(width=20),
-        make_vr(),
-        pn.Spacer(width=60),
-        cv_pane,
-        height=520,
-        margin=(0, 0, 0, 20),
-        sizing_mode="fixed",
-        styles={
-            'border-radius':  '15px',
-            'box-shadow':     '3px 3px 5px #bcbcbc',
-            'width': '92vw',
-            'background': 'white',
-        }
-    )
+
     imputation_pane = pn.Column(
         pn.pane.Markdown("##   Imputation"),
-        imput_violins_pane,
-        pn.Spacer(height=30),
-        imput_metrics_pane,
+        mv_pane,
         margin=(0, 0, 0, 20),
         height=2500,
         styles={
@@ -414,6 +454,7 @@ def normalization_tab(state: SessionState):
         }
     )
 
+    # final protein pane
     protein_pane = pn.Column(
         pn.pane.Markdown("##   Protein-level", styles={"flex": "0.05"}),
         logtransform_pane,
@@ -462,11 +503,5 @@ def normalization_tab(state: SessionState):
         quant_pane,
         pn.Spacer(height=30),
         protein_pane,
-        #logtransform_pane,
-        #pn.Spacer(height=30),
-        #violins_pane,
-        #pn.Spacer(height=30),
-        #metrics_pane,
-        #pn.Row(sample_sel, ma_pane, sizing_mode="stretch_width"),
         sizing_mode="stretch_both",
     )

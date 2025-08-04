@@ -3,9 +3,10 @@ import pandas as pd
 from anndata import AnnData
 from typing import Tuple, List, Optional, Dict
 import plotly.graph_objects as go
+import plotly.express as px
 from scipy.stats import gaussian_kde
 from plotly.subplots import make_subplots
-from components.plot_utils import plot_histogram_plotly, add_violin_traces, compute_metric_by_condition
+from components.plot_utils import plot_histogram_plotly, add_violin_traces, compute_metric_by_condition, get_color_map, plot_bar_plotly, plot_cluster_heatmap_plt
 from regression_normalization import compute_reference_values, compute_MA, fit_regression
 from utils import logger, log_time
 
@@ -335,6 +336,55 @@ def plot_filter_histograms_old(adata: AnnData):
 
     return figs
 
+@log_time("Plotting dynamic range")
+def plot_dynamic_range(
+    adata: AnnData,
+) -> go.Figure:
+    """
+    One point per protein: aggregated intensity (sum/mean) across all samples,
+    sorted descending, plotted on log10 scale vs. rank.
+    """
+    mat = adata.layers['raw']
+    vals = np.asarray(mat.mean(axis=0)).ravel()
+
+    # 2) filter out zero / non-finite, take log10
+    mask = np.isfinite(vals) & (vals > 0)
+    vals = vals[mask]
+    logvals = np.log10(vals)
+
+    # 3) sort descending
+    order = np.argsort(-logvals)
+    logvals = logvals[order]
+
+    # optional protein names for hover
+    prots = adata.var_names.values
+    prots = prots[mask][order]
+    gene_names = adata.var["GENE_NAMES"].values[mask][order]
+
+    # 4) build scatter
+    fig = go.Figure(go.Scatter(
+        x=np.arange(1, len(logvals) + 1),
+        y=logvals,
+        mode="markers",
+        marker=dict(size=6, opacity=0.6),
+        hovertemplate=(
+            "Rank %{x}<br>"
+            "Protein: %{customdata[0]}<br>"
+            "Gene: %{customdata[1]}<br>"
+            "log₁₀(abundance): %{y:.2f}<extra></extra>"
+        ),
+        customdata=np.stack([prots, gene_names], axis=-1),
+    ))
+
+    fig.update_layout(
+        title=dict(text=f"Dynamic Range across all samples", x=0.5),
+        xaxis_title="Protein rank",
+        yaxis_title="log₁₀(abundance)",
+        template="plotly_white",
+        width=800,
+        height=500,
+    )
+    return fig
 
 @log_time("Plotting histogram before/after log")
 def plot_intensities_histogram(adata: AnnData) -> go.Figure:
@@ -633,15 +683,160 @@ def plot_rmad_by_condition(adata: AnnData) -> go.Figure:
         height=600,
     )
 
-@log_time("Plotting violins rmad by condition")
-def plot_rmad_by_condition_old(im) -> go.Figure:
-    """
-    Convenience wrapper to plot RMAD per condition.
-    """
-    return plot_grouped_violin_metric_by_condition(
-        im,
-        metric="RMAD",
-        colors=("blue","red"),
-        title="Robust MAD (RMAD) per Condition"
+@log_time("Plotting Missing Values barplots")
+def plot_mv_barplots(adata: AnnData):
+
+    df_raw = pd.DataFrame(
+        adata.layers['normalized'],
+        index=adata.obs.index,       # samples
+        columns=adata.var_names      # proteins
     )
 
+    # --- 2) Count missing per sample & per condition
+    mvi_per_sample = df_raw.isna().sum(axis=1)      # Series: Sample → count
+    conds = adata.obs['CONDITION']
+    mvi_per_condition = mvi_per_sample.groupby(conds).sum()  # Series: Condition → count
+
+    #  total mvi
+    total_imputed     = int(mvi_per_condition.sum())        # what will be imputed
+    total_entries     = df_raw.size                         # all values
+    total_non_imputed = total_entries - total_imputed       # left untouched
+    rate = total_imputed/total_entries
+
+    total_mvi = int(mvi_per_condition.sum())
+
+#    # --- 3) Get a stable color map for conditions
+    cond_levels = mvi_per_condition.index.sort_values(ascending=False)
+#    cond_levels_list = ["Total"] + sorted(cond_levels.tolist())
+#    cond_color_map = get_color_map(cond_levels_list, palette=px.colors.qualitative.Plotly, anchor='Total', anchor_color="#999999")
+
+    cond_labels = ["Total (Non-Missing)", "Total (Missing)"] + cond_levels.tolist()
+
+    # manual color map: gray for the two totals, then Plotly palette
+    palette = px.colors.qualitative.Plotly
+    cond_color_map = {
+        "Total (Non-Missing)": "#888888",
+        "Total (Missing)":     "#CCCCCC"
+    }
+    for i, lbl in enumerate(cond_levels):
+        cond_color_map[lbl] = palette[i % len(palette)]
+
+
+    # append total for conditions
+#    cond_x = cond_levels_list
+#    cond_y = [ total_mvi ] + [ int(mvi_per_condition.loc[c]) for c in cond_levels_list if c != "Total" ]
+    cond_x = cond_labels
+    cond_y = [
+        total_non_imputed,
+        total_imputed,
+        *[int(mvi_per_condition.loc[c]) for c in cond_levels]
+    ]
+
+    condition_title = f"Missing Values (ratio = {100*rate:.1f}%)"
+
+    # --- 4) Plotly figures
+    fig_cond = plot_bar_plotly(
+        x=cond_x,
+        y=cond_y,
+        #colors=[cond_color_map[c] for c in cond_levels_list],
+        colors=[cond_color_map[c] for c in cond_x],
+        title=condition_title,
+        x_title="Condition",
+        y_title="Count",
+        width=800, height=400
+    )
+    fig_cond.update_yaxes(type="log", dtick=1, exponentformat="power")
+
+    fig_samp = plot_bar_plotly(
+        x=list(mvi_per_sample.index),
+        y=list(mvi_per_sample.values),
+        colors=[cond_color_map[conds[s]] for s in mvi_per_sample.index],
+        title="Missing Values per Sample",
+        x_title="Sample",
+        y_title="Count",
+        width=1200, height=400
+    )
+
+    # weird behaviour with trace 0, correct
+    bar = fig_samp.data[0]
+
+    # 2) Hide it from the legend
+    bar.showlegend = False
+
+    # 3) Attach a list of conditions matching each bar
+    bar.customdata = [conds[s] for s in mvi_per_sample.index]
+
+    # 4) New hovertemplate: show the condition, sample, and count
+    bar.hovertemplate = (
+        "Condition: %{customdata}<br>"
+        "Sample: %{x}<br>"
+        "Missing: %{y}<extra></extra>"
+    )
+
+    # legend
+    for cond, color in cond_color_map.items():
+        # skip Total if you’ve added it
+        if cond in ["Total (Missing)", "Total (Non-Missing)"]:
+            continue
+        fig_samp.add_trace(go.Scatter(
+            x=[None], y=[None],
+            mode="markers",
+            marker=dict(symbol="square", size=10, color=color),
+            name=cond,
+            showlegend=True
+        ))
+
+    # position the legend as you like
+    fig_samp.update_layout(
+        legend=dict(
+            title="Conditions",
+            orientation="h",
+            x=0.7, xanchor="left",
+            y=1.02, yanchor="bottom"
+        )
+    )
+
+    return (fig_cond, fig_samp)
+
+@log_time("Plotting Missing Values Heatmaps")
+def plot_mv_heatmaps(adata:AnnData):
+    df_raw     = pd.DataFrame(
+        adata.layers['normalized'],
+        index=adata.obs_names,    # samples
+        columns=adata.var_names   # proteins
+    )
+    df_missing = df_raw.isna().astype(int).T
+
+    # 2) Prepare a color‐series for your samples (columns) keyed to CONDITION
+    cond_to_color = get_color_map(
+        adata.obs['CONDITION'].unique().tolist(),
+        palette=None,    # your default Plotly qualitative
+        anchor=None
+    )
+    col_colors = adata.obs['CONDITION'].map(cond_to_color)
+    col_colors.name = "Condition"
+
+    # 3a) Clustered heatmap (matplotlib/seaborn) via your helper
+    g = plot_cluster_heatmap_plt(
+        data=df_missing,
+        col_colors=col_colors,
+        title="Clustered Missing Values",
+        legend_mapping=cond_to_color,
+        row_cluster=False,
+        col_cluster=True,
+    )
+
+    # 3b) Correlation heatmap (plotly) of sample‐sample missingness
+    corr = df_missing.corr()
+    fig_corr = px.imshow(
+        corr,
+        color_continuous_scale='RdBu_r',
+        zmin=-1, zmax=1,
+        labels=dict(x="", y="", color="Corr"),
+    )
+    fig_corr.update_layout(
+        title=dict(text="Missing Values Correlation Heatmap", x=0.5),
+        coloraxis_colorbar=dict(x=0.90),
+    ),
+
+    return (g.fig, fig_corr)

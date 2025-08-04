@@ -13,6 +13,10 @@ from scipy.spatial.distance import pdist, squareform
 import plotly.express as px
 from typing import List, Sequence, Optional, Dict, Tuple, Union, Literal
 from anndata import AnnData
+from matplotlib.colors import LinearSegmentedColormap
+import matplotlib.pyplot as plt
+import matplotlib.patches as mpatches
+import seaborn as sns
 import scanpy as sc
 from utils import logger, log_time
 from functools import lru_cache
@@ -147,7 +151,7 @@ def plot_stacked_proteins_by_category(
                 line=dict(color="black", width=2),
             ),
             legend="legend1",
-            legendgrouptitle_text="Protein Category",
+            #legendgrouptitle_text="Protein Category",
         ))
 
     # 8) Sample Condition legend (right)
@@ -163,26 +167,28 @@ def plot_stacked_proteins_by_category(
                 line=dict(color=cond_color_map[cond], width=2),
             ),
             legend="legend2",
-            legendgrouptitle_text="Sample Condition",
+            legendgrouptitle_text="Condition",
         ))
 
     # 9) layout with two legends
     fig.update_layout(
         barmode="stack",
-        title=dict(text=title, x=0.5),
+        title=dict(text=title, x=0.4),
         xaxis_title="Sample",
         yaxis_title="Number of Proteins",
         template="plotly_white",
         width=width, height=height,
         # first legend (categories) on the left
         legend=dict(
-            x=1.40, y=1,
+            #x=1.40, y=1,
+            x=1.12, y=1.2,
             xanchor="right", yanchor="top",
-            bordercolor="black", borderwidth=1
+            bordercolor="black", borderwidth=1,
+            orientation='h',
         ),
         # second legend (conditions) on the right
         legend2=dict(
-            x=1.20, y=1,
+            x=1.12, y=1,
             xanchor="right", yanchor="top",
             bordercolor="black", borderwidth=1
         ),
@@ -225,7 +231,7 @@ def plot_bar_plotly(
         **bar_kwargs
     ))
     fig.update_layout(
-        title=title,
+        title=dict(text=title, x=0.5),
         xaxis_title=x_title,
         yaxis_title=y_title,
         template=template,
@@ -237,9 +243,9 @@ def plot_bar_plotly(
 
 def compute_metric_by_condition(
     adata: AnnData,
-    layer: str = "normalized",
     cond_key: str = "CONDITION",
     metric: Literal["CV", "rMAD"] = "CV",
+    layer: str = None,
 ) -> Dict[str, np.ndarray]:
     """
     Returns a dict mapping:
@@ -248,8 +254,12 @@ def compute_metric_by_condition(
     computed **per protein** across samples *without ever transposing*.
     """
     # 1) samples × proteins matrix
+    data = adata.X
+    if layer is not None:
+        data = adata.layers[layer]
+
     df = pd.DataFrame(
-        adata.X,
+        data,
         index=adata.obs_names,      # samples
         columns=adata.var_names,    # proteins
     )
@@ -425,6 +435,13 @@ def plot_pca_2d(
         template="plotly_white",
         xaxis=dict(title=f"PC{pc[0]} ({var[pc[0]-1]*100:.1f}% var)"),
         yaxis=dict(title=f"PC{pc[1]} ({var[pc[1]-1]*100:.1f}% var)"),
+        legend=dict(
+            title_text=" Condition",
+            bordercolor="black",
+            borderwidth=1,
+            x=1.02, y=1,
+            xanchor="left", yanchor="top"
+        )
     )
     fig.update_xaxes(showline=True, mirror=True, linecolor="black")
     fig.update_yaxes(showline=True, mirror=True, linecolor="black")
@@ -474,6 +491,13 @@ def plot_umap_2d(
         template="plotly_white",
         xaxis=dict(title="UMAP1"),
         yaxis=dict(title="UMAP2"),
+        legend=dict(
+            title_text=" Condition",
+            bordercolor="black",
+            borderwidth=1,
+            x=1.02, y=1,
+            xanchor="left", yanchor="top"
+        )
     )
     fig.update_xaxes(showline=True, mirror=True, linecolor="black")
     fig.update_yaxes(showline=True, mirror=True, linecolor="black")
@@ -697,6 +721,96 @@ def plot_cluster_heatmap_plotly(
 
     return fig
 
+@log_time("Cluster Heatmap Plt")
+def plot_cluster_heatmap_plt(
+    data: pd.DataFrame,
+    col_colors: Optional[pd.Series] = None,
+    title: str = "Heatmap of Missing Values",
+    figsize: Tuple[int, int] = (12, 10),
+    row_cluster: bool = False,
+    col_cluster: bool = True,
+    xticklabels: bool = True,
+    yticklabels: bool = False,
+    cbar_ticks: Optional[List[float]] = None,
+    cbar_aspect: int = 10,
+    adjust_params: Optional[Dict[str, float]] = None,
+    legend_title: str = "Conditions",
+    legend_loc: str = "upper right",
+    legend_fontsize: int = 8,
+    legend_bbox: Tuple[float, float] = (1.15, 1.40),
+    binary_labels: Optional[Tuple[str, str]] = ["Present", "Missing"],
+    cmap: Optional[LinearSegmentedColormap] = None,
+    legend_mapping: Optional[Dict[str, any]] = None
+):
+    """
+    Generates a clustermap heatmap for missing values with hierarchical clustering.
+
+    Args:
+        data (pd.DataFrame): DataFrame of binary values (e.g., 1 for missing, 0 for present).
+        col_colors (pd.Series, optional): Series mapping column names to colors.
+        title (str): Title for the clustermap.
+        figsize (tuple): Figure size.
+        row_cluster (bool): Whether to cluster rows.
+        col_cluster (bool): Whether to cluster columns.
+        xticklabels (bool): Show x-axis tick labels.
+        yticklabels (bool): Show y-axis tick labels.
+        cbar_ticks (list, optional): Ticks for the colorbar.
+        cbar_aspect (int): Aspect ratio for the colorbar.
+        adjust_params (dict, optional): Parameters to pass to plt.subplots_adjust.
+        legend_title (str): Title for the legend.
+        legend_loc (str): Legend location.
+        legend_fontsize (int): Font size for legend text.
+        legend_bbox (tuple): bbox_to_anchor for the legend.
+        binary_labels (list): labels to the binary cmap.
+        cmap (LinearSegmentedColormap, optional): Colormap to use. If None, a binary colormap is used.
+        legend_mapping (dict, optional): Mapping from condition names to colors for the legend.
+
+    Returns:
+        sns.matrix.ClusterGrid: The clustermap object.
+    """
+    if cbar_ticks is None:
+        cbar_ticks = [0.25, 0.75]
+    if cmap is None:
+        cmap = LinearSegmentedColormap.from_list('CustomRed', ['#f0f0f0', '#e34a33'], 2)
+    if adjust_params is None:
+        adjust_params = {"right": 0.85, "bottom": 0.25, "top": 0.90}
+
+    #col_colors.name=""
+    g = sns.clustermap(
+        data,
+        cmap=cmap,
+        figsize=figsize,
+        row_cluster=row_cluster,
+        col_cluster=col_cluster,
+        col_colors=col_colors,
+        xticklabels=xticklabels,
+        yticklabels=yticklabels,
+        cbar_kws={"ticks": cbar_ticks, "aspect": cbar_aspect},
+    )
+
+    g.ax_heatmap.set_xlabel("")
+    plt.subplots_adjust(**adjust_params)
+    colorbar = g.cax
+    colorbar.set_position([0.90, .35, .02, .3])
+    if binary_labels is not None:
+        colorbar.set_yticklabels(binary_labels)
+
+    # If a legend mapping is provided, create a legend accordingly.
+    if legend_title and legend_mapping is not None:
+        legend_patches = [mpatches.Patch(color=color, label=cond)
+                          for cond, color in legend_mapping.items()]
+        g.ax_heatmap.legend(
+            handles=legend_patches,
+            title=legend_title,
+            loc=legend_loc,
+            fontsize=legend_fontsize,
+            bbox_to_anchor=legend_bbox
+        )
+
+    g.fig.suptitle(title, fontsize=14, y=0.955)
+    plt.setp(g.ax_heatmap.get_xticklabels(), rotation=-30, ha='left')
+    return g
+
 @log_time("Plotting Volcano Plots")
 def plot_volcanoes(
     state,
@@ -908,132 +1022,99 @@ def plot_volcanoes(
 
     return fig
 
-
 def plot_histogram_plotly(
-    df: Optional[pd.DataFrame] = None,
-    value_col: str = "Intensity",
-    group_col: str = "Normalization",
-    labels: List[str] = ["Before", "After"],
-    colors: List[str] = ["blue", "red"],
+    data: Sequence[Sequence[float]],
+    labels: Sequence[str],
+    colors: Sequence[str],
     nbins: int = 50,
-    stat: str = "probability",           # "count" or "probability"
-    log_x: bool = True,                  # whether to log-transform
-    log_base: int = 10,                   # 2 or 10
-    opacity: Union[float, Sequence[float]] = 0.5,
-    x_range: Optional[Tuple[float,float]] = None,
-    y_range: Optional[Tuple[float,float]] = None,
-    x_title: Optional[str] = None,
-    y_title: Optional[str] = None,
+    stat: str = "probability",
+    log_base: int = 10,
+    opacity: float = 0.5,
     width: int = 900,
     height: int = 500,
     title: Optional[str] = None,
-    data: Optional[Dict[str, Sequence]] = None,
 ) -> go.Figure:
     """
-    Generic overlaid histogram for one or more distributions.
-    Supports optional log-base-2 or log-base-10 transform with correct tick labels.
+    Overlaid log-scaled histogram of multiple distributions.
+
+    Parameters
+    ----------
+    data : list of sequences
+        Each sequence of raw intensity values (must be positive).
+    labels : list of str
+        Labels corresponding to each distribution.
+    colors : list of str
+        Colors for each label.
+    nbins : int
+        Number of histogram bins.
+    stat : str
+        "count" or "probability".
+    log_base : int
+        Base for log-transform (2 or 10).
+    opacity : float
+        Bar opacity.
+    width, height : int
+        Figure dimensions.
+    title : str
+        Plot title.
     """
-    # ------------------------------------------------
-    # 1) Prepare raw arrays
-    # ------------------------------------------------
-    if data is not None:
-        labels = list(data.keys())
-        values = {lbl: np.asarray(data[lbl]) for lbl in labels}
-    else:
-        if df is None:
-            raise ValueError("Need either 'data' or 'df'")
-        df2 = df.copy()
-        if log_x:
-            df2 = df2[df2[value_col] > 0]
-            df2["_val"] = np.log(df2[value_col]) / np.log(log_base)
-        else:
-            df2["_val"] = df2[value_col]
-        values = {
-            lbl: df2.loc[df2[group_col] == lbl, "_val"].values
-            for lbl in labels
-        }
+    # 1) Log-transform and filter
+    transformed: Dict[str, np.ndarray] = {}
+    for lbl, seq in zip(labels, data):
+        arr = np.asarray(seq)
+        arr = arr[arr > 0]
+        transformed[lbl] = np.log(arr) / np.log(log_base)
 
-    # ------------------------------------------------
-    # 2) Compute bins on the transformed scale
-    # ------------------------------------------------
-    all_vals = np.concatenate(list(values.values()))
-    mn = x_range[0] if (log_x and x_range) else (np.min(all_vals))
-    mx = x_range[1] if (log_x and x_range) else (np.max(all_vals))
-    bins = np.linspace(mn, mx, nbins + 1)
+    # 2) Compute shared bins
+    all_vals = np.concatenate(list(transformed.values()))
+    bins = np.linspace(all_vals.min(), all_vals.max(), nbins + 1)
 
-    # ------------------------------------------------
-    # 3) Draw overlaid bars
-    # ------------------------------------------------
+    # 3) Build figure
     fig = go.Figure()
-    ops = (list(opacity) if isinstance(opacity, (list,tuple,np.ndarray))
-           else [opacity]*len(labels))
-
-    for i, lbl in enumerate(labels):
-        arr = values[lbl]
+    for lbl, color in zip(labels, colors):
+        arr = transformed[lbl]
         counts, edges = np.histogram(arr, bins=bins)
         if stat == "probability":
             counts = counts / counts.sum()
-        mids   = 0.5*(edges[:-1] + edges[1:])
+        mids = (edges[:-1] + edges[1:]) / 2
         widths = edges[1:] - edges[:-1]
         fig.add_trace(go.Bar(
-            x=mids, y=counts, width=widths,
+            x=mids,
+            y=counts,
+            width=widths,
             name=lbl,
-            marker_color=colors[i] if i < len(colors) else None,
-            opacity=ops[i],
+            marker_color=color,
+            opacity=opacity,
             hoverinfo="skip",
         ))
 
-    # ------------------------------------------------
-    # 4) Axis formatting
-    # ------------------------------------------------
-    if log_x:
-        # tick positions are integers on the log-scale
-        lo = int(np.floor(bins[0]))
-        hi = int(np.ceil (bins[-1]))
-        units = list(range(lo, hi+1))
-        # labels like 2ⁿ or 10ⁿ
-        if log_base == 10:
-            ticktext = [f"10<sup>{u}</sup>" for u in units]
-            xlabel   = x_title or f"log₁₀({value_col})"
-        else:
-            ticktext = [f"2<sup>{u}</sup>"  for u in units]
-            xlabel   = x_title or f"log₂({value_col})"
-        fig.update_xaxes(
-            type="linear",
-            autorange=False,
-            range=[lo, hi],
-            tickmode="array",
-            tickvals=units,
-            ticktext=ticktext,
-            showgrid=True,
-            title_text=xlabel,
-        )
-        fig.update_yaxes(
-            title_text=y_title or stat.title(),
-            showgrid=True,
-        )
-    else:
-        fig.update_xaxes(
-            range=x_range,
-            title_text=x_title or value_col,
-            showgrid=True,
-        )
-        fig.update_yaxes(
-            range=y_range,
-            title_text=y_title or stat.title(),
-            showgrid=True,
-        )
+    # 4) Format log-x axis
+    lo, hi = int(np.floor(bins[0])), int(np.ceil(bins[-1]))
+    ticks = list(range(lo, hi + 1))
+    ticktext = [f"10<sup>{t}</sup>" for t in ticks]
+    fig.update_xaxes(
+        type="linear",
+        autorange=False,
+        range=[0, hi],
+        tickmode="array",
+        tickvals=ticks,
+        ticktext=ticktext,
+        showgrid=True,
+        title_text=f"log₁₀(Value)",
+    )
+    fig.update_yaxes(
+        title_text=stat.title(),
+        showgrid=True,
+    )
 
-    # ------------------------------------------------
     # 5) Final layout
-    # ------------------------------------------------
     fig.update_layout(
         title=dict(text=title or "", x=0.5),
         barmode="overlay",
         template="plotly_white",
-        width=width, height=height,
+        width=width,
+        height=height,
     )
-
     return fig
 
 def add_violin_traces(
@@ -1105,4 +1186,3 @@ def add_violin_traces(
             row=row,
             col=col,
         )
-
