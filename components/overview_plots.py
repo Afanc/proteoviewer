@@ -101,23 +101,23 @@ def plot_h_clustering_heatmap(adata):
     # 4) Draw the heatmap using those linkages
 
     # --- seaborn version
-    #import seaborn as sns
-    #import matplotlib.pyplot as plt
-    #fig = sns.clustermap(df_z, method="ward", metric="euclidean", figsize=(12,10), cmap="RdBu_r")
-    #return fig.figure
+    import seaborn as sns
+    import matplotlib.pyplot as plt
+    fig = sns.clustermap(df_z, method="ward", metric="euclidean", figsize=(12,10), cmap="RdBu_r")
+    return fig.figure
     # ---
 
     # --- plotly version
-    fig = plot_cluster_heatmap_plotly(
-        data=df_z,
-        y_labels=y_labels,
-        cond_series=cond_ser,
-        colorscale="RdBu",
-        title="Clustergram of All Samples",
-        sample_linkage=sample_linkage,
-        feature_linkage=feature_linkage,
-    )
-    return fig
+    #fig = plot_cluster_heatmap_plotly(
+    #    data=df_z,
+    #    y_labels=y_labels,
+    #    cond_series=cond_ser,
+    #    colorscale="RdBu",
+    #    title="Clustergram of All Samples",
+    #    sample_linkage=sample_linkage,
+    #    feature_linkage=feature_linkage,
+    #)
+    #return fig
     # ---
 
 

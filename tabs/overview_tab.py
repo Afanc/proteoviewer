@@ -21,6 +21,20 @@ import textwrap
 pn.extension("plotly")
 pn.extension("indicator")
 
+def make_vr(color="#ccc", margin="6px 0"):
+    return pn.Spacer(
+        width=1,
+        sizing_mode="stretch_height",
+        styles={"background": color, "margin": margin}
+        )
+
+def make_hr(color="#ccc", margin="6px 0"):
+    return pn.Spacer(
+        height=1,
+        sizing_mode="stretch_width",
+        styles={"background": color, "margin": margin}
+        )
+
 
 @log_time("Preparing Overview Tab")
 def overview_tab(state: SessionState):
@@ -192,6 +206,14 @@ def overview_tab(state: SessionState):
                                height=500,
                                sizing_mode="stretch_width",
                                styles={"flex":"1"})
+    #h_clustering_pane = pn.pane.Plotly(
+    #    plot_h_clustering_heatmap(adata),
+    #    height=400,
+    #    sizing_mode="stretch_width",
+    #)
+    #h_clustering_pane = pn.pane.Matplotlib(plot_h_clustering_heatmap(adata),
+    #                                   height=800,
+    #                                   sizing_mode="stretch_width")
     clustering_pane = pn.Row(
             pn.pane.Markdown("##   Clustering", styles={"flex": "0.1"}),
             pca_pane,
@@ -199,7 +221,8 @@ def overview_tab(state: SessionState):
             vr,
             pn.Spacer(width=60),
             umap_pane,
-            #width=2400,
+            vr,
+            #h_clustering_pane,
             height=530,
             margin=(0, 0, 0, 20),
             sizing_mode="stretch_width",
@@ -210,10 +233,27 @@ def overview_tab(state: SessionState):
             }
         )
 
-    #h_clustering_pane = pn.pane.Plotly(plot_h_clustering_heatmap(adata),
-    ##h_clustering_pane = pn.pane.Matplotlib(plot_h_clustering_heatmap(adata),
-    #                                   height=800,
-    #                                   sizing_mode="stretch_width")
+    #clustering_pane = pn.Row(
+    #        pn.pane.Markdown("##   Clustering", styles={"flex": "0.1"}),
+    #        pca_pane,
+    #        #pn.Spacer(width=25),
+    #        vr,
+    #        pn.Spacer(width=60),
+    #        umap_pane,
+    #        vr,
+    #        h_clustering_pane,
+    #        #width=2400,
+    #        #height=530,
+    #        height=530,
+    #        margin=(0, 0, 0, 20),
+    #        sizing_mode="stretch_width",
+    #        styles={
+    #            'border-radius':  '15px',
+    #            'box-shadow':     '3px 3px 5px #bcbcbc',
+    #            'width': '98vw',
+    #        }
+    #    )
+
 
     ## Volcanoes
     # Contrast selector

@@ -15,6 +15,9 @@ from components.normalization_plots import (
     plot_ma,
     plot_mv_barplots,
     plot_mv_heatmaps,
+    plot_grouped_violin_imputation_by_condition,
+    plot_grouped_violin_imputation_by_sample,
+    plot_grouped_violin_imputation_metrics_by_condition,
 )
 from components.texts import (
     intro_preprocessing_text,
@@ -182,7 +185,7 @@ def normalization_tab(state: SessionState):
         pn.pane.Markdown("##   Log Transformation", styles={"flex":"0.1"}),
         loghistogram,
         #pn.Spacer(width=10),
-        height=520,
+        height=530,
         margin=(0, 0, 0, 20),
         sizing_mode="fixed",
         styles={
@@ -389,17 +392,16 @@ def normalization_tab(state: SessionState):
 
     binary_heatmap_fig, corr_heatmap_fig = plot_mv_heatmaps(adata)
 
-    mv_binary_heatmap_pane = pn.pane.Matplotlib(
+    mv_binary_heatmap_pane = pn.pane.Plotly(
         binary_heatmap_fig,
-        tight=True,
-        height=700,
+        height=600,
         sizing_mode="stretch_width",
         styles={"flex":"1"},
         )
 
     mv_corr_heatmap_pane = pn.pane.Plotly(
         corr_heatmap_fig,
-        height=700,
+        height=600,
         sizing_mode="stretch_width",
         styles={"flex":"1"},
         config={'responsive':True}
@@ -417,6 +419,7 @@ def normalization_tab(state: SessionState):
                 height=530,
                 margin=(0, 0, 0, 0),
             ),
+            #height=530,
             make_hr(),
             pn.Spacer(width=20),
             pn.Row(
@@ -424,12 +427,86 @@ def normalization_tab(state: SessionState):
                 pn.Spacer(width=10),
                 make_vr(),
                 mv_binary_heatmap_pane,
-                height=700,
+                height=530,
                 margin=(0, 0, 0, 0),
             ),
             height=1260,
         ),
-        height=1260,
+        height=1160,
+        margin=(0, 0, 0, 20),
+        sizing_mode="fixed",
+        styles={
+            'border-radius':  '15px',
+            'box-shadow':     '3px 3px 5px #bcbcbc',
+            'width': '92vw',
+            'background': 'white',
+        }
+    )
+
+    dist_cond_fig = plot_grouped_violin_imputation_by_condition(adata)
+    dist_samp_fig = plot_grouped_violin_imputation_by_sample(adata)
+
+    # Metrics:
+    rmad_cond_fig, cv_cond_fig = plot_grouped_violin_imputation_metrics_by_condition(adata)
+
+    imput_dist_cond_pane = pn.pane.Plotly(
+        dist_cond_fig,
+        height=500,
+        sizing_mode="stretch_width",
+        styles={"flex":"0.5"},
+        config={'responsive':True}
+        )
+
+    imput_dist_samp_pane = pn.pane.Plotly(
+        dist_samp_fig,
+        height=500,
+        sizing_mode="stretch_width",
+        styles={"flex":"1"},
+        config={'responsive':True}
+        )
+
+    imput_dist_pane = pn.Row(
+        pn.pane.Markdown("##   Distributions", styles={"flex":"0.1"}),
+        imput_dist_cond_pane,
+        pn.Spacer(width=10),
+        make_vr(),
+        pn.Spacer(width=60),
+        imput_dist_samp_pane,
+        height=520,
+        margin=(0, 0, 0, 20),
+        sizing_mode="fixed",
+        styles={
+            'border-radius':  '15px',
+            'box-shadow':     '3px 3px 5px #bcbcbc',
+            'width': '92vw',
+            'background': 'white',
+        }
+    )
+
+    imput_rmad_pane = pn.pane.Plotly(
+        rmad_cond_fig,
+        height=500,
+        sizing_mode="stretch_width",
+        styles={"flex":"1"},
+        config={'responsive':True}
+        )
+
+    imput_cv_pane = pn.pane.Plotly(
+        cv_cond_fig,
+        height=500,
+        sizing_mode="stretch_width",
+        styles={"flex":"1"},
+        config={'responsive':True}
+        )
+
+    imput_metrics_pane = pn.Row(
+        pn.pane.Markdown("##   Metrics", styles={"flex":"0.1"}),
+        imput_rmad_pane,
+        #pn.Spacer(width=20),
+        make_vr(),
+        pn.Spacer(width=60),
+        imput_cv_pane,
+        height=520,
         margin=(0, 0, 0, 20),
         sizing_mode="fixed",
         styles={
@@ -444,8 +521,12 @@ def normalization_tab(state: SessionState):
     imputation_pane = pn.Column(
         pn.pane.Markdown("##   Imputation"),
         mv_pane,
+        pn.Spacer(height=30),
+        imput_dist_pane,
+        pn.Spacer(height=30),
+        imput_metrics_pane,
         margin=(0, 0, 0, 20),
-        height=2500,
+        height=2340,
         styles={
             'border-radius':  '15px',
             'box-shadow':     '3px 3px 5px #bcbcbc',
@@ -463,8 +544,8 @@ def normalization_tab(state: SessionState):
         pn.Spacer(height=30),
         imputation_pane,
         margin=(0, 0, 0, 20),
-        sizing_mode="stretch_height",
-        height=2500,
+        sizing_mode="fixed",
+        height=4740,
         styles={
             'border-radius':  '15px',
             'box-shadow':     '3px 3px 5px #bcbcbc',
@@ -503,5 +584,6 @@ def normalization_tab(state: SessionState):
         quant_pane,
         pn.Spacer(height=30),
         protein_pane,
+        pn.Spacer(height=30),
         sizing_mode="stretch_both",
     )

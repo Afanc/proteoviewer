@@ -196,7 +196,7 @@ def plot_stacked_proteins_by_category(
         legend_itemdoubleclick=False,
         #margin=dict(l=120, r=120),
     )
-    fig.update_xaxes(tickangle=45)
+    fig.update_xaxes(tickangle=30)
     return fig
 
 def plot_bar_plotly(
@@ -721,95 +721,110 @@ def plot_cluster_heatmap_plotly(
 
     return fig
 
-@log_time("Cluster Heatmap Plt")
-def plot_cluster_heatmap_plt(
-    data: pd.DataFrame,
-    col_colors: Optional[pd.Series] = None,
-    title: str = "Heatmap of Missing Values",
-    figsize: Tuple[int, int] = (12, 10),
-    row_cluster: bool = False,
-    col_cluster: bool = True,
-    xticklabels: bool = True,
-    yticklabels: bool = False,
-    cbar_ticks: Optional[List[float]] = None,
-    cbar_aspect: int = 10,
-    adjust_params: Optional[Dict[str, float]] = None,
-    legend_title: str = "Conditions",
-    legend_loc: str = "upper right",
-    legend_fontsize: int = 8,
-    legend_bbox: Tuple[float, float] = (1.15, 1.40),
-    binary_labels: Optional[Tuple[str, str]] = ["Present", "Missing"],
-    cmap: Optional[LinearSegmentedColormap] = None,
-    legend_mapping: Optional[Dict[str, any]] = None
-):
+@log_time("Plotting Missing Values Heatmap (Plotly)")
+def plot_binary_cluster_heatmap_plotly(
+    adata: AnnData,
+    cond_key: str = "CONDITION",
+    layer: str = "normalized",
+    title: str = "Clustered Missing Values Heatmap",
+    width: int = 800,
+    height: int = 500,
+) -> go.Figure:
     """
-    Generates a clustermap heatmap for missing values with hierarchical clustering.
-
-    Args:
-        data (pd.DataFrame): DataFrame of binary values (e.g., 1 for missing, 0 for present).
-        col_colors (pd.Series, optional): Series mapping column names to colors.
-        title (str): Title for the clustermap.
-        figsize (tuple): Figure size.
-        row_cluster (bool): Whether to cluster rows.
-        col_cluster (bool): Whether to cluster columns.
-        xticklabels (bool): Show x-axis tick labels.
-        yticklabels (bool): Show y-axis tick labels.
-        cbar_ticks (list, optional): Ticks for the colorbar.
-        cbar_aspect (int): Aspect ratio for the colorbar.
-        adjust_params (dict, optional): Parameters to pass to plt.subplots_adjust.
-        legend_title (str): Title for the legend.
-        legend_loc (str): Legend location.
-        legend_fontsize (int): Font size for legend text.
-        legend_bbox (tuple): bbox_to_anchor for the legend.
-        binary_labels (list): labels to the binary cmap.
-        cmap (LinearSegmentedColormap, optional): Colormap to use. If None, a binary colormap is used.
-        legend_mapping (dict, optional): Mapping from condition names to colors for the legend.
-
-    Returns:
-        sns.matrix.ClusterGrid: The clustermap object.
+    Interactive Plotly heatmap of binary missingness, reordered by
+    precomputed sample/feature linkages in adata.uns, with a color strip
+    and legend for conditions.
     """
-    if cbar_ticks is None:
-        cbar_ticks = [0.25, 0.75]
-    if cmap is None:
-        cmap = LinearSegmentedColormap.from_list('CustomRed', ['#f0f0f0', '#e34a33'], 2)
-    if adjust_params is None:
-        adjust_params = {"right": 0.85, "bottom": 0.25, "top": 0.90}
 
-    #col_colors.name=""
-    g = sns.clustermap(
-        data,
-        cmap=cmap,
-        figsize=figsize,
-        row_cluster=row_cluster,
-        col_cluster=col_cluster,
-        col_colors=col_colors,
-        xticklabels=xticklabels,
-        yticklabels=yticklabels,
-        cbar_kws={"ticks": cbar_ticks, "aspect": cbar_aspect},
+    # 1) build missingness DataFrame (features × samples)
+    missing = np.isnan(adata.layers[layer]).astype(int)  # samples × features
+    df = pd.DataFrame(
+        missing.T,                                      # features × samples
+        index=adata.var_names,
+        columns=adata.obs_names
     )
 
-    g.ax_heatmap.set_xlabel("")
-    plt.subplots_adjust(**adjust_params)
-    colorbar = g.cax
-    colorbar.set_position([0.90, .35, .02, .3])
-    if binary_labels is not None:
-        colorbar.set_yticklabels(binary_labels)
+    # 2) reorder according to .uns
+    feat_order   = adata.uns['missing_feature_order']
+    sample_order = adata.uns['missing_sample_order']
+    df = df.reindex(index=feat_order, columns=sample_order)
 
-    # If a legend mapping is provided, create a legend accordingly.
-    if legend_title and legend_mapping is not None:
-        legend_patches = [mpatches.Patch(color=color, label=cond)
-                          for cond, color in legend_mapping.items()]
-        g.ax_heatmap.legend(
-            handles=legend_patches,
-            title=legend_title,
-            loc=legend_loc,
-            fontsize=legend_fontsize,
-            bbox_to_anchor=legend_bbox
-        )
+    # 3) make a condition→color mapping & color-strip
+    levels = adata.obs[cond_key].unique().tolist()
+    cmap_cond = get_color_map(levels, palette=None, anchor=None)
+    cond_ser  = adata.obs[cond_key].reindex(sample_order)
+    x_colors  = [cmap_cond[c] for c in cond_ser]
 
-    g.fig.suptitle(title, fontsize=14, y=0.955)
-    plt.setp(g.ax_heatmap.get_xticklabels(), rotation=-30, ha='left')
-    return g
+    # 4) draw the heatmap
+    fig = px.imshow(
+        df,
+        color_continuous_scale=[[0, '#f0f0f0'], [1, '#e34a33']],
+        zmin=0, zmax=1,
+        aspect="auto",
+        labels=dict(x="", y="", color="Missing"),
+        width=width, height=height,
+    )
+
+    fig.update_traces(showscale=False)
+    fig.update_layout(coloraxis_showscale=False)
+
+    # 5) inject colored tick labels on x-axis
+    fig.update_xaxes(
+        tickmode="array",
+        tickvals=list(range(len(sample_order))),
+        ticktext=[
+            f"<span style='color:{col};'>{lbl}</span>"
+            for lbl, col in zip(sample_order, x_colors)
+        ],
+        tickangle=30,
+        side="bottom",
+    )
+
+    # 6) tidy y-axis
+    fig.update_yaxes(
+        tickmode="array",
+        tickvals=list(range(len(feat_order))),
+        ticktext=feat_order,
+        ticks="",
+        showgrid=False,
+    )
+    fig.update_yaxes(showticklabels=False, showgrid=False)
+
+    # 7) add binary legend (Present vs Missing)
+    # Present = 0 = grey, Missing = 1 = red
+    for label, color in [("Present", "#f0f0f0"), ("Missing", "#e34a33")]:
+        fig.add_trace(go.Scatter(
+            x=[None], y=[None],
+            mode="markers",
+            marker=dict(color=color, size=10),
+            name=label,
+            showlegend=True,
+            hoverinfo="skip",
+        ))
+
+    # hide any non‐legend traces (i.e. the heatmap trace)
+    for tr in fig.data:
+        if tr.type == 'heatmap':
+            tr.showlegend = False
+
+    # 8) finalize layout
+    fig.update_layout(
+        title=dict(text=title, x=0.5),
+        margin=dict(l=50, r=200, t=50, b=100),
+        legend=dict(
+            title=cond_key,
+            orientation="v",
+            x=1.02, y=1,
+            xanchor="left", yanchor="top"
+        ),
+        xaxis_showgrid=False,
+        yaxis_showgrid=False,
+        hovermode="closest",
+        legend_itemclick=False,
+        legend_itemdoubleclick=False,
+    )
+
+    return fig
 
 @log_time("Plotting Volcano Plots")
 def plot_volcanoes(

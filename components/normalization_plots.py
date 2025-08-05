@@ -6,7 +6,7 @@ import plotly.graph_objects as go
 import plotly.express as px
 from scipy.stats import gaussian_kde
 from plotly.subplots import make_subplots
-from components.plot_utils import plot_histogram_plotly, add_violin_traces, compute_metric_by_condition, get_color_map, plot_bar_plotly, plot_cluster_heatmap_plt
+from components.plot_utils import plot_histogram_plotly, add_violin_traces, compute_metric_by_condition, get_color_map, plot_bar_plotly, plot_binary_cluster_heatmap_plotly
 from regression_normalization import compute_reference_values, compute_MA, fit_regression
 from utils import logger, log_time
 
@@ -707,8 +707,6 @@ def plot_mv_barplots(adata: AnnData):
 
 #    # --- 3) Get a stable color map for conditions
     cond_levels = mvi_per_condition.index.sort_values(ascending=False)
-#    cond_levels_list = ["Total"] + sorted(cond_levels.tolist())
-#    cond_color_map = get_color_map(cond_levels_list, palette=px.colors.qualitative.Plotly, anchor='Total', anchor_color="#999999")
 
     cond_labels = ["Total (Non-Missing)", "Total (Missing)"] + cond_levels.tolist()
 
@@ -723,8 +721,6 @@ def plot_mv_barplots(adata: AnnData):
 
 
     # append total for conditions
-#    cond_x = cond_levels_list
-#    cond_y = [ total_mvi ] + [ int(mvi_per_condition.loc[c]) for c in cond_levels_list if c != "Total" ]
     cond_x = cond_labels
     cond_y = [
         total_non_imputed,
@@ -732,13 +728,12 @@ def plot_mv_barplots(adata: AnnData):
         *[int(mvi_per_condition.loc[c]) for c in cond_levels]
     ]
 
-    condition_title = f"Missing Values (ratio = {100*rate:.1f}%)"
+    condition_title = f"Missing Values (ratio = {100*rate:.2f}%)"
 
     # --- 4) Plotly figures
     fig_cond = plot_bar_plotly(
         x=cond_x,
         y=cond_y,
-        #colors=[cond_color_map[c] for c in cond_levels_list],
         colors=[cond_color_map[c] for c in cond_x],
         title=condition_title,
         x_title="Condition",
@@ -807,24 +802,32 @@ def plot_mv_heatmaps(adata:AnnData):
     )
     df_missing = df_raw.isna().astype(int).T
 
-    # 2) Prepare a color‐series for your samples (columns) keyed to CONDITION
-    cond_to_color = get_color_map(
-        adata.obs['CONDITION'].unique().tolist(),
-        palette=None,    # your default Plotly qualitative
-        anchor=None
-    )
-    col_colors = adata.obs['CONDITION'].map(cond_to_color)
-    col_colors.name = "Condition"
+    ## 2) Prepare a color‐series for your samples (columns) keyed to CONDITION
+    #cond_to_color = get_color_map(
+    #    adata.obs['CONDITION'].unique().tolist(),
+    #    palette=None,    # your default Plotly qualitative
+    #    anchor=None
+    #)
+    #col_colors = adata.obs['CONDITION'].map(cond_to_color)
+    #col_colors.name = "Condition"
 
-    # 3a) Clustered heatmap (matplotlib/seaborn) via your helper
-    g = plot_cluster_heatmap_plt(
-        data=df_missing,
-        col_colors=col_colors,
-        title="Clustered Missing Values",
-        legend_mapping=cond_to_color,
-        row_cluster=False,
-        col_cluster=True,
+    fig_binary = plot_binary_cluster_heatmap_plotly(
+        adata=adata,
+        cond_key="CONDITION",
+        layer="normalized",
+        title="Clustered Missing Values Heatmap",
+        width=900,
+        height=900,
     )
+    ## 3a) Clustered heatmap (matplotlib/seaborn) via your helper
+    #g = plot_cluster_heatmap_plt(
+    #    data=df_missing,
+    #    col_colors=col_colors,
+    #    title="Clustered Missing Values",
+    #    legend_mapping=cond_to_color,
+    #    row_cluster=False,
+    #    col_cluster=True,
+    #)
 
     # 3b) Correlation heatmap (plotly) of sample‐sample missingness
     corr = df_missing.corr()
@@ -839,4 +842,266 @@ def plot_mv_heatmaps(adata:AnnData):
         coloraxis_colorbar=dict(x=0.90),
     ),
 
-    return (g.fig, fig_corr)
+    return (fig_binary, fig_corr)
+
+@log_time("Plotting Imputation Distribution by Condition")
+def plot_grouped_violin_imputation_by_condition(
+        adata,
+        colors=('blue','red'),
+        title="Distribution of Imputed Values by Condition",
+        width=900,
+        height=600,
+    ) -> go.Figure:
+
+    raw = adata.layers['raw']
+    # final intensities (with imputation filled in)
+    norm = adata.X.toarray() if hasattr(adata.X, "toarray") else adata.X
+
+    cond_series = adata.obs['CONDITION']
+    conditions = cond_series.unique().tolist()
+    idx_map    = {cond:i for i,cond in enumerate(conditions)}
+    offset     = 0.2
+
+    # build long rows
+    rows = []
+    for sample_idx, sample in enumerate(adata.obs_names):
+        cond = cond_series.iloc[sample_idx]
+        mask_imp = np.isnan(raw[sample_idx, :])
+        # Measured = final norm where raw was not NaN
+        meas = norm[sample_idx, :][~mask_imp]
+        # Imputed = final norm where raw was NaN
+        impt = norm[sample_idx, :][mask_imp]
+        rows += [(cond, 'Measured', v) for v in meas]
+        rows += [(cond, 'Imputed',  v) for v in impt]
+
+    df = pd.DataFrame(rows, columns=['Condition','Normalization','Value'])
+
+    # now exactly your grouped‐violin recipe:
+    fig = go.Figure()
+    for norm_label, color in zip(['Measured','Imputed'], colors):
+        sub = df[df['Normalization']==norm_label]
+        x_vals = sub['Condition'].map(idx_map) + ( -offset if norm_label=='Measured' else +offset )
+        fig.add_trace(go.Violin(
+            x=x_vals,
+            y=sub['Value'],
+            name=norm_label,
+            legendgroup=norm_label,
+            line_color=color,
+            box_visible=True,
+            box_line_color='black',
+            box_line_width=1,
+            opacity=0.6,
+            width=offset*1.8,
+            meanline_visible=True,
+            points=False,
+            spanmode='hard',
+            scalemode='width',
+            scalegroup="all_same",
+        ))
+
+    # vertical separators
+    for i in idx_map.values():
+        fig.add_vline(x=i, line=dict(color='gray',dash='dot',width=1),layer='above')
+
+    fig.update_layout(
+        template='plotly_white',
+        violinmode='overlay',
+        title=dict(text=title, x=0.5),
+        width=width, height=height,
+        xaxis=dict(
+            title='Condition',
+            tickmode='array',
+            tickvals=list(idx_map.values()),
+            ticktext=conditions,
+        ),
+        yaxis=dict(title='Intensity', showgrid=True),
+        showlegend=True,
+    )
+    fig.update_xaxes(showline=True, mirror=True, linecolor='black')
+    fig.update_yaxes(showline=True, mirror=True, linecolor='black')
+    return fig
+
+@log_time("Plotting Imputation Distribution by Sample")
+def plot_grouped_violin_imputation_by_sample(
+    adata,
+    colors=('blue','red'),
+    title="Distribution of Imputed Values by Sample",
+    width=900,
+    height=600,
+) -> go.Figure:
+
+    # 1) extract raw vs final intensities
+    raw  = adata.layers['raw']
+    norm = adata.X.toarray() if hasattr(adata.X, "toarray") else adata.X
+
+    # 2) build long‐form DataFrame
+    rows = []
+    samples = adata.obs_names.tolist()
+    for i, sample in enumerate(samples):
+        mask_imp = np.isnan(raw[i, :])
+        meas = norm[i, :][~mask_imp]
+        impt = norm[i, :][mask_imp]
+        rows += [(sample, 'Measured', v) for v in meas]
+        rows += [(sample, 'Imputed',  v) for v in impt]
+    df = pd.DataFrame(rows, columns=['Sample','Normalization','Value'])
+
+    # 3) prepare numeric mapping + offset
+    idx_map = {s: i for i, s in enumerate(samples)}
+    offset  = 0.2
+
+    # 4) plot with manual offsets and per‐sample scalegroup
+    fig = go.Figure()
+    first_seen = {'Measured': False, 'Imputed': False}
+
+    for sample in samples:
+        for norm_label, color in zip(['Measured','Imputed'], colors):
+            sub = df[(df.Sample == sample) & (df.Normalization == norm_label)]
+            if sub.empty:
+                continue
+            x0 = idx_map[sample] + (-offset if norm_label=='Measured' else +offset)
+            fig.add_trace(go.Violin(
+                x=[x0] * len(sub),
+                y=sub['Value'],
+                name=norm_label,
+                legendgroup=norm_label,
+                showlegend=not first_seen[norm_label],
+                scalegroup=sample,            # per‐sample scaling
+                line_color=color,
+                box_visible=True,
+                box_line_color='black',
+                box_line_width=1,
+                meanline_visible=True,
+                opacity=0.6,
+                points=False,
+                width=offset * 1.8,
+                spanmode='hard',
+                scalemode='width',
+            ))
+            first_seen[norm_label] = True
+
+    # 5) vertical separators
+    for i in idx_map.values():
+        fig.add_vline(
+            x=i,
+            line=dict(color='gray', dash='dot', width=1),
+            layer='above'
+        )
+
+    # 6) styling & layout
+    fig.update_traces(box_visible=True, meanline_visible=True)
+    fig.update_layout(
+        template='plotly_white',
+        violinmode='overlay',
+        title=dict(text=title, x=0.5),
+        width=width,
+        height=height,
+        xaxis=dict(
+            title='Sample',
+            tickmode='array',
+            tickvals=list(idx_map.values()),
+            ticktext=samples,
+            tickangle=30,
+            showline=True,
+            mirror=True,
+            linecolor='black',
+        ),
+        yaxis=dict(title='Intensity', showgrid=True, showline=True, mirror=True, linecolor='black'),
+        showlegend=True,
+    )
+
+    return fig
+
+@log_time("Plotting Imputation CV and rMAD by Condition")
+def plot_grouped_violin_imputation_metrics_by_condition(
+    adata,
+    metrics=('CV', 'rMAD'),
+    colors=('blue', 'red'),
+    width=900,
+    height=600,
+) -> tuple[go.Figure, go.Figure]:
+
+    def make_fig(metric: str) -> go.Figure:
+        # carve out measured vs imputed
+        raw  = adata.layers['raw']
+        norm = adata.X.toarray() if hasattr(adata.X, "toarray") else adata.X
+
+        dm = compute_metric_by_condition(
+            AnnData(X=np.where(np.isnan(raw), np.nan, norm),
+                   obs=adata.obs.copy(), var=adata.var.copy()),
+            metric=metric
+        )
+        di = compute_metric_by_condition(
+            AnnData(X=np.where(~np.isnan(raw), np.nan, norm),
+                   obs=adata.obs.copy(), var=adata.var.copy()),
+            metric=metric
+        )
+
+        # force "Total" first
+        conditions = ['Total'] + [c for c in dm.keys() if c != 'Total']
+        idx_map    = {c:i for i,c in enumerate(conditions)}
+        offset     = 0.2
+
+        # long-form DF
+        rows = []
+        for cond in conditions:
+            rows += [(cond, 'Measured', v) for v in dm.get(cond, []) if not np.isnan(v)]
+            rows += [(cond, 'Imputed',  v) for v in di.get(cond, []) if not np.isnan(v)]
+        df = pd.DataFrame(rows, columns=['Condition','Normalization','Value'])
+
+        # build fig
+        fig = go.Figure()
+        first_seen = {'Measured': False, 'Imputed': False}
+
+        for cond in conditions:
+            for norm_label, color in zip(['Measured','Imputed'], colors):
+                sub = df[(df.Condition==cond) & (df.Normalization==norm_label)]
+                if sub.empty:
+                    continue
+                x0 = idx_map[cond] + (-offset if norm_label=='Measured' else +offset)
+                fig.add_trace(go.Violin(
+                    x=[x0] * len(sub),
+                    y=sub['Value'],
+                    name=norm_label,
+                    legendgroup=norm_label,
+                    showlegend=not first_seen[norm_label],
+                    scalegroup=str(cond),
+                    line_color=color,
+                    box_visible=True,
+                    box_line_color='black',
+                    box_line_width=1,
+                    meanline_visible=True,
+                    opacity=0.6,
+                    points=False,
+                    width=offset * 1.8,
+                    spanmode='hard',
+                    scalemode='width',
+                ))
+                first_seen[norm_label] = True
+
+        # separators
+        for i in idx_map.values():
+            fig.add_vline(x=i, line=dict(color='gray', dash='dot', width=1), layer='above')
+
+        # styling
+        fig.update_traces(box_visible=True, meanline_visible=True)
+        fig.update_layout(
+            template='plotly_white',
+            violinmode='overlay',
+            title=dict(text=f"{metric} Distribution by Condition", x=0.5),
+            width=width, height=height,
+            xaxis=dict(
+                title='Condition',
+                tickmode='array',
+                tickvals=list(idx_map.values()),
+                ticktext=conditions,
+                showline=True, mirror=True, linecolor='black'#, tickangle=30
+            ),
+            yaxis=dict(title=metric, showgrid=True, showline=True, mirror=True, linecolor='black'),
+            showlegend=True,
+        )
+        return fig
+
+    fig_cv  = make_fig('CV')
+    fig_rmad = make_fig('rMAD')
+    return fig_rmad, fig_cv
+
