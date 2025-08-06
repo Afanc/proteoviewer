@@ -27,7 +27,7 @@ logging.getLogger().setLevel(logging.INFO)
 # 2) Enable any Panel extensions you need
 pn.extension('plotly')
 
-DEV = True
+DEV = False
 
 def get_free_port(start=5006, end=5099):
     """Find an open port so users can run multiple instances."""
