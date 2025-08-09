@@ -22,7 +22,7 @@ from components.texts import (
     log_transform_text
 )
 from utils import logger, log_time
-from layout_utils import plotly_section, make_vr, make_hr, make_section, make_row
+from layout_utils import plotly_section, make_vr, make_hr, make_section, make_row, FRAME_STYLES
 import textwrap
 
 executor = ThreadPoolExecutor()
@@ -454,4 +454,5 @@ def preprocessing_tab(state: SessionState):
         protein_pane,
         pn.Spacer(height=30),
         sizing_mode="stretch_both",
+        styles=FRAME_STYLES,
     )

@@ -13,6 +13,11 @@ SECTION_STYLES = {
 DEFAULT_MARGIN = (0, 0, 0, 20)
 DEFAULT_SIZING = "stretch_width"
 
+FRAME_STYLES = {
+    "max-height": "calc(100vh - 160px)",  # tweak the 160px to your header/controls height
+    "overflow": "auto",
+}
+
 def make_row(*components,
              width: str = "95vw",
              height: int = None,

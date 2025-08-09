@@ -16,7 +16,7 @@ from components.texts import (
     log_transform_text
 )
 from components.string_links import get_string_link
-from layout_utils import plotly_section, make_vr, make_hr, make_section, make_row
+from layout_utils import plotly_section, make_vr, make_hr, make_section, make_row, FRAME_STYLES
 from utils import logger, log_time
 import textwrap
 
@@ -117,12 +117,8 @@ def overview_tab(state: SessionState):
         pn.Spacer(width=20),
         pn.pane.Plotly(hist_ID_fig,
                        height=500,
-                       #sizing_mode="stretch_width",
-                       #styles={"flex":"0.8"}
                        margin=(0, 20, 0, 0),
                        styles={"flex":"1",
-                               #'border-radius':  '15px',
-                               #'box-shadow':     '3px 3px 5px #bcbcbc',
                               }
         ),
         height=530,
@@ -134,6 +130,7 @@ def overview_tab(state: SessionState):
             'width': '98vw',
         }
     )
+
 
     ## IDs barplot
     hist_ID_fig = plot_barplot_proteins_per_sample(adata)
@@ -572,6 +569,7 @@ def overview_tab(state: SessionState):
         volcano_pane,
         pn.Spacer(height=30),
         sizing_mode="stretch_both",
+        styles=FRAME_STYLES,
     )
 
     return layout
