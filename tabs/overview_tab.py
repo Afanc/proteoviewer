@@ -1,5 +1,6 @@
 import os
 import panel as pn
+from functools import lru_cache
 from session_state import SessionState
 from components.overview_plots import (
     plot_barplot_proteins_per_sample,
@@ -15,26 +16,9 @@ from components.texts import (
     log_transform_text
 )
 from components.string_links import get_string_link
+from layout_utils import plotly_section, make_vr, make_hr, make_section, make_row
 from utils import logger, log_time
 import textwrap
-
-pn.extension("plotly")
-pn.extension("indicator")
-
-def make_vr(color="#ccc", margin="6px 0"):
-    return pn.Spacer(
-        width=1,
-        sizing_mode="stretch_height",
-        styles={"background": color, "margin": margin}
-        )
-
-def make_hr(color="#ccc", margin="6px 0"):
-    return pn.Spacer(
-        height=1,
-        sizing_mode="stretch_width",
-        styles={"background": color, "margin": margin}
-        )
-
 
 @log_time("Preparing Overview Tab")
 def overview_tab(state: SessionState):
@@ -122,10 +106,6 @@ def overview_tab(state: SessionState):
     )
 
     hist_ID_fig = plot_barplot_proteins_per_sample(adata)
-    vr = pn.Spacer(width=1, sizing_mode="stretch_height", styles={
-            "background": "#ccc",
-            "margin": "6px 0"
-        })
 
     intro_pane = pn.Row(
         pn.Column(
@@ -133,7 +113,7 @@ def overview_tab(state: SessionState):
             summary_pane,
             styles={"flex":"0.32"}
         ),
-        vr,
+        make_vr(),
         pn.Spacer(width=20),
         pn.pane.Plotly(hist_ID_fig,
                        height=500,
@@ -147,7 +127,7 @@ def overview_tab(state: SessionState):
         ),
         height=530,
         margin=(0, 0, 0, 20),
-        sizing_mode="fixed",
+        sizing_mode="stretch_width",
         styles={
             'border-radius':  '15px',
             'box-shadow':     '3px 3px 5px #bcbcbc',
@@ -182,14 +162,14 @@ def overview_tab(state: SessionState):
         pn.pane.Markdown("##   Metrics", styles={"flex":"0.1"}),
         rmad_pane,
         pn.Spacer(width=25),
-        vr,
+        make_vr(),
         pn.Spacer(width=25),
         cv_pane,
         pn.Spacer(width=50),
         #width=1400,
         height=530,
         margin=(0, 0, 0, 20),
-        sizing_mode="fixed",
+        sizing_mode="stretch_width",
         styles={
             'border-radius':  '15px',
             'box-shadow':     '3px 3px 5px #bcbcbc',
@@ -218,10 +198,10 @@ def overview_tab(state: SessionState):
             pn.pane.Markdown("##   Clustering", styles={"flex": "0.1"}),
             pca_pane,
             #pn.Spacer(width=25),
-            vr,
+            make_vr(),
             pn.Spacer(width=60),
             umap_pane,
-            vr,
+            make_vr(),
             #h_clustering_pane,
             height=530,
             margin=(0, 0, 0, 20),
@@ -349,61 +329,50 @@ def overview_tab(state: SessionState):
     search_input.param.watch(_toggle_layers_visibility, "value")
     layers_sel.visible = bool(search_input.value)
 
-    @pn.depends(protein=search_input, contrast=contrast_sel, layer=layers_sel)
-    def detail_panel(protein, contrast, layer):
+    _intensity_slot = pn.Column(styles={'flex': '1'})
+
+    @lru_cache(maxsize=4096)
+    def _cached_string_link(uniprot_id: str) -> str:
+        # Cache ONLY the URL string (safe). If the call fails, return "".
+        try:
+            return get_string_link(uniprot_id) or ""
+        except Exception:
+            return ""
+
+    @pn.depends(protein=search_input, contrast=contrast_sel)
+    def info_card(protein, contrast):
         if not protein:
-            # an inert box *exactly* the size of your eventual plot
-            return pn.Spacer(width=900, height=800)
+            # Reserve the card’s area when nothing is selected
+            return pn.Spacer(width=800, height=170)
 
-        # otherwise build & return the real Plotly pane
-
-        fig = plot_intensity_by_protein(state, contrast, protein, layers_sel)
-        barplot_pane = pn.pane.Plotly(fig,
-                                      width=800,
-                                      height=500,
-                                      margin=(-30, 0, 0, 0),
-                                      styles={
-                                                  'border-radius':  '8px',
-                                                  'box-shadow':     '3px 3px 5px #bcbcbc',
-                                              }
-                                      )
-        protein_info = get_protein_info(state, contrast, protein, layers_sel)
-        uniprot_id = protein_info['uniprot_id']
-
-        intensity_scale = "Avg Log Intensity"
-        if layer == "Raw":
-            intensity_scale = "Avg Intensity"
+        # --- pull values that do not depend on the "layer" toggle ---
+        protein_info = get_protein_info(state, contrast, protein, layers_sel)  # OK: we only read layer-agnostic bits
+        uniprot_id   = protein_info['uniprot_id']
 
         Number = pn.indicators.Number
 
-        # create one Number widget per metric
+        # q-value and log2FC never depend on layer, keep these fixed in the card
         q_ind = Number(
             name="q-value",
             value=protein_info["qval"],
             format="{value:.3e}",
             default_color="red",
             font_size="12pt",
-            styles= {'flex': '1'}
-            )
+            styles={'flex': '1'}
+        )
         lfc_ind = Number(
             name="log₂ FC",
             value=protein_info["logfc"],
             format="{value:.3f}",
             default_color="red",
-            font_size= "14pt",
-            styles= {'flex': '1'}
-        )
-        prot_avg_val = protein_info["avg_int"]
-        prot_avg_val = f"{prot_avg_val:.3f}" if prot_avg_val <= 100 else f"{prot_avg_val:.0f}"
-        int_ind = Number(
-            name=intensity_scale,
-            value=protein_info["avg_int"],
-            format=prot_avg_val,
-            default_color="darkorange",
-            font_size= "16pt",
-            styles= {'flex': '1'}
+            font_size="14pt",
+            styles={'flex': '1'}
         )
 
+        # we will inject the layer-dependent intensity Number into _intensity_slot elsewhere
+        _intensity_slot[:] = [pn.Spacer(height=0)]  # keeps layout tidy until bar function runs
+
+        # --- header (unchanged) ---
         base_size = 18
         max_len   = 10
         length    = len(protein)
@@ -411,7 +380,6 @@ def overview_tab(state: SessionState):
         if length <= max_len:
             size = base_size
         else:
-            # scale down linearly, but clamp at 10px minimum
             size = max(10, int(base_size * (max_len / length)**0.5))
             top_padding = max(10, top_padding * (max_len / length)**0.5)
 
@@ -428,15 +396,13 @@ def overview_tab(state: SessionState):
             "flex": "0.1",
             "margin": "0px 0px",
         }
-        # header with gene name + UniProt
         gene_md = pn.pane.Markdown(f"**Gene(s)**: {protein}", styles=item_styles)
         sep1    = pn.pane.Markdown("|", styles=sep_styles)
         uid_md  = pn.pane.Markdown(f"**Uniprot ID**: {uniprot_id}", styles=item_styles)
         sep2    = pn.pane.Markdown("|", styles=sep_styles)
         idx_md  = pn.pane.Markdown(f"**Protein Index**: {protein_info['index']+1}",
-                                   styles=item_styles) #correct for non-pythony users
+                                   styles=item_styles)
 
-        # 3) Flex container that centers everything
         header = pn.Row(
             gene_md, sep1, uid_md, sep2, idx_md,
             sizing_mode="stretch_width",
@@ -452,9 +418,10 @@ def overview_tab(state: SessionState):
             }
         )
 
+        # STRING link is layer-agnostic; fetch once & cache
         try:
-            string_link = get_string_link(uniprot_id)
-        except:
+            string_link = _cached_string_link(uniprot_id)
+        except Exception:
             string_link = ""
 
         footer_links = pn.Row(
@@ -469,7 +436,7 @@ def overview_tab(state: SessionState):
             styles={
                 "justify-content": "flex-end",
                 "padding": "2px 8px 4px 0px",
-                "margin-top": "-6px",  # Optional: pull up slightly to hug bottom
+                "margin-top": "-6px",
             }
         )
 
@@ -479,19 +446,19 @@ def overview_tab(state: SessionState):
         })
 
         card_style = {
-            'background':     '#f9f9f9',       # light gray, like Plotly default
+            'background':     '#f9f9f9',
             "align-items":     "center",
             'border-radius':  '8px',
-            'text-align': "center",
+            'text-align':     "center",
             'padding':        '5px',
             'box-shadow':     '3px 3px 5px #bcbcbc',
-            'justify-content': 'space-evenly',
+            'justify-content':'space-evenly',
         }
 
-        # assemble them in a Card
-        info_card = pn.Card(
+        # IMPORTANT: keep the exact row with 3 slots (q, lfc, INTENSITY_SLOT)
+        card = pn.Card(
             header,
-            pn.Row(q_ind, lfc_ind, int_ind, sizing_mode="stretch_width"),
+            pn.Row(q_ind, lfc_ind, _intensity_slot, sizing_mode="stretch_width"),
             hr,
             footer_links,
             width=800,
@@ -499,15 +466,59 @@ def overview_tab(state: SessionState):
             collapsible=False,
             hide_header=True,
         )
+        return card
 
-        #detailed_pane = pn.Row(
-        detailed_pane = pn.Column(
-            info_card,
-            pn.Spacer(height=50),
-            barplot_pane,
+
+    @pn.depends(protein=search_input, contrast=contrast_sel, layer=layers_sel)
+    def bar_and_intensity(protein, contrast, layer):
+        if not protein:
+            # Reserve space for the bar plot when nothing is selected
+            _intensity_slot[:] = [pn.Spacer(height=0)]
+            return pn.Spacer(width=800, height=500, margin=(-30, 0, 0, 0))
+
+        # --- bar plot (unchanged) ---
+        fig = plot_intensity_by_protein(state, contrast, protein, layers_sel)
+        barplot_pane = pn.pane.Plotly(
+            fig,
+            width=800,
+            height=500,
+            margin=(-30, 0, 0, 0),
+            styles={
+                'border-radius':  '8px',
+                'box-shadow':     '3px 3px 5px #bcbcbc',
+            }
         )
 
-        return detailed_pane
+        # --- intensity Number (layer-dependent) ---
+        protein_info   = get_protein_info(state, contrast, protein, layers_sel)
+        intensity_scale = "Avg Log Intensity" if layer != "Raw" else "Avg Intensity"
+
+        # NOTE: preserve your original formatting logic exactly
+        prot_avg_val = protein_info["avg_int"]
+        prot_avg_val = f"{prot_avg_val:.3f}" if prot_avg_val <= 100 else f"{prot_avg_val:.0f}"
+
+        Number = pn.indicators.Number
+        int_ind = Number(
+            name=intensity_scale,
+            value=protein_info["avg_int"],
+            format=prot_avg_val,
+            default_color="darkorange",
+            font_size="16pt",
+            styles={'flex': '1'}
+        )
+
+        # Inject intensity Number into the card without rebuilding the card itself
+        _intensity_slot[:] = [int_ind]
+
+        return barplot_pane
+
+
+    # This is the single object you put next to the volcano figure:
+    detail_panel = pn.Column(
+        info_card,
+        pn.Spacer(height=50),
+        bar_and_intensity,
+    )
 
     # 3) assemble into a layout, no legend‐based toggles
     volcano_pane = pn.Column(
@@ -537,10 +548,9 @@ def overview_tab(state: SessionState):
             pn.Spacer(width=50),
             detail_panel,
         ),
-        #width=2400,
         height=1000,
         margin=(0, 0, 0, 20),
-        sizing_mode="fixed",
+        sizing_mode="stretch_width",
         styles={
             'border-radius':  '15px',
             'box-shadow':     '3px 3px 5px #bcbcbc',
@@ -554,15 +564,13 @@ def overview_tab(state: SessionState):
     layout = pn.Column(
         pn.Spacer(height=10),
         intro_pane,
-        #pn.Spacer(height=30),
-        #hist_pane,
         pn.Spacer(height=30),
         metrics_pane,
         pn.Spacer(height=30),
         clustering_pane,
         pn.Spacer(height=30),
         volcano_pane,
-
+        pn.Spacer(height=30),
         sizing_mode="stretch_both",
     )
 

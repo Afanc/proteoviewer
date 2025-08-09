@@ -2,6 +2,7 @@ import numpy as np
 from typing import Tuple, List
 from sklearn.linear_model import RANSACRegressor
 from skmisc.loess import loess
+from functools import lru_cache
 
 def compute_reference_values(
     mat: np.ndarray,
@@ -71,7 +72,51 @@ def compute_MA(sample: np.ndarray, reference_values: np.ndarray) -> Tuple[np.nda
     A = sample - reference_values
     return M, A
 
+@lru_cache(maxsize=32)
+def _loess_preds_from_bytes(xb: bytes, xshape: tuple, xdtype: str,
+                            yb: bytes, yshape: tuple, ydtype: str,
+                            span: float) -> np.ndarray:
+    X = np.frombuffer(xb, dtype=np.dtype(xdtype)).reshape(xshape)
+    Y = np.frombuffer(yb, dtype=np.dtype(ydtype)).reshape(yshape)
+
+    mask = (~np.isnan(X)) & (~np.isnan(Y))
+    Xg, Yg = X[mask], Y[mask]
+
+    preds = np.full_like(Y, np.nan)
+    if Xg.size:
+        model = loess(Xg, Yg, span=span, surface="direct")
+        model.fit()
+        preds[mask] = model.outputs.fitted_values
+    return preds
+
 def fit_regression(X: np.ndarray, Y: np.ndarray, regression_type: str, span: float = 0.9):
+    """
+    Fit regression model to (X, Y). Supports 'linear' or 'loess'.
+    Caches LOESS predictions to avoid recomputing identical curves.
+    """
+    if regression_type == "linear":
+        mask = (~np.isnan(X)) & (~np.isnan(Y))
+        Xg, Yg = X[mask], Y[mask]
+        model = RANSACRegressor(random_state=42)
+        model.fit(Xg.reshape(-1, 1), Yg)
+        preds = np.full_like(Y, np.nan)
+        preds[mask] = model.predict(Xg.reshape(-1, 1))
+        return model, preds
+
+    elif regression_type == "loess":
+        # Use cached predictions based on array content + span
+        preds = _loess_preds_from_bytes(
+            X.tobytes(), X.shape, str(X.dtype),
+            Y.tobytes(), Y.shape, str(Y.dtype),
+            float(span)
+        )
+        # We don’t need the full model downstream; keep semantics by returning None
+        return None, preds
+
+    else:
+        raise ValueError(f"Unsupported regression type: {regression_type}")
+
+def fit_regression_old(X: np.ndarray, Y: np.ndarray, regression_type: str, span: float = 0.9):
     """
     Fit regression model to (X, Y). Supports 'linear' or 'loess'.
     Masks out any NaNs in X or Y before fitting, but still returns

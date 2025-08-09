@@ -5,19 +5,16 @@ Low-level Plotly utilities for ProteoFlux panel app.
 import copy
 import numpy as np
 import pandas as pd
+import warnings
 import plotly.graph_objects as go
 import plotly.figure_factory as ff
 from plotly.subplots import make_subplots
-import scipy.cluster.hierarchy as sch
 from scipy.spatial.distance import pdist, squareform
 import plotly.express as px
 from typing import List, Sequence, Optional, Dict, Tuple, Union, Literal
 from anndata import AnnData
 from matplotlib.colors import LinearSegmentedColormap
-import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
-import seaborn as sns
-import scanpy as sc
 from utils import logger, log_time
 from functools import lru_cache
 
@@ -271,24 +268,36 @@ def compute_metric_by_condition(
         Geometric CV on log2-normalized data (samples × proteins),
         returned as a percentage.
         """
-        linear_values = 2**x
-
-        std = np.nanstd(linear_values, axis=0)
-        mean = np.clip(np.nanmean(linear_values, axis=0), 1e-6, None)
-
-        cv = 100*std/mean
-
-        return cv
+        with warnings.catch_warnings():
+            # filterwarnings lets us match on the exact message
+            warnings.filterwarnings(
+                "ignore",
+                message="Mean of empty slice",
+                category=RuntimeWarning,
+            )
+            warnings.filterwarnings(
+                "ignore",
+                message="Degrees of freedom <= 0 for slice",
+                category=RuntimeWarning,
+            )
+            with np.errstate(invalid='ignore', divide='ignore'):
+                linear = 2 ** x
+                std    = np.nanstd(linear, axis=0)
+                mean   = np.clip(np.nanmean(linear, axis=0), 1e-6, None)
+                return 100 * std / mean
 
     def _rmad(x: np.ndarray) -> np.ndarray:
-        linear = 2 ** x
-
-        med = np.nanmedian(linear, axis=0)
-        mad = np.nanmedian(np.abs(linear - med), axis=0)
-
-        rmad = 100 * mad / np.clip(med, 1e-6, None)
-
-        return rmad
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore",
+                message="All-NaN slice encountered",
+                category=RuntimeWarning,
+            )
+            with np.errstate(invalid='ignore', divide='ignore'):
+                linear = 2 ** x
+                med    = np.nanmedian(linear, axis=0)
+                mad    = np.nanmedian(np.abs(linear - med), axis=0)
+                return 100 * mad / np.clip(med, 1e-6, None)
 
     compute_fn = _cv if metric == "CV" else _rmad
 
@@ -297,7 +306,8 @@ def compute_metric_by_condition(
     out["Total"] = compute_fn(df.values)
 
     # Per‐condition
-    for cond, subdf in df.groupby(conditions, axis=0):
+    #for cond, subdf in df.groupby(conditions, axis=0):
+    for cond, subdf in df.groupby(by=conditions, observed=False):
         out[cond] = compute_fn(subdf.values)
 
     return out
@@ -516,6 +526,7 @@ def _compute_orders_and_dendros(
     mat_bytes : raw bytes of your data matrix, dtype float64
     shape     : (n_rows, n_cols) of that matrix
     """
+    import scipy.cluster.hierarchy as sch
     n_rows, n_cols = shape
     arr = np.frombuffer(mat_bytes, dtype=np.float64).reshape(n_rows, n_cols)
 
@@ -566,6 +577,7 @@ def plot_cluster_heatmap_plotly(
       - no hoverinfo for speed
       - nice axis styling exactly like the Plotly example
     """
+    import scipy.cluster.hierarchy as sch
     # 1) Clean up: fill any NaNs, but keep all rows
     df = data
 
@@ -625,6 +637,7 @@ def plot_cluster_heatmap_plotly(
     abs_max = max(abs(min_val), abs(max_val))
     zmin, zmax = -abs_max, abs_max
 
+    #heat = go.Heatmapgl( ??
     heat = go.Heatmap(
         z=df.values,
         x=fig.layout.xaxis["tickvals"],
@@ -826,7 +839,6 @@ def plot_binary_cluster_heatmap_plotly(
 
     return fig
 
-@log_time("Plotting Volcano Plots")
 def plot_volcanoes(
     state,
     contrast: str,
@@ -986,9 +998,9 @@ def plot_volcanoes(
 
     arrow_ann = None
     if high_idx is not None and visible_mask[high_idx]:
-        sign = 1 if x[high_idx] >= 0 else -1
-        xh = x.values[high_idx]
-        yh = y.values[high_idx]
+        sign = 1 if x.iloc[high_idx] >= 0 else -1
+        xh = float(x.iloc[high_idx])
+        yh = float(y.iloc[high_idx])
         arrow_ann = dict(
             x=xh+sign*0.05, y=yh+0.05,
             ax=xh+sign*0.5, ay=yh+0.5,

@@ -1,5 +1,7 @@
+import warnings
 import numpy as np
 import pandas as pd
+import panel as pn
 from anndata import AnnData
 from typing import Tuple, List, Optional, Dict
 import plotly.graph_objects as go
@@ -36,6 +38,7 @@ def prepare_long_df(
     return df_long
 
 @log_time("Converting to long df")
+@pn.cache
 def get_intensity_long_df(
     adata: AnnData,
     before_key: str = "lognorm",
@@ -248,94 +251,6 @@ def plot_filter_histograms(adata: AnnData) -> Dict[str, go.Figure]:
 
     return figs
 
-def plot_filter_histograms_old(adata: AnnData):
-    """
-    Return three separate histograms (Q‑value, PEP, run evidence count)
-    of everything *before* filtering, each with its own threshold line.
-    """
-    # 1) thresholds
-    flt = adata.uns["preprocessing"]["filtering"]
-    thresholds = {
-        "qvalue":             flt["qvalue"]["threshold"],
-        "pep":                flt["pep"]["threshold"],
-        "run_evidence_count": flt["rec"]["threshold"],
-    }
-
-    # 2) raw arrays
-    # Q‑values
-    kept_q = flt.get('qvalue', {}).get("number_kept")
-    removed_q = flt.get('qvalue', {}).get("number_dropped")
-
-    # PEP
-    kept_p = flt.get('pep', {}).get("number_kept")
-    removed_p = flt.get('pep', {}).get("number_dropped")
-
-    # Run‑evidence count
-    kept_re = flt.get('rec', {}).get("number_kept")
-    removed_re = flt.get('rec', {}).get("number_dropped")
-
-    arrs = {
-        "qvalue": flt.get('qvalue', {}).get("raw_values"),
-        "pep": flt.get('pep', {}).get("raw_values"),
-        "run_evidence_count": flt.get('rec', {}).get("raw_values"),
-    }
-
-    ## how many got filtered out, how many we kept
-    filtered_kept_len = {
-        "qvalue":            (removed_q,  kept_q),
-        "pep":               (removed_p,  kept_p),
-        "run_evidence_count":(removed_re, kept_re),
-    }
-
-    # definitions
-    metrics = [
-        ("qvalue",             "Q‑value",             thresholds["qvalue"]),
-        ("pep",                "PEP",                 thresholds["pep"]),
-        ("run_evidence_count", "Run Evidence Count",  thresholds["run_evidence_count"]),
-    ]
-
-    figs: Dict[str, Figure] = {}
-    for key, label, thr in metrics:
-        vals = arrs[key]
-        vals = vals[np.isfinite(vals)]
-
-        removed = filtered_kept_len[key][0]
-        kept = filtered_kept_len[key][1]
-        title_text = f"{label} (Cutoff {thr}, kept: {kept}/{kept+removed})"
-
-        fig = go.Figure()
-        fig.add_trace(go.Histogram(
-            x=vals,
-            nbinsx=80,
-            name=label,
-            marker_line_color="black",
-            marker_line_width=1,
-            showlegend=False,
-            hoverinfo='none',
-        ))
-        fig.add_vline(
-            x=thr,
-            line=dict(color="red", dash="dash"),
-        )
-        fig.update_layout(
-            title=dict(text=title_text, x=0.5),
-            xaxis_title=label,
-            yaxis_title="Count",
-            yaxis_type="log",
-            template="plotly_white",
-            width=600,
-            height=400,
-        )
-        fig.update_yaxes(
-            dtick=1,
-            exponentformat='power',
-            showexponent='all',
-        )
-
-        figs[key] = fig
-
-    return figs
-
 @log_time("Plotting dynamic range")
 def plot_dynamic_range(
     adata: AnnData,
@@ -444,6 +359,79 @@ def plot_violin_intensity_by_sample(adata) -> go.Figure:
         height=600,
     )
 
+def compute_before_after_metrics(
+    adata,
+    metric: str,
+    cond_key: str = "CONDITION",
+    before_layer: str = "lognorm",
+    after_layer: str = "normalized"
+) -> tuple[dict[str, np.ndarray], dict[str, np.ndarray]]:
+    """
+    Returns two dicts mapping:
+      - "Total" → array of length = n_proteins
+      - each condition → same-length array
+    for both the 'Before' (raw) and 'After' (normalized) matrices,
+    in one pass each.
+    """
+    # 1) pick the same metric functions as your original compute_metric_by_condition :contentReference[oaicite:2]{index=2}
+    def _cv(x: np.ndarray) -> np.ndarray:
+        with warnings.catch_warnings():
+            # filterwarnings lets us match on the exact message
+            warnings.filterwarnings(
+                "ignore",
+                message="Mean of empty slice",
+                category=RuntimeWarning,
+            )
+            warnings.filterwarnings(
+                "ignore",
+                message="Degrees of freedom <= 0 for slice",
+                category=RuntimeWarning,
+            )
+            with np.errstate(invalid='ignore', divide='ignore'):
+                linear = 2 ** x
+                std    = np.nanstd(linear, axis=0)
+                mean   = np.clip(np.nanmean(linear, axis=0), 1e-6, None)
+                return 100 * std / mean
+
+    def _rmad(x: np.ndarray) -> np.ndarray:
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore",
+                message="All-NaN slice encountered",
+                category=RuntimeWarning,
+            )
+            with np.errstate(invalid='ignore', divide='ignore'):
+                linear = 2 ** x
+                med    = np.nanmedian(linear, axis=0)
+                mad    = np.nanmedian(np.abs(linear - med), axis=0)
+                return 100 * mad / np.clip(med, 1e-6, None)
+
+    compute_fn = _cv if metric == "CV" else _rmad
+
+    # 2) pull out the raw arrays
+    raw_arr  = adata.layers[before_layer]
+    norm_arr = adata.layers[after_layer]
+
+    # 3) compute global (“Total”) metrics once each
+    before_total = compute_fn(raw_arr)
+    after_total  = compute_fn(norm_arr)
+
+    # 4) group‐by-condition
+    conds = adata.obs[cond_key].values
+    unique_conds = sorted(np.unique(conds).tolist())
+
+    # preserve insertion order: Total → sorted(conds)
+    before_metrics = {"Total": before_total}
+    after_metrics  = {"Total": after_total}
+
+    for cond in unique_conds:
+        mask = (conds == cond)
+        before_metrics[cond] = compute_fn(raw_arr[mask, :])
+        after_metrics[cond]  = compute_fn(norm_arr[mask, :])
+
+    return before_metrics, after_metrics
+
+
 def plot_grouped_violin_metric_by_condition(
     adata,
     metric: str,
@@ -452,74 +440,62 @@ def plot_grouped_violin_metric_by_condition(
     width=900,
     height=600,
 ) -> go.Figure:
-    raw  = compute_metric_by_condition(adata,
-               layer="lognorm",
-               cond_key="CONDITION",
-               metric=metric,
-           )   # → Dict[Condition, np.ndarray]
-
-    norm = compute_metric_by_condition(adata,
-               layer="normalized",
-               cond_key="CONDITION",
-               metric=metric,
-           )
-
-    # 2) vectorized reshape to long form
-    df_before = (
-        pd.DataFrame(raw)
-          .melt(var_name="Condition", value_name="Value")
-          .assign(Normalization="Before")
-    )
-    df_after = (
-        pd.DataFrame(norm)
-          .melt(var_name="Condition", value_name="Value")
-          .assign(Normalization="After")
+    # 1) get both dicts in one pass
+    before_metrics, after_metrics = compute_before_after_metrics(
+        adata, metric=metric
     )
 
-    # 3) stitch together & drop the “Total” aggregate
-    dfm = pd.concat([df_before, df_after], ignore_index=True)
-
-    # 2) map each condition to an integer slot
-    conditions = dfm["Condition"].unique()
-    idx_map    = {cond:i for i,cond in enumerate(conditions)}
+    # 2) preserve the same x-ordering as before: keys in insertion order
+    conditions = list(before_metrics.keys())  # ["Total", *sorted(conds)]
+    idx_map    = {cond: i for i, cond in enumerate(conditions)}
     offset     = 0.2
 
-    # 3) build the violin traces
+    # 3) build the two violin traces (Before vs After)
     fig = go.Figure()
-    for norm, color in zip(["Before", "After"], colors):
-        sub = dfm[dfm["Normalization"] == norm]
-        # numeric x with ±offset
-        x_vals = sub["Condition"].map(idx_map) + ( -offset if norm=="Before" else +offset )
+    for norm_label, metrics_dict, color in zip(
+        ["Before", "After"],
+        [before_metrics, after_metrics],
+        colors
+    ):
+        x_vals = []
+        y_vals = []
+        shift  = -offset if norm_label == "Before" else +offset
+
+        for cond in conditions:
+            arr = metrics_dict[cond]
+            x0  = idx_map[cond] + shift
+            x_vals.extend([x0] * arr.size)
+            y_vals.extend(arr.tolist())
+
         fig.add_trace(go.Violin(
             x=x_vals,
-            y=sub["Value"],
-            name=norm,
-            legendgroup=norm,
+            y=y_vals,
+            name=norm_label,
+            legendgroup=norm_label,
             line_color=color,
             box_visible=True,
             box_line_color="black",
             box_line_width=1,
             opacity=0.6,
-            width=offset * 1.8,   # half-width ≈ offset
+            width=offset * 1.8,
             meanline_visible=True,
             points=False,
-            #hoverinfo="skip",
             spanmode="hard",
         ))
 
-
-    for i in list(idx_map.values()):
+    # 4) add the same vertical separators
+    for i in idx_map.values():
         fig.add_vline(
             x=i,
             line=dict(color="gray", dash="dot", width=1),
-            layer="above",
+            layer="above"
         )
 
-    # 4) finalize layout with one tick per condition
-    title_text=f"{metric} per Condition"
+    # 5) finalize layout exactly as before
+    title_text = title or f"{metric} per Condition"
     fig.update_layout(
         template="plotly_white",
-        violinmode="overlay",  # works with our manual offsets
+        violinmode="overlay",
         title=dict(text=title_text, x=0.5),
         width=width,
         height=height,
@@ -532,20 +508,8 @@ def plot_grouped_violin_metric_by_condition(
         yaxis=dict(title=metric, showgrid=True),
         showlegend=True,
     )
-
-    # 6) draw boxed axes
-    fig.update_xaxes(
-        showline=True,
-        linewidth=1,
-        linecolor="black",
-        mirror=True,
-    )
-    fig.update_yaxes(
-        showline=True,
-        linewidth=1,
-        linecolor="black",
-        mirror=True,
-    )
+    fig.update_xaxes(showline=True, linewidth=1, linecolor="black", mirror=True)
+    fig.update_yaxes(showline=True, linewidth=1, linecolor="black", mirror=True)
 
     return fig
 
@@ -685,103 +649,89 @@ def plot_rmad_by_condition(adata: AnnData) -> go.Figure:
 
 @log_time("Plotting Missing Values barplots")
 def plot_mv_barplots(adata: AnnData):
+    # 1) Get the raw array and sample/condition metadata
+    arr = adata.layers['normalized']           # shape: (n_samples × n_proteins)
+    sample_names = adata.obs_names.tolist()    # same order as arr’s rows
+    conds = adata.obs['CONDITION'].values      # array of length n_samples
 
-    df_raw = pd.DataFrame(
-        adata.layers['normalized'],
-        index=adata.obs.index,       # samples
-        columns=adata.var_names      # proteins
-    )
+    # 2) Compute missing per sample
+    mask = np.isnan(arr)
+    mvi_per_sample = mask.sum(axis=1).astype(int)   # 1D int array
 
-    # --- 2) Count missing per sample & per condition
-    mvi_per_sample = df_raw.isna().sum(axis=1)      # Series: Sample → count
-    conds = adata.obs['CONDITION']
-    mvi_per_condition = mvi_per_sample.groupby(conds).sum()  # Series: Condition → count
+    # 3) Compute missing per condition
+    #    a) find unique conditions (sorted ascending) + inverse mapping
+    unique_conds, inv = np.unique(conds, return_inverse=True)
+    #    b) sum up sample‐wise missing counts into bins
+    mvi_per_condition_vals = np.bincount(inv, weights=mvi_per_sample).astype(int)
+    #    c) to match your old `cond_levels = .index.sort_values(ascending=False)`
+    cond_levels = unique_conds[::-1]               # descending alphabetical
+    mvi_desc = mvi_per_condition_vals[::-1]        # align with cond_levels
 
-    #  total mvi
-    total_imputed     = int(mvi_per_condition.sum())        # what will be imputed
-    total_entries     = df_raw.size                         # all values
-    total_non_imputed = total_entries - total_imputed       # left untouched
-    rate = total_imputed/total_entries
+    # 4) Totals & rate
+    total_imputed     = int(mvi_per_condition_vals.sum())
+    total_entries     = arr.size
+    total_non_imputed = total_entries - total_imputed
+    rate = total_imputed / total_entries
 
-    total_mvi = int(mvi_per_condition.sum())
-
-#    # --- 3) Get a stable color map for conditions
-    cond_levels = mvi_per_condition.index.sort_values(ascending=False)
-
+    # 5) Assemble x/y for the **condition** barplot
     cond_labels = ["Total (Non-Missing)", "Total (Missing)"] + cond_levels.tolist()
+    cond_y      = [total_non_imputed, total_imputed] + mvi_desc.tolist()
 
-    # manual color map: gray for the two totals, then Plotly palette
+    # 6) Build a stable color map exactly as before
     palette = px.colors.qualitative.Plotly
     cond_color_map = {
         "Total (Non-Missing)": "#888888",
-        "Total (Missing)":     "#CCCCCC"
+        "Total (Missing)"    : "#CCCCCC",
     }
     for i, lbl in enumerate(cond_levels):
         cond_color_map[lbl] = palette[i % len(palette)]
 
-
-    # append total for conditions
-    cond_x = cond_labels
-    cond_y = [
-        total_non_imputed,
-        total_imputed,
-        *[int(mvi_per_condition.loc[c]) for c in cond_levels]
-    ]
-
-    condition_title = f"Missing Values (ratio = {100*rate:.2f}%)"
-
-    # --- 4) Plotly figures
+    # 7) Plot missing‐by‐condition (log‐y)
     fig_cond = plot_bar_plotly(
-        x=cond_x,
-        y=cond_y,
-        colors=[cond_color_map[c] for c in cond_x],
-        title=condition_title,
-        x_title="Condition",
-        y_title="Count",
-        width=800, height=400
+        x       = cond_labels,
+        y       = cond_y,
+        colors  = [cond_color_map[c] for c in cond_labels],
+        title   = f"Missing Values (ratio = {100*rate:.2f}%)",
+        x_title = "Condition",
+        y_title = "Count",
+        width   = 800,
+        height  = 400,
     )
     fig_cond.update_yaxes(type="log", dtick=1, exponentformat="power")
 
+    # 8) Plot missing‐by‐sample
+    sample_colors = [cond_color_map[c] for c in conds]
     fig_samp = plot_bar_plotly(
-        x=list(mvi_per_sample.index),
-        y=list(mvi_per_sample.values),
-        colors=[cond_color_map[conds[s]] for s in mvi_per_sample.index],
-        title="Missing Values per Sample",
-        x_title="Sample",
-        y_title="Count",
-        width=1200, height=400
+        x       = sample_names,
+        y       = mvi_per_sample.tolist(),
+        colors  = sample_colors,
+        title   = "Missing Values per Sample",
+        x_title = "Sample",
+        y_title = "Count",
+        width   = 1200,
+        height  = 400,
     )
-
-    # weird behaviour with trace 0, correct
+    # hide the main trace from the legend & attach condition info for hover
     bar = fig_samp.data[0]
-
-    # 2) Hide it from the legend
     bar.showlegend = False
-
-    # 3) Attach a list of conditions matching each bar
-    bar.customdata = [conds[s] for s in mvi_per_sample.index]
-
-    # 4) New hovertemplate: show the condition, sample, and count
+    bar.customdata = conds.tolist()
     bar.hovertemplate = (
         "Condition: %{customdata}<br>"
         "Sample: %{x}<br>"
         "Missing: %{y}<extra></extra>"
     )
 
-    # legend
+    # 9) Dummy‐scatter legend entries for each condition
     for cond, color in cond_color_map.items():
-        # skip Total if you’ve added it
-        if cond in ["Total (Missing)", "Total (Non-Missing)"]:
+        if cond.startswith("Total"):  # skip the two totals
             continue
         fig_samp.add_trace(go.Scatter(
             x=[None], y=[None],
             mode="markers",
             marker=dict(symbol="square", size=10, color=color),
             name=cond,
-            showlegend=True
+            showlegend=True,
         ))
-
-    # position the legend as you like
     fig_samp.update_layout(
         legend=dict(
             title="Conditions",
@@ -791,7 +741,7 @@ def plot_mv_barplots(adata: AnnData):
         )
     )
 
-    return (fig_cond, fig_samp)
+    return fig_cond, fig_samp
 
 @log_time("Plotting Missing Values Heatmaps")
 def plot_mv_heatmaps(adata:AnnData):
@@ -802,15 +752,6 @@ def plot_mv_heatmaps(adata:AnnData):
     )
     df_missing = df_raw.isna().astype(int).T
 
-    ## 2) Prepare a color‐series for your samples (columns) keyed to CONDITION
-    #cond_to_color = get_color_map(
-    #    adata.obs['CONDITION'].unique().tolist(),
-    #    palette=None,    # your default Plotly qualitative
-    #    anchor=None
-    #)
-    #col_colors = adata.obs['CONDITION'].map(cond_to_color)
-    #col_colors.name = "Condition"
-
     fig_binary = plot_binary_cluster_heatmap_plotly(
         adata=adata,
         cond_key="CONDITION",
@@ -819,15 +760,6 @@ def plot_mv_heatmaps(adata:AnnData):
         width=900,
         height=900,
     )
-    ## 3a) Clustered heatmap (matplotlib/seaborn) via your helper
-    #g = plot_cluster_heatmap_plt(
-    #    data=df_missing,
-    #    col_colors=col_colors,
-    #    title="Clustered Missing Values",
-    #    legend_mapping=cond_to_color,
-    #    row_cluster=False,
-    #    col_cluster=True,
-    #)
 
     # 3b) Correlation heatmap (plotly) of sample‐sample missingness
     corr = df_missing.corr()
@@ -853,34 +785,40 @@ def plot_grouped_violin_imputation_by_condition(
         height=600,
     ) -> go.Figure:
 
-    raw = adata.layers['raw']
-    # final intensities (with imputation filled in)
-    norm = adata.X.toarray() if hasattr(adata.X, "toarray") else adata.X
-
+    # 1) pull arrays and condition info
+    raw_arr   = adata.layers['raw']                                     # (n_samples × n_proteins)
+    norm_arr  = adata.X.toarray() if hasattr(adata.X, "toarray") else adata.X
     cond_series = adata.obs['CONDITION']
-    conditions = cond_series.unique().tolist()
-    idx_map    = {cond:i for i,cond in enumerate(conditions)}
-    offset     = 0.2
+    conditions  = cond_series.unique().tolist()                         # preserves original order
+    idx_map     = {cond: i for i, cond in enumerate(conditions)}
+    offset      = 0.2
 
-    # build long rows
-    rows = []
-    for sample_idx, sample in enumerate(adata.obs_names):
-        cond = cond_series.iloc[sample_idx]
-        mask_imp = np.isnan(raw[sample_idx, :])
-        # Measured = final norm where raw was not NaN
-        meas = norm[sample_idx, :][~mask_imp]
-        # Imputed = final norm where raw was NaN
-        impt = norm[sample_idx, :][mask_imp]
-        rows += [(cond, 'Measured', v) for v in meas]
-        rows += [(cond, 'Imputed',  v) for v in impt]
+    # 2) flatten everything once
+    mask      = np.isnan(raw_arr)                                       # boolean (n×p)
+    mask_flat = mask.ravel()                                            # 1D length=n*p, row-major
+    norm_flat = norm_arr.ravel()
+    cond_flat = np.repeat(cond_series.values, raw_arr.shape[1])         # repeats each sample’s cond p times
 
-    df = pd.DataFrame(rows, columns=['Condition','Normalization','Value'])
+    # 3) split measured vs imputed entries
+    meas_vals  = norm_flat[~mask_flat]
+    meas_conds = cond_flat[~mask_flat]
+    imp_vals   = norm_flat[mask_flat]
+    imp_conds  = cond_flat[mask_flat]
 
-    # now exactly your grouped‐violin recipe:
+    # 4) assemble the exact same long‐form DataFrame
+    df = pd.DataFrame({
+        'Condition':   np.concatenate([meas_conds, imp_conds]),
+        'Normalization': ['Measured'] * len(meas_vals) + ['Imputed'] * len(imp_vals),
+        'Value':         np.concatenate([meas_vals, imp_vals])
+    })
+
+    # 5) now the plotting loop is untouched
     fig = go.Figure()
     for norm_label, color in zip(['Measured','Imputed'], colors):
-        sub = df[df['Normalization']==norm_label]
-        x_vals = sub['Condition'].map(idx_map) + ( -offset if norm_label=='Measured' else +offset )
+        sub = df[df['Normalization'] == norm_label]
+        x_vals = sub['Condition'].map(idx_map) + (
+            -offset if norm_label == 'Measured' else +offset
+        )
         fig.add_trace(go.Violin(
             x=x_vals,
             y=sub['Value'],
@@ -890,19 +828,22 @@ def plot_grouped_violin_imputation_by_condition(
             box_visible=True,
             box_line_color='black',
             box_line_width=1,
-            opacity=0.6,
-            width=offset*1.8,
             meanline_visible=True,
+            opacity=0.6,
             points=False,
+            width=offset * 1.8,
             spanmode='hard',
             scalemode='width',
-            scalegroup="all_same",
         ))
 
-    # vertical separators
+    # 6) vertical separators and styling (identical to original)
     for i in idx_map.values():
-        fig.add_vline(x=i, line=dict(color='gray',dash='dot',width=1),layer='above')
-
+        fig.add_vline(
+            x=i,
+            line=dict(color='gray', dash='dot', width=1),
+            layer='above'
+        )
+    fig.update_traces(box_visible=True, meanline_visible=True)
     fig.update_layout(
         template='plotly_white',
         violinmode='overlay',
@@ -919,9 +860,10 @@ def plot_grouped_violin_imputation_by_condition(
     )
     fig.update_xaxes(showline=True, mirror=True, linecolor='black')
     fig.update_yaxes(showline=True, mirror=True, linecolor='black')
+
     return fig
 
-@log_time("Plotting Imputation Distribution by Sample")
+@log_time("Plotting Imputation Distribution by Sample (optimized)")
 def plot_grouped_violin_imputation_by_sample(
     adata,
     colors=('blue','red'),
@@ -930,27 +872,36 @@ def plot_grouped_violin_imputation_by_sample(
     height=600,
 ) -> go.Figure:
 
-    # 1) extract raw vs final intensities
-    raw  = adata.layers['raw']
-    norm = adata.X.toarray() if hasattr(adata.X, "toarray") else adata.X
+    # 1) pull raw + final intensities
+    raw_arr  = adata.layers['raw']                                             # shape: (n_samples × n_features)
+    norm_arr = (
+        adata.X.toarray() if hasattr(adata.X, "toarray") else adata.X
+    )
 
-    # 2) build long‐form DataFrame
-    rows = []
-    samples = adata.obs_names.tolist()
-    for i, sample in enumerate(samples):
-        mask_imp = np.isnan(raw[i, :])
-        meas = norm[i, :][~mask_imp]
-        impt = norm[i, :][mask_imp]
-        rows += [(sample, 'Measured', v) for v in meas]
-        rows += [(sample, 'Imputed',  v) for v in impt]
-    df = pd.DataFrame(rows, columns=['Sample','Normalization','Value'])
+    # 2) prepare a flat mask, flat values, and flat sample labels
+    n_samples, n_feats = raw_arr.shape
+    mask_flat   = np.isnan(raw_arr).ravel()                                     # length = n_samples*n_feats
+    norm_flat   = norm_arr.ravel()
+    samples     = adata.obs_names.tolist()                                      # length = n_samples
+    sample_flat = np.repeat(samples, n_feats)                                   # length = n_samples*n_feats
 
-    # 3) prepare numeric mapping + offset
-    idx_map = {s: i for i, s in enumerate(samples)}
-    offset  = 0.2
+    # 3) split measured vs imputed
+    meas_vals   = norm_flat[~mask_flat]
+    meas_samps  = sample_flat[~mask_flat]
+    imp_vals    = norm_flat[ mask_flat]
+    imp_samps   = sample_flat[ mask_flat]
 
-    # 4) plot with manual offsets and per‐sample scalegroup
-    fig = go.Figure()
+    # 4) assemble the **same** long‐form DataFrame your loop makes :contentReference[oaicite:0]{index=0}
+    df = pd.DataFrame({
+        'Sample'       : np.concatenate([meas_samps, imp_samps]),
+        'Normalization': ['Measured'] * len(meas_vals) + ['Imputed'] * len(imp_vals),
+        'Value'        : np.concatenate([meas_vals, imp_vals])
+    })
+
+    # 5) reuse your exact plotting code below—unchanged—
+    idx_map    = {s: i for i, s in enumerate(samples)}
+    offset     = 0.2
+    fig        = go.Figure()
     first_seen = {'Measured': False, 'Imputed': False}
 
     for sample in samples:
@@ -979,33 +930,29 @@ def plot_grouped_violin_imputation_by_sample(
             ))
             first_seen[norm_label] = True
 
-    # 5) vertical separators
+    # separators & styling (identical)
     for i in idx_map.values():
         fig.add_vline(
-            x=i,
-            line=dict(color='gray', dash='dot', width=1),
-            layer='above'
+            x=i, line=dict(color='gray', dash='dot', width=1), layer='above'
         )
-
-    # 6) styling & layout
     fig.update_traces(box_visible=True, meanline_visible=True)
     fig.update_layout(
         template='plotly_white',
         violinmode='overlay',
         title=dict(text=title, x=0.5),
-        width=width,
-        height=height,
+        width=width, height=height,
         xaxis=dict(
             title='Sample',
             tickmode='array',
             tickvals=list(idx_map.values()),
             ticktext=samples,
             tickangle=30,
-            showline=True,
-            mirror=True,
-            linecolor='black',
+            showline=True, mirror=True, linecolor='black',
         ),
-        yaxis=dict(title='Intensity', showgrid=True, showline=True, mirror=True, linecolor='black'),
+        yaxis=dict(
+            title='Intensity',
+            showgrid=True, showline=True, mirror=True, linecolor='black'
+        ),
         showlegend=True,
     )
 

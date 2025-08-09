@@ -1,33 +1,20 @@
 import logging
-import pandas as pd
-from anndata import read_h5ad
 import sys
-import os
-import io
-import h5py
 import socket
 
 import panel as pn
-from bokeh.server.server import Server
-from tornado.ioloop import IOLoop
 
 from session_state import SessionState
 from tabs.overview_tab import overview_tab
-from tabs.normalization_tab import normalization_tab
+from tabs.preprocessing_tab import preprocessing_tab
 
-# 1) Set up logging so we can see Bokeh/Panel messages in stdout
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s | %(levelname)s | %(message)s",
-    handlers=[logging.StreamHandler(sys.stdout)],
-)
+from utils import logger, log_time
+
 logging.getLogger().setLevel(logging.INFO)
 
+pn.extension('plotly', defer_load=True, loading_indicator=True)
 
-# 2) Enable any Panel extensions you need
-pn.extension('plotly')
-
-DEV = False
+DEV = True #change for env variable
 
 def get_free_port(start=5006, end=5099):
     """Find an open port so users can run multiple instances."""
@@ -40,29 +27,78 @@ def get_free_port(start=5006, end=5099):
                 continue
     raise RuntimeError("No free ports available.")
 
+def _lazy_tabs(state):
+    """
+    Build tabs lazily on first activation, then keep them alive.
+    - Spinner shown while a tab is building (thanks to loading_indicator=True).
+    - Revisits are instant (content persists; no dynamic teardown).
+    """
+    # List your tabs as (label, builder_fn)
+    specs = [
+        ("Overview",      lambda: overview_tab(state)),
+        ("Preprocessing", lambda: preprocessing_tab(state)),
+    ]
+
+    tabs = pn.Tabs(dynamic=False)  # keep content mounted once built
+    holders   = []                 # one container per tab
+    builders  = []                 # matching builders
+    built     = []                 # flags per tab
+
+    # Create placeholders
+    for label, builder in specs:
+        holder = pn.Column(sizing_mode="stretch_both")
+        holders.append(holder)
+        builders.append(builder)
+        built.append(False)
+        tabs.append((label, holder))
+
+    def build_index(i: int):
+        if built[i]:
+            return
+        holder = holders[i]
+        holder.loading = True   # overlay spinner (global loading_indicator=True)
+        try:
+            content = builders[i]()    # heavy build happens here (once)
+            holder[:] = [content]
+            built[i] = True
+        finally:
+            holder.loading = False
+
+    # Build the initially active tab immediately
+    build_index(tabs.active)
+
+    # Build a tab on first activation thereafter
+    def _on_active(event):
+        build_index(event.new)
+
+    tabs.param.watch(_on_active, "active", onlychanged=True)
+    return tabs
+
+@log_time("Building app")
 def build_app():
     """
     - Content area below gets replaced with the Tabs once a file is loaded.
     """
     # widgets
-    file_input   = pn.widgets.FileInput(accept=".h5ad", name="Choose file…")
-    exit_btn     = pn.widgets.Button(name="Exit", button_type="danger")
-    status       = pn.pane.Markdown("### Please upload a .h5ad Proteoflux file.")
-    content      = pn.Column()  # placeholder for tabs
+    file_input = pn.widgets.FileInput(accept=".h5ad", name="Choose file…")
+    exit_btn   = pn.widgets.Button(name="Exit", button_type="danger")
+    status     = pn.pane.Markdown("### Please upload a .h5ad Proteoflux file.")
+    # placeholder; replaced reactively below
+    content    = pn.Column(sizing_mode="stretch_width")
 
-    # shared content‐loader
     def _load(adata, fname):
         state = SessionState.initialize(adata)
-        tabs  = pn.Tabs(
-            ("Normalization", normalization_tab(state)),
-            ("Overview", overview_tab(state)),
-        )
+        tabs  = _lazy_tabs(state)  # <-- use the lazy tabs
         content.clear()
         content.append(tabs)
         status.object      = f"**Loaded:** {fname}"
 
     # when user picks a file
     def _on_upload(event):
+
+        import h5py
+        from anndata import read_h5ad
+        import io
         try:
             status.object = "Loading…"
             adata = read_h5ad(io.BytesIO(file_input.value))
@@ -72,45 +108,23 @@ def build_app():
 
     file_input.param.watch(_on_upload, "value")
 
-    # reset to upload state
-    def _on_load_another(event):
-        file_input.value = None
-        status.object    = "### Please upload a .h5ad Proteoflux file."
-        content.clear()
-
-    # exit process
+    # Wire exit button
     def _on_exit(event):
-        # hide all controls
-        file_input.visible = False
-        exit_btn.visible = False
-        status.visible = False
-
-        # show farewell message in the content area
-        content.clear()
-        content.append(
-            pn.pane.Markdown(
-                "## \nThank you for using ProteoViewer!"
-            )
-        )
-
-        # after ~1s, kill the process
+        for w in (file_input, exit_btn, status):
+            w.visible = False
+        content[:] = [pn.pane.Markdown("## Thanks for using ProteoViewer!")]
         pn.state.curdoc.add_timeout_callback(lambda: sys.exit(0), 1000)
-
     exit_btn.on_click(_on_exit)
 
     # dev‐mode: load default without clicking
     if DEV:
+        from anndata import read_h5ad
         adata = read_h5ad("proteoflux_results.h5ad")
         _load(adata, "proteoflux_results.h5ad")
 
-    # assemble
-    controls = pn.Row(
-        file_input,
-        exit_btn,
-        status,
-        sizing_mode="stretch_width",
-    )
-    return pn.Column("# ProteoViewer", controls, content, sizing_mode="stretch_width")
+    controls = pn.Row(file_input, exit_btn, status, sizing_mode="stretch_width")
+    app = pn.Column("# ProteoViewer", controls, content, sizing_mode="stretch_width")
+    return app
 
 
 app = build_app()
