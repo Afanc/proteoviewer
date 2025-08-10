@@ -42,6 +42,22 @@ def get_color_map(
         out[lbl] = palette[i % len(palette)]
     return out
 
+def color_ticks_by_condition(fig, samples, cond_series, cmap):
+    """
+    Color x/y tick labels by condition.
+    - samples: list[str] in the same order as fig's axis (corr.columns/index)
+    - cond_series: pd.Series indexed by sample name -> condition label
+    - cmap: dict {condition -> color}
+    """
+    colors = [cmap[str(cond_series.loc[s])] for s in samples]
+    tickvals = list(range(len(samples)))
+    ticktext = [f"<span style='color:{c}'>{s}</span>" for s, c in zip(samples, colors)]
+
+    fig.update_xaxes(tickmode="array", tickvals=tickvals, ticktext=ticktext, tickangle=30)
+    fig.update_yaxes(tickmode="array", tickvals=tickvals,
+                     ticktext=[f"<span style='color:{c}'>{s}</span>" for s, c in zip(samples, colors)])
+    return fig
+
 def categorize_proteins_by_run_count(df: pd.DataFrame) -> pd.Series:
     """
     Given a DataFrame of shape (samples × proteins), returns a Series
@@ -764,7 +780,7 @@ def plot_binary_cluster_heatmap_plotly(
 
     # 3) make a condition→color mapping & color-strip
     levels = adata.obs[cond_key].unique().tolist()
-    cmap_cond = get_color_map(levels, palette=None, anchor=None)
+    cmap_cond = get_color_map(sorted(levels), palette=None, anchor=None)
     cond_ser  = adata.obs[cond_key].reindex(sample_order)
     x_colors  = [cmap_cond[c] for c in cond_ser]
 

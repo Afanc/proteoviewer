@@ -32,6 +32,8 @@ def residual_variance_hist(adata) -> go.Figure:
     fig.update_layout(
         title=dict(text="Distribution of Variance of Residuals", x=0.5),
         yaxis_type="log",
+        width=600,
+        height=400,
     )
     fig.update_yaxes(
          dtick=1,
@@ -53,6 +55,8 @@ def log2fc_histogram(adata, contrast: str) -> go.Figure:
     )
     fig.update_layout(
         title=dict(text=f"log₂FC Distribution — {contrast}", x=0.5),
+        width=600,
+        height=400,
     )
 
     fig.update_traces(hoverinfo='skip', hovertemplate=None, marker_line_width=1, marker_line_color="black")
@@ -85,6 +89,7 @@ def stat_histogram(adata, stat: str, contrast: str) -> go.Figure:
     fig.update_traces(marker_line_width=0)
     fig.update_xaxes(range=[0, 1])  # p/q in [0,1]
     fig.update_traces(hoverinfo='skip', hovertemplate=None, marker_line_width=1, marker_line_color="black")
+    fig.update_layout(legend_title_text="")
     return fig
 
 def stat_shrinkage_scatter(adata, stat: str, contrast: str, max_points: int = 50000) -> go.Figure:

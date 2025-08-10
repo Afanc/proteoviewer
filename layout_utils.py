@@ -16,6 +16,7 @@ DEFAULT_SIZING = "stretch_width"
 FRAME_STYLES = {
     "max-height": "calc(100vh - 160px)",  # tweak the 160px to your header/controls height
     "overflow": "auto",
+    "padding-bottom": "10px",
 }
 
 def make_row(*components,

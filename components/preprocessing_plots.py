@@ -8,7 +8,7 @@ import plotly.graph_objects as go
 import plotly.express as px
 from scipy.stats import gaussian_kde
 from plotly.subplots import make_subplots
-from components.plot_utils import plot_histogram_plotly, add_violin_traces, compute_metric_by_condition, get_color_map, plot_bar_plotly, plot_binary_cluster_heatmap_plotly
+from components.plot_utils import plot_histogram_plotly, add_violin_traces, compute_metric_by_condition, get_color_map, plot_bar_plotly, plot_binary_cluster_heatmap_plotly, color_ticks_by_condition
 from regression_normalization import compute_reference_values, compute_MA, fit_regression
 from utils import logger, log_time
 
@@ -646,9 +646,106 @@ def plot_rmad_by_condition(adata: AnnData) -> go.Figure:
         width=900,
         height=600,
     )
-
 @log_time("Plotting Missing Values barplots")
 def plot_mv_barplots(adata: AnnData):
+    # 1) Get the raw array and sample/condition metadata
+    arr = adata.layers['normalized']
+    sample_names = adata.obs_names.tolist()
+    conds = adata.obs['CONDITION'].values
+
+    # 2) Compute missing per sample
+    mask = np.isnan(arr)
+    mvi_per_sample = mask.sum(axis=1).astype(int)
+
+    # 3) Compute missing per condition
+    unique_conds, inv = np.unique(conds, return_inverse=True)  # already ascending
+    mvi_per_condition_vals = np.bincount(inv, weights=mvi_per_sample).astype(int)
+    cond_levels = unique_conds[::-1]            # ← display order (descending) stays as before
+    mvi_desc = mvi_per_condition_vals[::-1]
+
+    # 4) Totals & rate
+    total_imputed     = int(mvi_per_condition_vals.sum())
+    total_entries     = arr.size
+    total_non_imputed = total_entries - total_imputed
+    rate = total_imputed / total_entries
+
+    # 5) Assemble x/y for the condition barplot
+    cond_labels = ["Total (Non-Missing)", "Total (Missing)"] + cond_levels.tolist()
+    cond_y      = [total_non_imputed, total_imputed] + mvi_desc.tolist()
+
+    # 6) Stable color map based on **sorted(conditions)** (not display order)
+    palette = px.colors.qualitative.Plotly
+
+    levels_sorted = unique_conds.tolist()       # np.unique already sorted ascending
+    base_map = {lvl: palette[i % len(palette)] for i, lvl in enumerate(levels_sorted)}
+
+    cond_color_map = {
+        "Total (Non-Missing)": "#888888",
+        "Total (Missing)"    : "#CCCCCC",
+        **base_map,                                   # ← colors now consistent app-wide
+    }
+
+    # 7) Plot missing-by-condition (log-y)
+    fig_cond = plot_bar_plotly(
+        x       = cond_labels,
+        y       = cond_y,
+        colors  = [cond_color_map[c] for c in cond_labels],
+        title   = f"Missing Values (ratio = {100*rate:.2f}%)",
+        x_title = "Condition",
+        y_title = "Count",
+        width   = 800,
+        height  = 400,
+    )
+    fig_cond.update_yaxes(type="log", dtick=1, exponentformat="power")
+
+    # 8) Plot missing-by-sample
+    sample_colors = [cond_color_map[c] for c in conds]
+    fig_samp = go.Figure()
+
+    # keep a stable x order
+    order = sample_names
+    conds_arr = np.asarray(conds)
+
+    # use your stable palette mapping
+    levels_sorted = sorted(set(conds_arr.astype(str)))
+    for cond in levels_sorted:
+        m = (conds_arr == cond)
+        if not np.any(m):
+            continue
+        fig_samp.add_trace(go.Bar(
+            x=np.array(sample_names)[m],
+            y=mvi_per_sample[m],
+            name=cond,
+            marker=dict(color=cond_color_map[cond]),
+            hovertemplate="Condition: " + cond + "<br>Sample: %{x}<br>Missing: %{y}<extra></extra>",
+            showlegend=True,
+        ))
+
+    fig_samp.update_layout(
+        title=dict(text="Missing Values per Sample", x=0.5),
+        xaxis_title="Sample",
+        yaxis_title="Count",
+        width=1200,
+        height=400,
+        barmode="group",  # bars won’t overlap since x’s differ, but keeps spacing tidy
+        legend=dict(
+            title=" Conditions",
+            orientation="h",
+            x=0.7, xanchor="left",
+            y=1.05, yanchor="bottom",
+            bordercolor="black", borderwidth=1,
+        ),
+        # allow interactive legend toggling
+        legend_itemclick="toggle",
+        legend_itemdoubleclick="toggleothers",
+    )
+
+    # preserve sample order on the categorical axis
+    fig_samp.update_xaxes(categoryorder="array", categoryarray=order)
+
+    return fig_cond, fig_samp
+@log_time("Plotting Missing Values barplots")
+def plot_mv_barplots_old(adata: AnnData):
     # 1) Get the raw array and sample/condition metadata
     arr = adata.layers['normalized']           # shape: (n_samples × n_proteins)
     sample_names = adata.obs_names.tolist()    # same order as arr’s rows
@@ -734,11 +831,14 @@ def plot_mv_barplots(adata: AnnData):
         ))
     fig_samp.update_layout(
         legend=dict(
-            title="Conditions",
+            title=" Conditions",
             orientation="h",
             x=0.7, xanchor="left",
-            y=1.02, yanchor="bottom"
-        )
+            y=1.02, yanchor="bottom",
+            bordercolor="black", borderwidth=1,
+        ),
+        legend_itemclick=False,
+        legend_itemdoubleclick=False,
     )
 
     return fig_cond, fig_samp
@@ -763,6 +863,13 @@ def plot_mv_heatmaps(adata:AnnData):
 
     # 3b) Correlation heatmap (plotly) of sample‐sample missingness
     corr = df_missing.corr()
+
+    samples = list(corr.columns)  # same as index
+    cond_ser = adata.obs["CONDITION"].astype(str).reindex(samples)
+
+    # reuse the same mapping you already use elsewhere
+    cmap_cond = get_color_map(sorted(cond_ser.unique()), palette=None)
+
     fig_corr = px.imshow(
         corr,
         color_continuous_scale='RdBu_r',
@@ -773,6 +880,7 @@ def plot_mv_heatmaps(adata:AnnData):
         title=dict(text="Missing Values Correlation Heatmap", x=0.5),
         coloraxis_colorbar=dict(x=0.90),
     ),
+    color_ticks_by_condition(fig_corr, samples, cond_ser, cmap_cond)
 
     return (fig_binary, fig_corr)
 

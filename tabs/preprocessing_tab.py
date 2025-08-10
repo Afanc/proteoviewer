@@ -2,7 +2,7 @@ import panel as pn
 #from panel.widgets import LoadingSpinner
 from concurrent.futures import ThreadPoolExecutor
 from session_state import SessionState
-from components.normalization_plots import (
+from components.preprocessing_plots import (
     plot_filter_histograms,
     plot_dynamic_range,
     plot_intensities_histogram,

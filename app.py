@@ -15,7 +15,7 @@ logging.getLogger().setLevel(logging.INFO)
 
 pn.extension('plotly', defer_load=True, loading_indicator=True)
 
-DEV = True #change for env variable
+DEV = False #change for env variable
 
 def get_free_port(start=5006, end=5099):
     """Find an open port so users can run multiple instances."""

@@ -32,20 +32,17 @@ def analysis_tab(state):
     resvar_fig = plotly_section(
         residual_variance_hist(adata),
         height=430,
-        flex='0.5')
+        flex='0.8')
 
     # ---------- section: log2FC distribution (per contrast) ----------
     @pn.depends(contrast=contrast_sel_logfc)
     def log2fc_pane(contrast):
         fig = log2fc_histogram(adata, contrast)
-        return plotly_section(fig, height=430, flex='0.3')
+        return plotly_section(fig, height=430, flex='1')
 
     lin_reg_row = make_row(
         pn.pane.Markdown("##   Residuals", styles={"flex": "0.05"}),
-        resvar_fig,
-        pn.Spacer(width=20),
-        make_vr(),
-        pn.Spacer(width=20),
+        resvar_fig, pn.Spacer(width=10), make_vr(), pn.Spacer(width=20),
         pn.Column(
                 pn.pane.Markdown("##   Log2FC"),#, styles={"flex": "0.05"}),
                 pn.Spacer(width=100),
@@ -171,7 +168,7 @@ def analysis_tab(state):
         pn.Spacer(height=30),
         stats_pane,
         pn.Spacer(height=30),
-        #clustering_pane,
+        clustering_pane,
         pn.Spacer(height=30),
         sizing_mode="stretch_width",
         styles=FRAME_STYLES,
