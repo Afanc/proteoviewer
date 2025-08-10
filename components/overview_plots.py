@@ -8,7 +8,6 @@ from components.plot_utils import plot_stacked_proteins_by_category, plot_violin
 
 from utils import logger, log_time
 
-
 @log_time("Plotting barplot proteins per sample")
 def plot_barplot_proteins_per_sample(
     adata,
@@ -75,52 +74,6 @@ def plot_violin_cv_rmad_per_condition(
     return [cv_fig, rmad_fig]
 
 
-@log_time("Plotting Hierarchical Clustering")
-def plot_h_clustering_heatmap(adata):
-    # 1) Build (genes × samples) centered DataFrame
-    mat = adata.X.copy()               # samples × genes
-    # if you’ve stored the centered matrix in a layer, swap adata.X -> adata.layers["centered"]
-    df_z = pd.DataFrame(
-        adata.layers['centered'].T,
-        index=adata.var_names,
-        columns=adata.obs_names
-    )
-
-    # 2) Prepare labels & colors
-    if "GENE_NAMES" in adata.var.columns:
-        y_labels = adata.var["GENE_NAMES"].reindex(df_z.index).tolist()
-    else:
-        y_labels = df_z.index.tolist()
-
-    cond_ser = adata.obs["CONDITION"].reindex(df_z.columns)
-
-    # 3) Grab your precomputed linkages
-    sample_linkage  = adata.uns["sample_linkage"]
-    feature_linkage = adata.uns["feature_linkage"]
-
-    # 4) Draw the heatmap using those linkages
-
-    # --- seaborn version
-    import seaborn as sns
-    import matplotlib.pyplot as plt
-    fig = sns.clustermap(df_z, method="ward", metric="euclidean", figsize=(12,10), cmap="RdBu_r")
-    return fig.figure
-    # ---
-
-    # --- plotly version
-    #fig = plot_cluster_heatmap_plotly(
-    #    data=df_z,
-    #    y_labels=y_labels,
-    #    cond_series=cond_ser,
-    #    colorscale="RdBu",
-    #    title="Clustergram of All Samples",
-    #    sample_linkage=sample_linkage,
-    #    feature_linkage=feature_linkage,
-    #)
-    #return fig
-    # ---
-
-
 @log_time("Plotting Volcano Plots")
 def plot_volcanoes_wrapper(
     state,
@@ -150,6 +103,7 @@ def plot_volcanoes_wrapper(
 
     return fig
 
+@log_time("Plotting Protein Barplots")
 def plot_intensity_by_protein(state, contrast, protein, layer):
     ad = state.adata
 

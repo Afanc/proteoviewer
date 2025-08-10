@@ -5,7 +5,6 @@ from session_state import SessionState
 from components.overview_plots import (
     plot_barplot_proteins_per_sample,
     plot_violin_cv_rmad_per_condition,
-    plot_h_clustering_heatmap,
     plot_volcanoes_wrapper,
     plot_intensity_by_protein,
     get_protein_info
@@ -510,12 +509,50 @@ def overview_tab(state: SessionState):
         return barplot_pane
 
 
-    # This is the single object you put next to the volcano figure:
+    info_holder = pn.Column()
+    bar_holder  = pn.Column()
+
     detail_panel = pn.Column(
-        info_card,
+        info_holder,
         pn.Spacer(height=50),
-        bar_and_intensity,
+        bar_holder,
     )
+    bokeh_doc = pn.state.curdoc  # for next-tick scheduling if you want it
+
+    def _render_info():
+        # pass current values explicitly (protein, contrast)
+        return info_card(search_input.value, contrast_sel.value)
+
+    def _render_bar():
+        # pass (protein, contrast, layer) explicitly
+        return bar_and_intensity(search_input.value, contrast_sel.value, layers_sel.value)
+    def _update_info(_=None):
+        # No spinner here; it's cheap and we don't want a loader on empty states
+        info_holder[:] = [_render_info()]
+
+    def _update_bar(_=None):
+        protein = search_input.value
+        if not protein:
+            # No protein selected → no spinner, show placeholder and clear intensity slot
+            _intensity_slot[:] = [pn.Spacer(height=0)]
+            bar_holder.loading = False
+            bar_holder[:] = [pn.Spacer(width=800, height=500, margin=(-30, 0, 0, 0))]
+            return
+
+        # Only show a loader if there IS a protein selected (i.e., real work)
+        bar_holder.loading = True
+        try:
+            bar_holder[:] = [_render_bar()]
+        finally:
+            bar_holder.loading = False
+
+    # Wire events:
+    search_input.param.watch(lambda e: (_update_info(), _update_bar()), "value")
+    contrast_sel.param.watch(lambda e: (_update_info(), _update_bar()), "value")
+    layers_sel.param.watch(lambda e: _update_bar(), "value")
+
+    # Initial fill (after the page paints so you don’t see a flash)
+    bokeh_doc.add_next_tick_callback(lambda: (_update_info(), _update_bar()))
 
     # 3) assemble into a layout, no legend‐based toggles
     volcano_pane = pn.Column(

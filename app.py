@@ -7,6 +7,7 @@ import panel as pn
 from session_state import SessionState
 from tabs.overview_tab import overview_tab
 from tabs.preprocessing_tab import preprocessing_tab
+from tabs.analysis_tab import analysis_tab
 
 from utils import logger, log_time
 
@@ -14,7 +15,7 @@ logging.getLogger().setLevel(logging.INFO)
 
 pn.extension('plotly', defer_load=True, loading_indicator=True)
 
-DEV = False #change for env variable
+DEV = True #change for env variable
 
 def get_free_port(start=5006, end=5099):
     """Find an open port so users can run multiple instances."""
@@ -37,6 +38,7 @@ def _lazy_tabs(state):
     specs = [
         ("Overview",      lambda: overview_tab(state)),
         ("Preprocessing", lambda: preprocessing_tab(state)),
+        ("Analysis", lambda: analysis_tab(state)),
     ]
 
     tabs = pn.Tabs(dynamic=False)  # keep content mounted once built
@@ -56,19 +58,25 @@ def _lazy_tabs(state):
         if built[i]:
             return
         holder = holders[i]
-        holder.loading = True   # overlay spinner (global loading_indicator=True)
+        holder.loading = True
         try:
-            content = builders[i]()    # heavy build happens here (once)
+            content = builders[i]()   # heavy build
             holder[:] = [content]
             built[i] = True
         finally:
             holder.loading = False
 
-    # Build the initially active tab immediately
+    def _set_visibility(active: int):
+        for i, h in enumerate(holders):
+            h.visible = (i == active)
+
+    # Build first tab: make it visible *then* build (spinner shows)
+    _set_visibility(tabs.active)
     build_index(tabs.active)
 
-    # Build a tab on first activation thereafter
     def _on_active(event):
+        # Make target visible first so its spinner can render
+        _set_visibility(event.new)
         build_index(event.new)
 
     tabs.param.watch(_on_active, "active", onlychanged=True)
