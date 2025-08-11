@@ -130,6 +130,7 @@ def stat_shrinkage_scatter(adata, stat: str, contrast: str, max_points: int = 50
         title=dict(text=title, x=0.5),
         xaxis_title=xlab, yaxis_title=ylab,
     )
+    fig.update_traces(hoverinfo='skip', hovertemplate=None)
     fig.update_xaxes(range=[0, 1])
     fig.update_yaxes(range=[0, 1])
     return fig
