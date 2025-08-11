@@ -3,7 +3,7 @@ block_cipher = None
 
 from PyInstaller.utils.hooks import copy_metadata
 
-datas=copy_metadata('anndata') + copy_metadata('scanpy') + copy_metadata('scikit-learn')
+datas=copy_metadata('anndata') + copy_metadata('scanpy') + copy_metadata('scikit-learn') + copy_metadata('scikit-misc')
 a = Analysis(
     ['app.py'],           # your entry-point
     pathex=[],
@@ -17,6 +17,7 @@ a = Analysis(
         'sklearn._cyutility',
         'fastcluster',
         'binascii',
+        'skmisc',
     ],
     hookspath=[],
     runtime_hooks=[],
@@ -35,7 +36,7 @@ exe = EXE(
     debug=False,
     strip=False,
     upx=True,
-    console=False,
+    console=True,
 )
 
 coll = COLLECT(

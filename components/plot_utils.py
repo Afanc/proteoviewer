@@ -5,15 +5,16 @@ Low-level Plotly utilities for ProteoFlux panel app.
 import copy
 import numpy as np
 import pandas as pd
+import warnings
 import plotly.graph_objects as go
 import plotly.figure_factory as ff
 from plotly.subplots import make_subplots
-import scipy.cluster.hierarchy as sch
 from scipy.spatial.distance import pdist, squareform
 import plotly.express as px
 from typing import List, Sequence, Optional, Dict, Tuple, Union, Literal
 from anndata import AnnData
-import scanpy as sc
+from matplotlib.colors import LinearSegmentedColormap
+import matplotlib.patches as mpatches
 from utils import logger, log_time
 from functools import lru_cache
 
@@ -40,6 +41,22 @@ def get_color_map(
     for i, lbl in enumerate(others):
         out[lbl] = palette[i % len(palette)]
     return out
+
+def color_ticks_by_condition(fig, samples, cond_series, cmap):
+    """
+    Color x/y tick labels by condition.
+    - samples: list[str] in the same order as fig's axis (corr.columns/index)
+    - cond_series: pd.Series indexed by sample name -> condition label
+    - cmap: dict {condition -> color}
+    """
+    colors = [cmap[str(cond_series.loc[s])] for s in samples]
+    tickvals = list(range(len(samples)))
+    ticktext = [f"<span style='color:{c}'>{s}</span>" for s, c in zip(samples, colors)]
+
+    fig.update_xaxes(tickmode="array", tickvals=tickvals, ticktext=ticktext, tickangle=30)
+    fig.update_yaxes(tickmode="array", tickvals=tickvals,
+                     ticktext=[f"<span style='color:{c}'>{s}</span>" for s, c in zip(samples, colors)])
+    return fig
 
 def categorize_proteins_by_run_count(df: pd.DataFrame) -> pd.Series:
     """
@@ -147,7 +164,7 @@ def plot_stacked_proteins_by_category(
                 line=dict(color="black", width=2),
             ),
             legend="legend1",
-            legendgrouptitle_text="Protein Category",
+            #legendgrouptitle_text="Protein Category",
         ))
 
     # 8) Sample Condition legend (right)
@@ -163,26 +180,28 @@ def plot_stacked_proteins_by_category(
                 line=dict(color=cond_color_map[cond], width=2),
             ),
             legend="legend2",
-            legendgrouptitle_text="Sample Condition",
+            legendgrouptitle_text="Condition",
         ))
 
     # 9) layout with two legends
     fig.update_layout(
         barmode="stack",
-        title=dict(text=title, x=0.5),
+        title=dict(text=title, x=0.4),
         xaxis_title="Sample",
         yaxis_title="Number of Proteins",
         template="plotly_white",
         width=width, height=height,
         # first legend (categories) on the left
         legend=dict(
-            x=1.40, y=1,
+            #x=1.40, y=1,
+            x=1.12, y=1.2,
             xanchor="right", yanchor="top",
-            bordercolor="black", borderwidth=1
+            bordercolor="black", borderwidth=1,
+            orientation='h',
         ),
         # second legend (conditions) on the right
         legend2=dict(
-            x=1.20, y=1,
+            x=1.12, y=1,
             xanchor="right", yanchor="top",
             bordercolor="black", borderwidth=1
         ),
@@ -190,7 +209,7 @@ def plot_stacked_proteins_by_category(
         legend_itemdoubleclick=False,
         #margin=dict(l=120, r=120),
     )
-    fig.update_xaxes(tickangle=45)
+    fig.update_xaxes(tickangle=30)
     return fig
 
 def plot_bar_plotly(
@@ -225,7 +244,7 @@ def plot_bar_plotly(
         **bar_kwargs
     ))
     fig.update_layout(
-        title=title,
+        title=dict(text=title, x=0.5),
         xaxis_title=x_title,
         yaxis_title=y_title,
         template=template,
@@ -237,9 +256,9 @@ def plot_bar_plotly(
 
 def compute_metric_by_condition(
     adata: AnnData,
-    layer: str = "normalized",
     cond_key: str = "CONDITION",
     metric: Literal["CV", "rMAD"] = "CV",
+    layer: str = None,
 ) -> Dict[str, np.ndarray]:
     """
     Returns a dict mapping:
@@ -248,8 +267,12 @@ def compute_metric_by_condition(
     computed **per protein** across samples *without ever transposing*.
     """
     # 1) samples × proteins matrix
+    data = adata.X
+    if layer is not None:
+        data = adata.layers[layer]
+
     df = pd.DataFrame(
-        adata.X,
+        data,
         index=adata.obs_names,      # samples
         columns=adata.var_names,    # proteins
     )
@@ -257,23 +280,40 @@ def compute_metric_by_condition(
 
     # 2) choose the right function (operate on axis=0 for proteins)
     def _cv(x: np.ndarray) -> np.ndarray:
-        # x: samples × proteins
-        n_valid = np.sum(~np.isnan(x), axis=0)
-        mean    = np.nanmean(x,    axis=0)
-        std     = np.nanstd(x,     axis=0, ddof=1)
-        with np.errstate(divide="ignore", invalid="ignore"):
-            return np.where((n_valid > 1) & (mean != 0),
-                            std/mean*100,
-                            np.nan)
+        """
+        Geometric CV on log2-normalized data (samples × proteins),
+        returned as a percentage.
+        """
+        with warnings.catch_warnings():
+            # filterwarnings lets us match on the exact message
+            warnings.filterwarnings(
+                "ignore",
+                message="Mean of empty slice",
+                category=RuntimeWarning,
+            )
+            warnings.filterwarnings(
+                "ignore",
+                message="Degrees of freedom <= 0 for slice",
+                category=RuntimeWarning,
+            )
+            with np.errstate(invalid='ignore', divide='ignore'):
+                linear = 2 ** x
+                std    = np.nanstd(linear, axis=0)
+                mean   = np.clip(np.nanmean(linear, axis=0), 1e-6, None)
+                return 100 * std / mean
 
     def _rmad(x: np.ndarray) -> np.ndarray:
-        n_valid = np.sum(~np.isnan(x), axis=0)
-        med     = np.nanmedian(x,                 axis=0)
-        mad     = np.nanmedian(np.abs(x - med),   axis=0)
-        with np.errstate(divide="ignore", invalid="ignore"):
-            return np.where((n_valid > 0) & (med != 0),
-                            mad/med*100,
-                            np.nan)
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore",
+                message="All-NaN slice encountered",
+                category=RuntimeWarning,
+            )
+            with np.errstate(invalid='ignore', divide='ignore'):
+                linear = 2 ** x
+                med    = np.nanmedian(linear, axis=0)
+                mad    = np.nanmedian(np.abs(linear - med), axis=0)
+                return 100 * mad / np.clip(med, 1e-6, None)
 
     compute_fn = _cv if metric == "CV" else _rmad
 
@@ -282,63 +322,9 @@ def compute_metric_by_condition(
     out["Total"] = compute_fn(df.values)
 
     # Per‐condition
-    for cond, subdf in df.groupby(conditions, axis=0):
+    #for cond, subdf in df.groupby(conditions, axis=0):
+    for cond, subdf in df.groupby(by=conditions, observed=False):
         out[cond] = compute_fn(subdf.values)
-
-    return out
-
-def compute_metric_by_condition_old(
-    df_mat: pd.DataFrame,
-    cond_map: pd.Series,
-    metric: Literal["CV", "rMAD"] = "CV",
-) -> Dict[str, np.ndarray]:
-    """
-    Fast, safe, truly warning-free computation of %CV or rMAD per condition.
-    """
-    out: Dict[str, np.ndarray] = {}
-    arr = df_mat.values
-
-    def compute_cv(x: np.ndarray) -> np.ndarray:
-        valid = ~np.isnan(x)
-        n_valid = valid.sum(axis=1)
-        # Mask rows with <= 1 valid values
-        mask = n_valid > 1
-        mean = np.full(x.shape[0], np.nan)
-        std = np.full(x.shape[0], np.nan)
-
-        if np.any(mask):
-            mean[mask] = np.nanmean(x[mask], axis=1)
-            std[mask] = np.nanstd(x[mask], axis=1, ddof=1)
-
-        with np.errstate(invalid="ignore", divide="ignore"):
-            result = np.where(mean != 0, std / mean * 100, np.nan)
-        return result
-
-    def compute_rmad(x: np.ndarray) -> np.ndarray:
-        valid = ~np.isnan(x)
-        n_valid = valid.sum(axis=1)
-        mask = n_valid > 0
-        med = np.full(x.shape[0], np.nan)
-        mad = np.full(x.shape[0], np.nan)
-
-        if np.any(mask):
-            med[mask] = np.nanmedian(x[mask], axis=1)
-            mad[mask] = np.nanmedian(np.abs(x[mask] - med[mask][:, None]), axis=1)
-
-        with np.errstate(invalid="ignore", divide="ignore"):
-            result = np.where(med != 0, mad / med * 100, np.nan)
-        return result
-
-    compute_fn = compute_cv if metric == "CV" else compute_rmad
-
-    # Global ("Total")
-    out["Total"] = compute_fn(arr)
-
-    # Per-condition
-    for cond in cond_map.unique():
-        cols = cond_map[cond_map == cond].index
-        sub_arr = df_mat[cols].values
-        out[cond] = compute_fn(sub_arr)
 
     return out
 
@@ -417,6 +403,7 @@ def plot_violins(
         violinmode="group",
         template="plotly_white",
         title=dict(text=title, x=0.5) or "",
+        autosize=True,
         width=width, height=height,
         xaxis=dict(title=x_title or "", showgrid=True),
         yaxis=dict(title=y_title or "", showgrid=True),
@@ -450,7 +437,7 @@ def plot_pca_2d(
     df[color_key] = adata.obs[color_key].values
 
     # pick colors
-    levels = df[color_key].unique().tolist()
+    levels = sorted(df[color_key].unique().tolist())
     palette = get_color_map(levels, px.colors.qualitative.Plotly)
 
     fig = go.Figure()
@@ -474,6 +461,13 @@ def plot_pca_2d(
         template="plotly_white",
         xaxis=dict(title=f"PC{pc[0]} ({var[pc[0]-1]*100:.1f}% var)"),
         yaxis=dict(title=f"PC{pc[1]} ({var[pc[1]-1]*100:.1f}% var)"),
+        legend=dict(
+            title_text=" Condition",
+            bordercolor="black",
+            borderwidth=1,
+            x=1.02, y=1,
+            xanchor="left", yanchor="top"
+        )
     )
     fig.update_xaxes(showline=True, mirror=True, linecolor="black")
     fig.update_yaxes(showline=True, mirror=True, linecolor="black")
@@ -501,7 +495,7 @@ def plot_umap_2d(
     )
     df[color_key] = adata.obs[color_key].values
 
-    levels = df[color_key].unique().tolist()
+    levels = sorted(df[color_key].unique().tolist())
     palette = get_color_map(levels, px.colors.qualitative.Plotly)
 
     fig = go.Figure()
@@ -523,6 +517,13 @@ def plot_umap_2d(
         template="plotly_white",
         xaxis=dict(title="UMAP1"),
         yaxis=dict(title="UMAP2"),
+        legend=dict(
+            title_text=" Condition",
+            bordercolor="black",
+            borderwidth=1,
+            x=1.02, y=1,
+            xanchor="left", yanchor="top"
+        )
     )
     fig.update_xaxes(showline=True, mirror=True, linecolor="black")
     fig.update_yaxes(showline=True, mirror=True, linecolor="black")
@@ -541,6 +542,7 @@ def _compute_orders_and_dendros(
     mat_bytes : raw bytes of your data matrix, dtype float64
     shape     : (n_rows, n_cols) of that matrix
     """
+    import scipy.cluster.hierarchy as sch
     n_rows, n_cols = shape
     arr = np.frombuffer(mat_bytes, dtype=np.float64).reshape(n_rows, n_cols)
 
@@ -591,6 +593,7 @@ def plot_cluster_heatmap_plotly(
       - no hoverinfo for speed
       - nice axis styling exactly like the Plotly example
     """
+    import scipy.cluster.hierarchy as sch
     # 1) Clean up: fill any NaNs, but keep all rows
     df = data
 
@@ -650,6 +653,7 @@ def plot_cluster_heatmap_plotly(
     abs_max = max(abs(min_val), abs(max_val))
     zmin, zmax = -abs_max, abs_max
 
+    #heat = go.Heatmapgl( ??
     heat = go.Heatmap(
         z=df.values,
         x=fig.layout.xaxis["tickvals"],
@@ -746,7 +750,111 @@ def plot_cluster_heatmap_plotly(
 
     return fig
 
-@log_time("Plotting Volcano Plots")
+@log_time("Plotting Missing Values Heatmap (Plotly)")
+def plot_binary_cluster_heatmap_plotly(
+    adata: AnnData,
+    cond_key: str = "CONDITION",
+    layer: str = "normalized",
+    title: str = "Clustered Missing Values Heatmap",
+    width: int = 800,
+    height: int = 500,
+) -> go.Figure:
+    """
+    Interactive Plotly heatmap of binary missingness, reordered by
+    precomputed sample/feature linkages in adata.uns, with a color strip
+    and legend for conditions.
+    """
+
+    # 1) build missingness DataFrame (features × samples)
+    missing = np.isnan(adata.layers[layer]).astype(int)  # samples × features
+    df = pd.DataFrame(
+        missing.T,                                      # features × samples
+        index=adata.var_names,
+        columns=adata.obs_names
+    )
+
+    # 2) reorder according to .uns
+    feat_order   = adata.uns['missing_feature_order']
+    sample_order = adata.uns['missing_sample_order']
+    df = df.reindex(index=feat_order, columns=sample_order)
+
+    # 3) make a condition→color mapping & color-strip
+    levels = adata.obs[cond_key].unique().tolist()
+    cmap_cond = get_color_map(sorted(levels), palette=None, anchor=None)
+    cond_ser  = adata.obs[cond_key].reindex(sample_order)
+    x_colors  = [cmap_cond[c] for c in cond_ser]
+
+    # 4) draw the heatmap
+    fig = px.imshow(
+        df,
+        color_continuous_scale=[[0, '#f0f0f0'], [1, '#e34a33']],
+        zmin=0, zmax=1,
+        aspect="auto",
+        labels=dict(x="", y="", color="Missing"),
+        width=width, height=height,
+    )
+
+    fig.update_traces(showscale=False)
+    fig.update_layout(coloraxis_showscale=False)
+
+    # 5) inject colored tick labels on x-axis
+    fig.update_xaxes(
+        tickmode="array",
+        tickvals=list(range(len(sample_order))),
+        ticktext=[
+            f"<span style='color:{col};'>{lbl}</span>"
+            for lbl, col in zip(sample_order, x_colors)
+        ],
+        tickangle=30,
+        side="bottom",
+    )
+
+    # 6) tidy y-axis
+    fig.update_yaxes(
+        tickmode="array",
+        tickvals=list(range(len(feat_order))),
+        ticktext=feat_order,
+        ticks="",
+        showgrid=False,
+    )
+    fig.update_yaxes(showticklabels=False, showgrid=False)
+
+    # 7) add binary legend (Present vs Missing)
+    # Present = 0 = grey, Missing = 1 = red
+    for label, color in [("Present", "#f0f0f0"), ("Missing", "#e34a33")]:
+        fig.add_trace(go.Scatter(
+            x=[None], y=[None],
+            mode="markers",
+            marker=dict(color=color, size=10),
+            name=label,
+            showlegend=True,
+            hoverinfo="skip",
+        ))
+
+    # hide any non‐legend traces (i.e. the heatmap trace)
+    for tr in fig.data:
+        if tr.type == 'heatmap':
+            tr.showlegend = False
+
+    # 8) finalize layout
+    fig.update_layout(
+        title=dict(text=title, x=0.5),
+        margin=dict(l=50, r=200, t=50, b=100),
+        legend=dict(
+            title=cond_key,
+            orientation="v",
+            x=1.02, y=1,
+            xanchor="left", yanchor="top"
+        ),
+        xaxis_showgrid=False,
+        yaxis_showgrid=False,
+        hovermode="closest",
+        legend_itemclick=False,
+        legend_itemdoubleclick=False,
+    )
+
+    return fig
+
 def plot_volcanoes(
     state,
     contrast: str,
@@ -757,12 +865,13 @@ def plot_volcanoes(
     show_imp_cond1: bool = True,
     show_imp_cond2: bool = True,
     highlight: str = None,
+    color_by: str = "SNR",
 ) -> go.Figure:
     """
     Single‐contrast volcano with separate toggles for:
-      • measured in both
-      • imputed in condition1
-      • imputed in condition2
+      - measured in both
+      - imputed in condition1
+      - imputed in condition2
     """
     adata = state.adata
     genes = np.array(adata.var["GENE_NAMES"])
@@ -786,7 +895,7 @@ def plot_volcanoes(
         columns=adata.uns["contrast_names"]
     )
     df_q  = pd.DataFrame(
-        adata.varm.get("q_ebayes", adata.varm["q"]),
+        adata.varm["q_ebayes"],
         index=adata.var_names,
         columns=adata.uns["contrast_names"]
     )
@@ -805,50 +914,66 @@ def plot_volcanoes(
     # significance coloring
     sig_up   = (df_q[contrast] < sign_threshold) & (x > 0)
     sig_down = (df_q[contrast] < sign_threshold) & (x < 0)
-    colors   = np.where(sig_up, "red",
-                np.where(sig_down, "blue", "gray"))
+
+    # --- prepare color arrays/scales based on color_by ---
+    if color_by == "Significance":
+        # discrete red/blue/gray
+        color_vals = np.where(sig_up, "red",
+                      np.where(sig_down, "blue", "gray"))
+        colorscale = None
+        colorbar   = None
+
+    elif color_by == "Avg Expression":
+        # placeholder: average of some expression layer (e.g. lognorm)
+        expr_layer = adata.X
+        mat = expr_layer.toarray() if hasattr(expr_layer, "toarray") else expr_layer
+        idx1 = adata.obs["CONDITION"] == grp1
+        idx2 = adata.obs["CONDITION"] == grp2
+        mean1 = mat[idx1, :].mean(axis=0)
+        mean2 = mat[idx2, :].mean(axis=0)
+        avg_expr = pd.Series((mean1 + mean2) / 2, index=adata.var_names)
+        color_vals = avg_expr
+        colorscale = "thermal"
+        colorbar = dict(title="Mean log expr", len=0.5)
+
+    else:
+        raise ValueError(f"Unknown color_by mode: {color_by!r}")
+
+    # helper to build a trace
+    def add_group_trace(mask, name, symbol):
+        trace_kwargs = dict(
+            x=x[mask], y=y[mask],
+            mode="markers",
+            marker=dict(
+                symbol=symbol,
+                size=6,
+                opacity=base_opacity[mask],
+            ),
+            name=name,
+            text=adata.var["GENE_NAMES"][mask],
+            hovertemplate="Gene: %{text}<br>log2FC: %{x:.2f}<br>-log10(q): %{y:.2f}<extra></extra>"
+        )
+        # continuous coloring
+        add_colorbar = False
+        if color_by != "Significance" and name == "Observed in both":
+            add_colorbar = True
+        if color_by != "significance":
+            trace_kwargs["marker"].update(
+                color=color_vals[mask],
+                colorscale=colorscale,
+                showscale = True if add_colorbar else False,
+                colorbar=colorbar if add_colorbar else None,
+            )
+        else:
+            trace_kwargs["marker"]["color"] = color_vals[mask]
+
+        fig.add_trace(go.Scattergl(**trace_kwargs))
 
     fig = go.Figure()
 
-    # measured
-    if show_measured:
-        fig.add_trace(go.Scattergl(
-            x=x[measured_mask], y=y[measured_mask],
-            mode="markers",
-            marker=dict(symbol="circle",
-                        color=colors[measured_mask],
-                        size=6,
-                        opacity=base_opacity[measured_mask]),
-            name="Observed in both",
-            text=adata.var["GENE_NAMES"][measured_mask],
-            hovertemplate="Gene: %{text}<br>log2FC: %{x:.2f}<br>-log10(q): %{y:.2f}<extra></extra>"
-        ))
-    # imputed cond1
-    if show_imp_cond1:
-        fig.add_trace(go.Scattergl(
-            x=x[imp1_mask], y=y[imp1_mask],
-            mode="markers",
-            marker=dict(symbol="triangle-up",
-                        color=colors[imp1_mask],
-                        size=6,
-                        opacity=base_opacity[imp1_mask]),
-            name=f"Imputed in {grp1}",
-            text=adata.var["GENE_NAMES"][imp1_mask],
-            hovertemplate="Gene: %{text}<br>log2FC: %{x:.2f}<br>-log10(q): %{y:.2f}<extra></extra>"
-        ))
-    # imputed cond2
-    if show_imp_cond2:
-        fig.add_trace(go.Scattergl(
-            x=x[imp2_mask], y=y[imp2_mask],
-            mode="markers",
-            marker=dict(symbol="triangle-down",
-                        color=colors[imp2_mask],
-                        size=6,
-                        opacity=base_opacity[imp2_mask]),
-            name=f"Imputed in {grp2}",
-            text=adata.var["GENE_NAMES"][imp2_mask],
-            hovertemplate="Gene: %{text}<br>log2FC: %{x:.2f}<br>-log10(q): %{y:.2f}<extra></extra>"
-        ))
+    if show_measured:   add_group_trace(measured_mask, "Observed in both", "circle")
+    if show_imp_cond1:  add_group_trace(imp1_mask, f"Imputed in {grp1}", "triangle-up")
+    if show_imp_cond2:  add_group_trace(imp2_mask, f"Imputed in {grp2}", "triangle-down")
 
     # threshold & axes with padding
     thr_y = -np.log10(sign_threshold)
@@ -889,9 +1014,9 @@ def plot_volcanoes(
 
     arrow_ann = None
     if high_idx is not None and visible_mask[high_idx]:
-        sign = 1 if x[high_idx] >= 0 else -1
-        xh = x.values[high_idx]
-        yh = y.values[high_idx]
+        sign = 1 if x.iloc[high_idx] >= 0 else -1
+        xh = float(x.iloc[high_idx])
+        yh = float(y.iloc[high_idx])
         arrow_ann = dict(
             x=xh+sign*0.05, y=yh+0.05,
             ax=xh+sign*0.5, ay=yh+0.5,
@@ -912,6 +1037,13 @@ def plot_volcanoes(
         annos.append(arrow_ann)
 
     fig.update_layout(
+        margin=dict(
+            l=60,
+            r=120,
+            t=60,
+            b=60,
+            autoexpand=False   # <- disable legends/colorbars pushing the plot area
+        ),
         annotations=annos,
         title=dict(text=f"{contrast}",
                         x=0.5),
@@ -927,138 +1059,105 @@ def plot_volcanoes(
                  line=dict(color="black", dash="dash")),
         ],
         xaxis=dict(title="log2 Fold Change", autorange=True),
-        yaxis=dict(title="-log10(q-value)",    autorange=True),
+        yaxis=dict(title="-log10(q-value)", autorange=True),
         width=width, height=height,
     )
 
     return fig
 
-
 def plot_histogram_plotly(
-    df: Optional[pd.DataFrame] = None,
-    value_col: str = "Intensity",
-    group_col: str = "Normalization",
-    labels: List[str] = ["Before", "After"],
-    colors: List[str] = ["blue", "red"],
+    data: Sequence[Sequence[float]],
+    labels: Sequence[str],
+    colors: Sequence[str],
     nbins: int = 50,
-    stat: str = "probability",           # "count" or "probability"
-    log_x: bool = True,                  # whether to log-transform
-    log_base: int = 10,                   # 2 or 10
-    opacity: Union[float, Sequence[float]] = 0.5,
-    x_range: Optional[Tuple[float,float]] = None,
-    y_range: Optional[Tuple[float,float]] = None,
-    x_title: Optional[str] = None,
-    y_title: Optional[str] = None,
+    stat: str = "probability",
+    log_base: int = 10,
+    opacity: float = 0.5,
     width: int = 900,
     height: int = 500,
     title: Optional[str] = None,
-    data: Optional[Dict[str, Sequence]] = None,
 ) -> go.Figure:
     """
-    Generic overlaid histogram for one or more distributions.
-    Supports optional log-base-2 or log-base-10 transform with correct tick labels.
+    Overlaid log-scaled histogram of multiple distributions.
+
+    Parameters
+    ----------
+    data : list of sequences
+        Each sequence of raw intensity values (must be positive).
+    labels : list of str
+        Labels corresponding to each distribution.
+    colors : list of str
+        Colors for each label.
+    nbins : int
+        Number of histogram bins.
+    stat : str
+        "count" or "probability".
+    log_base : int
+        Base for log-transform (2 or 10).
+    opacity : float
+        Bar opacity.
+    width, height : int
+        Figure dimensions.
+    title : str
+        Plot title.
     """
-    # ------------------------------------------------
-    # 1) Prepare raw arrays
-    # ------------------------------------------------
-    if data is not None:
-        labels = list(data.keys())
-        values = {lbl: np.asarray(data[lbl]) for lbl in labels}
-    else:
-        if df is None:
-            raise ValueError("Need either 'data' or 'df'")
-        df2 = df.copy()
-        if log_x:
-            df2 = df2[df2[value_col] > 0]
-            df2["_val"] = np.log(df2[value_col]) / np.log(log_base)
-        else:
-            df2["_val"] = df2[value_col]
-        values = {
-            lbl: df2.loc[df2[group_col] == lbl, "_val"].values
-            for lbl in labels
-        }
+    # 1) Log-transform and filter
+    transformed: Dict[str, np.ndarray] = {}
+    for lbl, seq in zip(labels, data):
+        arr = np.asarray(seq)
+        arr = arr[arr > 0]
+        transformed[lbl] = np.log(arr) / np.log(log_base)
 
-    # ------------------------------------------------
-    # 2) Compute bins on the transformed scale
-    # ------------------------------------------------
-    all_vals = np.concatenate(list(values.values()))
-    mn = x_range[0] if (log_x and x_range) else (np.min(all_vals))
-    mx = x_range[1] if (log_x and x_range) else (np.max(all_vals))
-    bins = np.linspace(mn, mx, nbins + 1)
+    # 2) Compute shared bins
+    all_vals = np.concatenate(list(transformed.values()))
+    bins = np.linspace(all_vals.min(), all_vals.max(), nbins + 1)
 
-    # ------------------------------------------------
-    # 3) Draw overlaid bars
-    # ------------------------------------------------
+    # 3) Build figure
     fig = go.Figure()
-    ops = (list(opacity) if isinstance(opacity, (list,tuple,np.ndarray))
-           else [opacity]*len(labels))
-
-    for i, lbl in enumerate(labels):
-        arr = values[lbl]
+    for lbl, color in zip(labels, colors):
+        arr = transformed[lbl]
         counts, edges = np.histogram(arr, bins=bins)
         if stat == "probability":
             counts = counts / counts.sum()
-        mids   = 0.5*(edges[:-1] + edges[1:])
+        mids = (edges[:-1] + edges[1:]) / 2
         widths = edges[1:] - edges[:-1]
         fig.add_trace(go.Bar(
-            x=mids, y=counts, width=widths,
+            x=mids,
+            y=counts,
+            width=widths,
             name=lbl,
-            marker_color=colors[i] if i < len(colors) else None,
-            opacity=ops[i],
+            marker_color=color,
+            opacity=opacity,
             hoverinfo="skip",
         ))
 
-    # ------------------------------------------------
-    # 4) Axis formatting
-    # ------------------------------------------------
-    if log_x:
-        # tick positions are integers on the log-scale
-        lo = int(np.floor(bins[0]))
-        hi = int(np.ceil (bins[-1]))
-        units = list(range(lo, hi+1))
-        # labels like 2ⁿ or 10ⁿ
-        if log_base == 10:
-            ticktext = [f"10<sup>{u}</sup>" for u in units]
-            xlabel   = x_title or f"log₁₀({value_col})"
-        else:
-            ticktext = [f"2<sup>{u}</sup>"  for u in units]
-            xlabel   = x_title or f"log₂({value_col})"
-        fig.update_xaxes(
-            type="linear",
-            autorange=False,
-            range=[lo, hi],
-            tickmode="array",
-            tickvals=units,
-            ticktext=ticktext,
-            showgrid=True,
-            title_text=xlabel,
-        )
-        fig.update_yaxes(
-            title_text=y_title or stat.title(),
-            showgrid=True,
-        )
-    else:
-        fig.update_xaxes(
-            range=x_range,
-            title_text=x_title or value_col,
-            showgrid=True,
-        )
-        fig.update_yaxes(
-            range=y_range,
-            title_text=y_title or stat.title(),
-            showgrid=True,
-        )
+    # 4) Format log-x axis
+    lo, hi = int(np.floor(bins[0])), int(np.ceil(bins[-1]))
+    ticks = list(range(lo, hi + 1))
+    ticktext = [f"10<sup>{t}</sup>" for t in ticks]
+    fig.update_xaxes(
+        type="linear",
+        autorange=False,
+        range=[0, hi],
+        tickmode="array",
+        tickvals=ticks,
+        ticktext=ticktext,
+        showgrid=True,
+        title_text=f"log₁₀(Value)",
+    )
+    fig.update_yaxes(
+        title_text=stat.title(),
+        showgrid=True,
+    )
 
-    # ------------------------------------------------
     # 5) Final layout
-    # ------------------------------------------------
     fig.update_layout(
         title=dict(text=title or "", x=0.5),
         barmode="overlay",
         template="plotly_white",
-        width=width, height=height,
+        width=width,
+        height=height,
     )
-
     return fig
 
 def add_violin_traces(
@@ -1130,4 +1229,3 @@ def add_violin_traces(
             row=row,
             col=col,
         )
-

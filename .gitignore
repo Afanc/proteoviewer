@@ -22,3 +22,5 @@ build/
 .vscode/
 .idea/
 
+# data files
+*.h5ad
