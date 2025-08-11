@@ -70,7 +70,10 @@ def _lazy_tabs(state):
 
     # Create placeholders
     for label, builder in specs:
-        holder = pn.Column(sizing_mode="stretch_both")
+        holder = pn.Column(
+            sizing_mode="stretch_both",
+            styles={"min-height": "240px"}
+        )
         holders.append(holder)
         builders.append(builder)
         built.append(False)
@@ -81,12 +84,19 @@ def _lazy_tabs(state):
             return
         holder = holders[i]
         holder.loading = True
-        try:
-            content = builders[i]()   # heavy build
-            holder[:] = [content]
-            built[i] = True
-        finally:
-            holder.loading = False
+
+        def do_build():
+            try:
+                content = builders[i]()  # heavy work
+                holder[:] = [content]
+                built[i] = True
+            except Exception as e:
+                holder[:] = [pn.pane.Markdown(f"**Error while building tab:** {e}")]
+            finally:
+                holder.loading = False
+
+        # schedule on next tick so the loading overlay can render
+        pn.state.curdoc.add_next_tick_callback(do_build)
 
     def _set_visibility(active: int):
         for i, h in enumerate(holders):
