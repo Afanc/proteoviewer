@@ -113,7 +113,7 @@ def plot_intensity_by_protein(state, contrast, protein, layer):
     if layer.value == "Raw":
         proc_data = ad.layers.get('raw')
         intensity_scale = "Intensity"
-    elif layer.value == "Log-Normalized":
+    elif layer.value == "Log (pre-norm)":
         proc_data = ad.layers.get('lognorm')
 
     # find column index by GENE_NAMES

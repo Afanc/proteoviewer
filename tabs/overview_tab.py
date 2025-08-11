@@ -209,28 +209,6 @@ def overview_tab(state: SessionState):
             }
         )
 
-    #clustering_pane = pn.Row(
-    #        pn.pane.Markdown("##   Clustering", styles={"flex": "0.1"}),
-    #        pca_pane,
-    #        #pn.Spacer(width=25),
-    #        vr,
-    #        pn.Spacer(width=60),
-    #        umap_pane,
-    #        vr,
-    #        h_clustering_pane,
-    #        #width=2400,
-    #        #height=530,
-    #        height=530,
-    #        margin=(0, 0, 0, 20),
-    #        sizing_mode="stretch_width",
-    #        styles={
-    #            'border-radius':  '15px',
-    #            'box-shadow':     '3px 3px 5px #bcbcbc',
-    #            'width': '98vw',
-    #        }
-    #    )
-
-
     ## Volcanoes
     # Contrast selector
     contrasts = state.adata.uns["contrast_names"].tolist()
@@ -264,7 +242,6 @@ def overview_tab(state: SessionState):
     _update_toggle_labels()
 
     contrast_sel.param.watch(_update_toggle_labels, "value")
-    #color_by.param.watch(_update_toggle_labels, "value")
 
     # search widget
     search_input = pn.widgets.AutocompleteInput(
@@ -310,7 +287,7 @@ def overview_tab(state: SessionState):
     volcano_plot.param.watch(_on_volcano_click, "click_data")
 
     # bind a detail‐plot function to the same contrast & search_input
-    layers = ["Processed", "Log-Normalized", "Raw"]
+    layers = ["Processed", "Log (pre-norm)", "Raw"]
 
     layers_sel = pn.widgets.Select(
         name="Data Layer",
@@ -344,6 +321,23 @@ def overview_tab(state: SessionState):
         # --- pull values that do not depend on the "layer" toggle ---
         protein_info = get_protein_info(state, contrast, protein, layers_sel)  # OK: we only read layer-agnostic bits
         uniprot_id   = protein_info['uniprot_id']
+        idx = protein_info['index']  # already used below for "Protein Index"
+
+        def _fmt_int(x):
+            v = int(x)
+            return f"{v:,}"
+
+        def _fmt_ibaq(x):
+            v = float(x)
+            if v >= 1_000:
+                return f"{v:,.0f}"
+            elif v >= 1:
+                return f"{v:.2f}"
+            else:
+                return f"{v:.2e}"
+
+        re_count = _fmt_int(adata.var["RUN_EVIDENCE_COUNT"].iloc[idx])
+        ibaq_val = _fmt_ibaq(adata.var["PG.IBAQ"].iloc[idx])
 
         Number = pn.indicators.Number
 
@@ -420,17 +414,27 @@ def overview_tab(state: SessionState):
         except Exception:
             string_link = ""
 
+        footer_left = pn.pane.HTML(
+            f"<span style='font-size: 12px;'>"
+            f"Precursors (global): <b>{re_count}</b>"
+            f" &nbsp;|&nbsp; "
+            f"iBAQ: <b>{ibaq_val}</b>"
+            f"</span>"
+        )
+
+        footer_right = pn.pane.HTML(
+            f"<span style='font-size: 12px;'>"
+            f"🔗 <a href='https://www.uniprot.org/uniprotkb/{uniprot_id}/entry' target='_blank' rel='noopener'>UniProt Entry</a>"
+            f" &nbsp;|&nbsp; "
+            f"<a href='{string_link}' target='_blank' rel='noopener'>STRING Entry</a>"
+            f"</span>"
+        )
+
         footer_links = pn.Row(
-            pn.pane.HTML(
-                f'<span style="font-size: 12px;">'
-                f'🔗 <a href="https://www.uniprot.org/uniprotkb/{uniprot_id}/entry" target="_blank" rel="noopener">UniProt Entry</a>'
-                f' &nbsp;|&nbsp; '
-                f'<a href="{string_link}" target="_blank" rel="noopener">STRING Entry</a>'
-                f'</span>'
-            ),
+            footer_left, pn.Spacer(), footer_right,
             sizing_mode="stretch_width",
             styles={
-                "justify-content": "flex-end",
+                "justify-content": "space-between",   # left stats | right links
                 "padding": "2px 8px 4px 0px",
                 "margin-top": "-6px",
             }
