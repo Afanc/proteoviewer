@@ -68,15 +68,15 @@ def stat_histogram(adata, stat: str, contrast: str) -> go.Figure:
     """
     idx = _get_contrast_index(adata, contrast)
     if stat == "p":
-        raw = np.asarray(adata.varm["p"][:, idx]).ravel()
+        raw = np.asarray(adata.varm["p_raw"][:, idx]).ravel()
         eb  = np.asarray(adata.varm["p_ebayes"][:, idx]).ravel()
         title = f"P-values — {contrast}"
         xlab  = "p"
     else:
-        raw = np.asarray(adata.varm["q"][:, idx]).ravel()
+        raw = np.asarray(adata.varm["q_raw"][:, idx]).ravel()
         eb  = np.asarray(adata.varm["q_ebayes"][:, idx]).ravel()
         title = f"q-values — {contrast}"
-        xlab  = "q"
+        xlab  = "q_raw"
 
     df = pd.DataFrame({xlab: np.concatenate([raw, eb]),
                        "source": (["Raw"] * raw.size) + (["eBayes"] * eb.size)})
@@ -98,13 +98,13 @@ def stat_shrinkage_scatter(adata, stat: str, contrast: str, max_points: int = 50
     """
     idx = _get_contrast_index(adata, contrast)
     if stat == "p":
-        x = np.asarray(adata.varm["p"][:, idx]).ravel()
+        x = np.asarray(adata.varm["p_raw"][:, idx]).ravel()
         y = np.asarray(adata.varm["p_ebayes"][:, idx]).ravel()
         title = f"P-value shrinkage — {contrast}"
         xlab, ylab = "p (raw)", "p (eBayes)"
         line = [0, 1]
     else:
-        x = np.asarray(adata.varm["q"][:, idx]).ravel()
+        x = np.asarray(adata.varm["q_raw"][:, idx]).ravel()
         y = np.asarray(adata.varm["q_ebayes"][:, idx]).ravel()
         title = f"q-value shrinkage — {contrast}"
         xlab, ylab = "q (raw)", "q (eBayes)"

@@ -1,4 +1,5 @@
 import logging
+import os
 import sys
 import socket
 
@@ -15,7 +16,28 @@ logging.getLogger().setLevel(logging.INFO)
 
 pn.extension('plotly', defer_load=True, loading_indicator=True)
 
+MIN_PF_VERSION = os.environ.get("PF_MIN_PF_VERSION", "0.0.0")
+
 DEV = False #change for env variable
+
+def _parse_semver(v: str):
+    try:
+        core = v.split("+", 1)[0]
+        parts = [int(p) for p in core.split(".")]
+        return tuple(parts + [0] * (3 - len(parts)))[:3]
+    except Exception:
+        return (1, 0, 0)
+
+def _check_pf_meta(adata):
+    """Return (ok: bool, message: str, meta: dict)."""
+    meta = adata.uns.get("proteoflux", {}) or {}
+    pfv = meta.get("pf_version")
+    created = meta.get("created_at", "unknown time")
+    if not pfv:
+        return (False, "No ProteoFlux version found in uns['proteoflux'].", meta)
+    if _parse_semver(pfv) < _parse_semver(MIN_PF_VERSION):
+        return (False, f" File written by ProteoFlux {pfv} (< {MIN_PF_VERSION}). Proceeding; some views may be limited.", meta)
+    return (True, f"ProteoFlux {pfv} • {created}", meta)
 
 def get_free_port(start=5006, end=5099):
     """Find an open port so users can run multiple instances."""
@@ -121,7 +143,9 @@ def build_app():
         for w in (file_input, exit_btn, status):
             w.visible = False
         content[:] = [pn.pane.Markdown("## Thanks for using ProteoViewer!")]
-        pn.state.curdoc.add_timeout_callback(lambda: sys.exit(0), 1000)
+
+        pn.state.curdoc.add_next_tick_callback(lambda: os._exit(0))
+
     exit_btn.on_click(_on_exit)
 
     # dev‐mode: load default without clicking

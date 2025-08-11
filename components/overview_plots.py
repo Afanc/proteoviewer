@@ -214,7 +214,7 @@ def get_protein_info(state, contrast, protein, layer):
         columns=ad.uns["contrast_names"],
     )
     df_q  = pd.DataFrame(
-        ad.varm.get("q_ebayes", ad.varm["q"]),
+        ad.varm["q_ebayes"],
         index=ad.var_names,
         columns=ad.uns["contrast_names"],
     )

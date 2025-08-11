@@ -895,7 +895,7 @@ def plot_volcanoes(
         columns=adata.uns["contrast_names"]
     )
     df_q  = pd.DataFrame(
-        adata.varm.get("q_ebayes", adata.varm["q"]),
+        adata.varm["q_ebayes"],
         index=adata.var_names,
         columns=adata.uns["contrast_names"]
     )
