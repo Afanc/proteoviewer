@@ -660,8 +660,8 @@ def plot_mv_barplots(adata: AnnData):
     # 3) Compute missing per condition
     unique_conds, inv = np.unique(conds, return_inverse=True)  # already ascending
     mvi_per_condition_vals = np.bincount(inv, weights=mvi_per_sample).astype(int)
-    cond_levels = unique_conds[::-1]            # ← display order (descending) stays as before
-    mvi_desc = mvi_per_condition_vals[::-1]
+    cond_levels = unique_conds
+    mvi_desc = mvi_per_condition_vals
 
     # 4) Totals & rate
     total_imputed     = int(mvi_per_condition_vals.sum())
