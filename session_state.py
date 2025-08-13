@@ -6,7 +6,7 @@ class SessionState:
         self.session_loaded = False
 
     @staticmethod
-    @pn.cache
+    #@pn.cache
     def initialize(adata) -> "SessionState":
         inst = SessionState(adata)
         inst._initialize_heavy()
