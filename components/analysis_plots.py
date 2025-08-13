@@ -164,7 +164,7 @@ def plot_h_clustering_heatmap(adata):
         y_labels=y_labels,
         cond_series=cond_ser,
         colorscale="RdBu",
-        title="Clustergram of deviation to the mean",
+        title="Clustergram of deviations to the mean",
         sample_linkage=sample_linkage,
         feature_linkage=feature_linkage,
     )
