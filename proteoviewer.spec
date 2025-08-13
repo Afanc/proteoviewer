@@ -19,6 +19,8 @@ a = Analysis(
         'fastcluster',
         'binascii',
         'skmisc',
+        'tkinter',
+        'tkinter.filedialog',
     ],
     hookspath=[],
     runtime_hooks=[],
