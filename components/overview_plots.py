@@ -79,7 +79,7 @@ def plot_volcanoes_wrapper(
     state,
     sign_threshold: float = 0.05,
     width: int = 900,
-    height: int = 600,
+    height: int = 900,
     show_measured: bool = True,
     show_imp_cond1:  bool = True,
     show_imp_cond2:  bool = True,
@@ -188,7 +188,7 @@ def plot_intensity_by_protein(state, contrast, protein, layer):
 
     fig.update_layout(
         margin={"t":40,"b":40,"l":60,"r":60},
-        title="",
+        title=dict(text="Protein Expression", x=0.5),
         legend_title_text="Conditions",
         legend_itemclick=False,
         legend_itemdoubleclick=False,
@@ -240,3 +240,71 @@ def get_protein_info(state, contrast, protein, layer):
         'index': col_idx,
     }
     return protein_info
+
+@log_time("Plotting Peptide Trends (centered)")
+def plot_peptide_trends_centered(adata, uniprot_id: str, contrast: str) -> go.Figure:
+    # 1) pull & slice peptide matrices
+    pep = adata.uns["peptides"]
+    X_all   = np.asarray(pep["centered"], dtype=float)     # (rows x samples)
+    rows    = list(pep["rows"])
+    prot_ix = np.asarray(pep["protein_index"], dtype=str)  # per-row protein id
+    seqs    = np.asarray(pep["peptide_seq"], dtype=str)    # per-row peptide sequence
+    cols    = list(map(str, pep["cols"]))                  # sample names in matrix
+
+    # keep only peptides belonging to this UniProt id (no group handling here)
+    keep = (prot_ix == str(uniprot_id))
+    X = X_all[keep, :]
+    seqs = seqs[keep]
+
+    # 2) align columns to obs order, then filter to the contrast’s samples
+    obs_order = list(map(str, adata.obs_names))
+    if cols != obs_order:
+        pos = {c: i for i, c in enumerate(cols)}
+        idx = [pos[c] for c in obs_order if c in pos]
+        X   = X[:, idx]
+        cols = [obs_order[i] for i in range(len(obs_order)) if obs_order[i] in pos]
+
+    grp1, grp2 = contrast.split("_vs_")
+    conds = adata.obs.loc[cols, "CONDITION"].astype(str).to_numpy()
+    mask  = np.isin(conds, [grp1, grp2])
+    X = X[:, mask]
+    sample_labels = np.array(cols)[mask]
+    cond_labels   = conds[mask]
+
+    # 3) build figure: one line per peptide, marker color by condition
+    fig = go.Figure()
+    palette = px.colors.qualitative.Prism
+    uniq = sorted(pd.unique(seqs).tolist())
+    line_cmap = {s: palette[i % len(palette)] for i, s in enumerate(uniq)}
+
+    cond_cmap = get_color_map([grp1, grp2], palette=px.colors.qualitative.Plotly)
+
+    def _truncate_name(name, max_len=10):
+        return name if len(name) <= max_len else name[:max_len - 1] + "…"
+
+    for y, seq in zip(X, seqs):
+        if np.isnan(y).all():
+            continue
+        fig.add_trace(go.Scatter(
+            x=sample_labels,
+            y=y,
+            mode="lines",
+            name=_truncate_name(seq),
+            line=dict(color=line_cmap[seq], width=2, dash="dash"),
+            customdata=np.c_[np.full_like(y, seq, dtype=object), cond_labels],
+            hovertemplate="<b>%{customdata[0]}</b><br>"
+                          "Sample: %{x}<br>"
+                          "Cond: %{customdata[1]}<br>"
+                          "Value: %{y:.3f}<extra></extra>",
+            showlegend=True,
+        ))
+
+    fig.update_layout(
+        title=dict(text="Peptide trends", x=0.5),
+        xaxis_title="Sample",
+        yaxis_title="Intensity / mean",
+        margin=dict(l=60, r=40, t=40, b=50),
+        legend_title_text="Peptide",
+    )
+    return fig
+

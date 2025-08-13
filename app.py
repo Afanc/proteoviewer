@@ -16,9 +16,9 @@ logging.getLogger().setLevel(logging.INFO)
 
 pn.extension('plotly', defer_load=True, loading_indicator=True)
 
-MIN_PF_VERSION = os.environ.get("PF_MIN_PF_VERSION", "0.0.0")
+MIN_PF_VERSION = os.environ.get("PF_MIN_PF_VERSION", "1.1.0")
 
-DEV = False #change for env variable
+DEV = True #change for env variable
 
 def _parse_semver(v: str):
     try:

@@ -7,7 +7,8 @@ from components.overview_plots import (
     plot_violin_cv_rmad_per_condition,
     plot_volcanoes_wrapper,
     plot_intensity_by_protein,
-    get_protein_info
+    get_protein_info,
+    plot_peptide_trends_centered,
 )
 from components.plot_utils import plot_pca_2d, plot_umap_2d
 from components.texts import (
@@ -264,7 +265,7 @@ def overview_tab(state: SessionState):
         highlight=search_input,
         sign_threshold=0.05,
         width=900,
-        height=800,
+        height=900,
     )
 
     def _on_volcano_click(event):
@@ -276,8 +277,8 @@ def overview_tab(state: SessionState):
     volcano_plot = pn.pane.Plotly(
         volcano_dmap,
         width=900,
-        height=800,
-        margin=(-50, 0, 0, 20),
+        height=900,
+        margin=(0, 0, 0, 20),
         sizing_mode="fixed",
         styles={
             'border-radius':  '8px',
@@ -290,7 +291,7 @@ def overview_tab(state: SessionState):
     layers = ["Processed", "Log (pre-norm)", "Raw"]
 
     layers_sel = pn.widgets.Select(
-        name="Data Layer",
+        name="Protein Data Layer",
         options=layers,
         value=layers[0],
         width=100,
@@ -336,8 +337,8 @@ def overview_tab(state: SessionState):
             else:
                 return f"{v:.2e}"
 
-        re_count = _fmt_int(adata.var["RUN_EVIDENCE_COUNT"].iloc[idx])
-        ibaq_val = _fmt_ibaq(adata.var["PG.IBAQ"].iloc[idx])
+        re_count = _fmt_int(adata.var["PRECURSORS_EXP"].iloc[idx])
+        ibaq_val = _fmt_ibaq(adata.var["IBAQ"].iloc[idx])
 
         Number = pn.indicators.Number
 
@@ -481,7 +482,7 @@ def overview_tab(state: SessionState):
         barplot_pane = pn.pane.Plotly(
             fig,
             width=800,
-            height=500,
+            height=400,
             margin=(-30, 0, 0, 0),
             styles={
                 'border-radius':  '8px',
@@ -515,13 +516,28 @@ def overview_tab(state: SessionState):
 
     info_holder = pn.Column()
     bar_holder  = pn.Column()
+    pep_holder  = pn.Column()
 
-    detail_panel = pn.Column(
-        info_holder,
-        pn.Spacer(height=50),
-        bar_holder,
+    detail_panel = pn.Row(
+        pn.Column(
+            info_holder,
+            pn.Spacer(height=50),
+            bar_holder,
+            pn.Spacer(height=20),
+            pep_holder,
+        ),
+        margin=(0, 0, 0, 0),
     )
+
     bokeh_doc = pn.state.curdoc  # for next-tick scheduling if you want it
+
+    def _current_uniprot_id():
+        gene = search_input.value
+        if not gene:
+            return None
+        # cheap call; we only need the ID
+        info = get_protein_info(state, contrast_sel.value, gene, layers_sel)
+        return info["uniprot_id"]
 
     def _render_info():
         # pass current values explicitly (protein, contrast)
@@ -530,6 +546,21 @@ def overview_tab(state: SessionState):
     def _render_bar():
         # pass (protein, contrast, layer) explicitly
         return bar_and_intensity(search_input.value, contrast_sel.value, layers_sel.value)
+
+    def _render_pep():
+        uid = _current_uniprot_id()
+        if not uid:
+            return pn.Spacer(width=800, height=320)
+
+        fig = plot_peptide_trends_centered(state.adata, uid, contrast_sel.value)
+        return pn.pane.Plotly(
+            fig,
+            height=285,
+            width=800,
+            margin=(0,0,0,0),
+            styles={'border-radius': '8px', 'box-shadow': '3px 3px 5px #bcbcbc'}
+        )
+
     def _update_info(_=None):
         # No spinner here; it's cheap and we don't want a loader on empty states
         info_holder[:] = [_render_info()]
@@ -550,13 +581,24 @@ def overview_tab(state: SessionState):
         finally:
             bar_holder.loading = False
 
+    def _update_pep(_=None):
+        if not search_input.value:
+            pep_holder.loading = False
+            pep_holder[:] = [pn.Spacer(width=800, height=320)]
+            return
+        pep_holder.loading = True
+        try:
+            pep_holder[:] = [_render_pep()]
+        finally:
+            pep_holder.loading = False
+
     # Wire events:
-    search_input.param.watch(lambda e: (_update_info(), _update_bar()), "value")
-    contrast_sel.param.watch(lambda e: (_update_info(), _update_bar()), "value")
+    search_input.param.watch(lambda e: (_update_info(), _update_bar(), _update_pep()), "value")
+    contrast_sel.param.watch(lambda e: (_update_info(), _update_bar(), _update_pep()), "value")
     layers_sel.param.watch(lambda e: _update_bar(), "value")
 
     # Initial fill (after the page paints so you don’t see a flash)
-    bokeh_doc.add_next_tick_callback(lambda: (_update_info(), _update_bar()))
+    bokeh_doc.add_next_tick_callback(lambda: (_update_info(), _update_bar(), _update_pep()))
 
     # 3) assemble into a layout, no legend‐based toggles
     volcano_pane = pn.Column(
@@ -585,8 +627,9 @@ def overview_tab(state: SessionState):
             volcano_plot,
             pn.Spacer(width=50),
             detail_panel,
+            margin=(-80, 0, 0, 0),
         ),
-        height=1000,
+        height=1100,
         margin=(0, 0, 0, 20),
         sizing_mode="stretch_width",
         styles={

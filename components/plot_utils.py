@@ -860,7 +860,7 @@ def plot_volcanoes(
     contrast: str,
     sign_threshold: float = 0.05,
     width: int = 900,
-    height: int = 600,
+    height: int = 900,
     show_measured: bool = True,
     show_imp_cond1: bool = True,
     show_imp_cond2: bool = True,
