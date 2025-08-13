@@ -1,5 +1,6 @@
 # -*- mode: python -*-
 block_cipher = None
+VERSION = "1.1.0" #until we package that thing
 
 from PyInstaller.utils.hooks import copy_metadata
 
@@ -32,7 +33,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name='proteoviewer',
+    name=f'proteoviewer-{VERSION}',
     debug=False,
     strip=False,
     upx=True,
@@ -46,7 +47,7 @@ coll = COLLECT(
     a.datas,
     strip=False,
     upx=True,
-    name='proteoviewer',
+    name=f'proteoviewer-{VERSION}',
 )
 
 import sys
@@ -55,5 +56,5 @@ if sys.platform == 'darwin':
         coll,
         name='ProteoViewer.app',
         icon=None,
-        bundle_identifier='com.afanc.proteoviewer',
+        bundle_identifier='com.proteoviewer',
     )
