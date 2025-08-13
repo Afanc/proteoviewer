@@ -4,7 +4,7 @@ VERSION = "1.1.0" #until we package that thing
 
 from PyInstaller.utils.hooks import copy_metadata
 
-datas=copy_metadata('anndata') + copy_metadata('scanpy') + copy_metadata('scikit-learn') + copy_metadata('scikit-misc') + copy_metadata('tkinter')
+datas=copy_metadata('anndata') + copy_metadata('scanpy') + copy_metadata('scikit-learn') + copy_metadata('scikit-misc')
 a = Analysis(
     ['app.py'],           # your entry-point
     pathex=[],
