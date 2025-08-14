@@ -73,6 +73,6 @@ uc-micro-py==1.0.3
 umap-learn==0.5.9.post2
 urllib3==2.5.0
 webencodings==0.5.1
+wheel==0.45.1
 xyzservices==2025.4.0
 zarr==3.1.1
-
