@@ -1160,3 +1160,101 @@ def plot_grouped_violin_imputation_metrics_by_condition(
     fig_rmad = make_fig('rMAD')
     return fig_rmad, fig_cv
 
+def plot_line_density_by_sample(
+    adata,
+    before_layer: str = "lognorm",
+    after_layer:  str = "normalized",
+    bins: int = 200,
+) -> go.Figure:
+    """
+    Same distribution as the violins, but as per‑sample density *lines*.
+    - X axis: intensity
+    - Y axis: probability density (top of the distribution)
+    - One line per sample, dashed, colors from Prism palette.
+    - Legend toggling acts on both panels.
+    """
+    samples = list(adata.obs_names)
+    palette = px.colors.qualitative.Prism
+    color_map = {s: palette[i % len(palette)] for i, s in enumerate(samples)}
+
+    def _densities(layer: str) -> Tuple[np.ndarray, Dict[str, np.ndarray]]:
+        arr = adata.layers[layer]                 # shape: samples × proteins
+        # keep finite & positive values for range
+        vals = arr[np.isfinite(arr) & (arr > 0)]
+        if vals.size == 0:
+            # fallback to 0..1 to avoid NaNs
+            x = np.linspace(0, 1, bins)
+            return x, {s: np.zeros_like(x) for s in samples}
+
+        x = np.linspace(vals.min(), vals.max(), bins)
+        edges = np.linspace(vals.min(), vals.max(), bins + 1)
+
+        ys: Dict[str, np.ndarray] = {}
+        for i, s in enumerate(samples):
+            v = arr[i, :]
+            v = v[np.isfinite(v) & (v > 0)]
+            if v.size == 0:
+                y = np.zeros(bins)
+            else:
+                # histogram density as a quick, robust estimator
+                y, _ = np.histogram(v, bins=edges, density=True)
+                # tiny smoothing to de‑jag (5‑tap kernel)
+                k = np.array([1, 2, 3, 2, 1], dtype=float)
+                k /= k.sum()
+                y = np.convolve(y, k, mode="same")
+            ys[s] = y
+        return x, ys
+
+    xb, yb = _densities(before_layer)
+    xa, ya = _densities(after_layer)
+
+    fig = make_subplots(
+        rows=1, cols=2,
+        shared_yaxes=False,
+        subplot_titles=["Before Normalization", "After Normalization"],
+        horizontal_spacing=0.08,
+    )
+
+    # LEFT: Before  |  RIGHT: After
+    for s in samples:
+        # show legend only on the left panel; legendgroup couples both
+        fig.add_trace(go.Scatter(
+            x=xb, y=yb[s],
+            mode="lines",
+            name=str(s),
+            legendgroup=str(s),
+            showlegend=True,
+            line=dict(dash="dash", width=1, color=color_map[s]),
+            hovertemplate="Sample: %{fullData.name}<br>Intensity: %{x:.3f}<br>Density: %{y:.4f}<extra></extra>",
+        ), row=1, col=1)
+
+        fig.add_trace(go.Scatter(
+            x=xa, y=ya[s],
+            mode="lines",
+            name=str(s),
+            legendgroup=str(s),
+            showlegend=False,              # kept in sync via legendgroup
+            line=dict(dash="dash", width=1, color=color_map[s]),
+            hovertemplate="Sample: %{fullData.name}<br>Intensity: %{x:.3f}<br>Density: %{y:.4f}<extra></extra>",
+        ), row=1, col=2)
+
+    # layout: compact legend; clicking a sample toggles both panels
+    fig.update_layout(
+        template="plotly_white",
+        width=900, height=600,
+        title=dict(text="Distribution by Sample", x=0.5),
+        legend=dict(
+            y=1.0, yanchor="top",
+            x=1.02, xanchor="left",
+            orientation="v",
+            itemwidth=60,
+            bordercolor="black", borderwidth=1,
+            groupclick="togglegroup",
+        ),
+        #margin=dict(l=60, r=140, t=60, b=60),
+    )
+    for c in (1, 2):
+        fig.update_xaxes(title_text="Intensity", showline=True, linecolor="black", mirror=True, row=1, col=c)
+        fig.update_yaxes(title_text="Density",   showline=True, linecolor="black", mirror=True, row=1, col=c)
+    return fig
+

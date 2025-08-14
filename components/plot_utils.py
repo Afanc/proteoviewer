@@ -1060,7 +1060,7 @@ def plot_volcanoes(
         ],
         xaxis=dict(title="log2 Fold Change", autorange=True),
         yaxis=dict(title="-log10(q-value)", autorange=True),
-        width=width, height=height,
+        height=height,
     )
 
     return fig

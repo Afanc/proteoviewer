@@ -1,5 +1,4 @@
 import panel as pn
-#from panel.widgets import LoadingSpinner
 from concurrent.futures import ThreadPoolExecutor
 from session_state import SessionState
 from components.preprocessing_plots import (
@@ -8,6 +7,7 @@ from components.preprocessing_plots import (
     plot_intensities_histogram,
     plot_violin_intensity_by_condition,
     plot_violin_intensity_by_sample,
+    plot_line_density_by_sample,
     plot_cv_by_condition,
     plot_rmad_by_condition,
     plot_ma,
@@ -103,24 +103,48 @@ def preprocessing_tab(state: SessionState):
                                             height=500,
                                             flex="0.5")
 
-    norm_violin_by_sample = plotly_section(plot_violin_intensity_by_sample(adata),
-                                         height=500,
-                                         flex="1")
-    norm_violins_row = make_row(
-        pn.pane.Markdown("##   Distributions", styles={"flex":"0.1"}),
-        norm_violin_by_condition, pn.Spacer(width=10), make_vr(), pn.Spacer(width=10),
-        norm_violin_by_sample,
-        height=530,
-        width='92vw',
+    # Right becomes: tiny selector + swappable plot
+    dist_mode = pn.widgets.Select(
+        name="",
+        options=["Violins", "Line charts"],
+        value="Violins",
+        width=100,
     )
 
+    # a holder column for the plot pane
+    sample_plot_holder = pn.Column(sizing_mode="stretch_width")
+
+    def _render_sample_plot(mode: str):
+        if mode == "Line charts":
+            fig = plot_line_density_by_sample(adata)
+        else:
+            fig = plot_violin_intensity_by_sample(adata)
+        # keep the same look-and-feel using plotly_section
+        sample_plot_holder[:] = [plotly_section(fig, height=500, flex="1")]
+
+    # initial render
+    _render_sample_plot(dist_mode.value)
+    dist_mode.param.watch(lambda e: _render_sample_plot(e.new), "value")
+
+    # assemble the row box
     norm_violins_pane = pn.Row(
         pn.pane.Markdown("##   Distributions", styles={"flex":"0.1"}),
         norm_violin_by_condition,
         pn.Spacer(width=10),
         make_vr(),
         pn.Spacer(width=10),
-        norm_violin_by_sample,
+        pn.Column(
+            pn.Row(
+                pn.Row(dist_mode,
+                       styles={"z-index": "10"},
+                       margin=(20,10,0,0),
+                       width=200,
+                       sizing_mode="fixed"),
+                pn.Row(sample_plot_holder, margin=(0,0,0,-180)),
+                sizing_mode="stretch_width",
+                styles={"flex": "1"},
+            ),
+        ),
         height=530,
         margin=(0, 0, 0, 20),
         sizing_mode="stretch_width",

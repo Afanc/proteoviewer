@@ -163,7 +163,6 @@ def overview_tab(state: SessionState):
         pn.Spacer(width=25),
         cv_pane,
         pn.Spacer(width=50),
-        #width=1400,
         height=530,
         margin=(0, 0, 0, 20),
         sizing_mode="stretch_width",
@@ -183,23 +182,13 @@ def overview_tab(state: SessionState):
                                height=500,
                                sizing_mode="stretch_width",
                                styles={"flex":"1"})
-    #h_clustering_pane = pn.pane.Plotly(
-    #    plot_h_clustering_heatmap(adata),
-    #    height=400,
-    #    sizing_mode="stretch_width",
-    #)
-    #h_clustering_pane = pn.pane.Matplotlib(plot_h_clustering_heatmap(adata),
-    #                                   height=800,
-    #                                   sizing_mode="stretch_width")
     clustering_pane = pn.Row(
             pn.pane.Markdown("##   Clustering", styles={"flex": "0.1"}),
             pca_pane,
-            #pn.Spacer(width=25),
             make_vr(),
             pn.Spacer(width=60),
             umap_pane,
             make_vr(),
-            #h_clustering_pane,
             height=530,
             margin=(0, 0, 0, 20),
             sizing_mode="stretch_width",
@@ -264,7 +253,7 @@ def overview_tab(state: SessionState):
         show_imp_cond2=show_imp_cond2,
         highlight=search_input,
         sign_threshold=0.05,
-        width=900,
+        width=None,
         height=900,
     )
 
@@ -276,13 +265,14 @@ def overview_tab(state: SessionState):
 
     volcano_plot = pn.pane.Plotly(
         volcano_dmap,
-        width=900,
         height=900,
         margin=(0, 0, 0, 20),
-        sizing_mode="fixed",
+        sizing_mode="stretch_width",
+        config={'responsive': True},
         styles={
             'border-radius':  '8px',
             'box-shadow':     '3px 3px 5px #bcbcbc',
+            'flex': '1',
         }
     )
     volcano_plot.param.watch(_on_volcano_click, "click_data")
@@ -525,8 +515,14 @@ def overview_tab(state: SessionState):
             bar_holder,
             pn.Spacer(height=20),
             pep_holder,
+            sizing_mode="fixed",
+            width=840,
         ),
         margin=(0, 0, 0, 0),
+        sizing_mode="fixed",
+        styles={
+            "margin-left": "auto",     # ← push this block to the right
+        }
     )
 
     bokeh_doc = pn.state.curdoc  # for next-tick scheduling if you want it
@@ -601,6 +597,24 @@ def overview_tab(state: SessionState):
     bokeh_doc.add_next_tick_callback(lambda: (_update_info(), _update_bar(), _update_pep()))
 
     # 3) assemble into a layout, no legend‐based toggles
+    volcano_and_detail = pn.Row(
+        pn.Column(                 # left container that can stretch
+            volcano_plot,
+            sizing_mode="stretch_both",
+            styles={
+                "flex": "1",               # ← soak up remaining horizontal space
+                "min-width": "600px",      # ← keep a sane minimum for the plot
+            },
+        ),
+        pn.Spacer(width=30),
+        detail_panel,               # fixed width on the right
+        sizing_mode="stretch_width",
+        styles={
+            "align-items": "stretch",       # match heights nicely
+        },
+        margin=(-80, 0, 0, 0),
+    )
+
     volcano_pane = pn.Column(
         pn.pane.Markdown("##   Volcano plots"),
         pn.Row(
@@ -623,13 +637,8 @@ def overview_tab(state: SessionState):
             width=300,
             height=160,
         ),
-        pn.Row(
-            volcano_plot,
-            pn.Spacer(width=50),
-            detail_panel,
-            margin=(-80, 0, 0, 0),
-        ),
-        height=1100,
+        volcano_and_detail,
+        height=1060,
         margin=(0, 0, 0, 20),
         sizing_mode="stretch_width",
         styles={

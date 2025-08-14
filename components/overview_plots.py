@@ -92,7 +92,7 @@ def plot_volcanoes_wrapper(
         state=state,               # if `im` is your SessionState
         contrast=contrast,
         sign_threshold=sign_threshold,
-        width=width,
+        #width=width,
         height=height,
         show_measured=show_measured,
         show_imp_cond1=show_imp_cond1,
