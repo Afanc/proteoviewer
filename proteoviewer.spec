@@ -3,12 +3,14 @@ block_cipher = None
 VERSION = "1.1.0" #until we package that thing
 
 from PyInstaller.utils.hooks import copy_metadata
+from PyInstaller.utils.hooks import collect_tk_files
+tk_datas, tk_bins = collect_tk_files()
 
-datas=copy_metadata('anndata') + copy_metadata('scanpy') + copy_metadata('scikit-learn') + copy_metadata('scikit-misc')
+datas=copy_metadata('anndata') + copy_metadata('scanpy') + copy_metadata('scikit-learn') + copy_metadata('scikit-misc') + tk_datas
 a = Analysis(
     ['app.py'],           # your entry-point
     pathex=[],
-    #binaries=[],          # let PyInstaller auto-collect
+    binaries=[tkbins],          # let PyInstaller auto-collect
     # copy_metadata returns a list of (src, dest) pairs—exactly what PyInstaller wants
     datas=datas,
     hiddenimports=[
