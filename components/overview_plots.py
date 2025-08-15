@@ -140,6 +140,9 @@ def plot_intensity_by_protein(state, contrast, protein, layer):
     grp1, grp2 = contrast.split("_vs_")
     df = df[df["condition"].isin([grp1, grp2])]
 
+    # fix sample order
+    sample_order = ad.obs_names[ad.obs["CONDITION"].isin([grp1, grp2])].tolist()
+
     # color mapping
     conditions = sorted(ad.obs["CONDITION"].unique())
     color_map = get_color_map(conditions, palette=px.colors.qualitative.Plotly)
@@ -155,6 +158,7 @@ def plot_intensity_by_protein(state, contrast, protein, layer):
         labels={"intensity": f"{intensity_scale}", "sample": "Sample"},
         color_discrete_map=color_map,
     )
+    fig.update_xaxes(categoryorder="array", categoryarray=sample_order)
     fig.update_traces(
         marker_pattern_fillmode="overlay",
         marker_pattern_size=6,
@@ -285,12 +289,24 @@ def plot_peptide_trends_centered(adata, uniprot_id: str, contrast: str) -> go.Fi
     for y, seq in zip(X, seqs):
         if np.isnan(y).all():
             continue
+        valid = ~np.isnan(y)
+        idx = np.flatnonzero(valid)
+        singleton_sizes = np.zeros_like(y, dtype=float)
+        if idx.size:
+            # split into contiguous runs
+            breaks = np.where(np.diff(idx) != 1)[0] + 1
+            runs = np.split(idx, breaks)
+            for run in runs:
+                if run.size == 1:
+                    singleton_sizes[run[0]] = 7.0  # only this point gets a marker
+
         fig.add_trace(go.Scatter(
             x=sample_labels,
             y=y,
-            mode="lines",
+            mode="lines+markers",
             name=_truncate_name(seq),
             line=dict(color=line_cmap[seq], width=2, dash="dash"),
+            marker=dict(size=singleton_sizes, color=line_cmap[seq]),
             customdata=np.c_[np.full_like(y, seq, dtype=object), cond_labels],
             hovertemplate="<b>%{customdata[0]}</b><br>"
                           "Sample: %{x}<br>"

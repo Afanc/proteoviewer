@@ -1224,7 +1224,8 @@ def add_violin_traces(
 
                 # no outlier markers
                 points=False,
-                hoverinfo="skip",
+                #hoverinfo="skip",
+                name="",
             ),
             row=row,
             col=col,
