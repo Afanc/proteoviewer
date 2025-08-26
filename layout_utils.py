@@ -55,12 +55,12 @@ def make_section(header: str, row: pn.Row,
         styles={**SECTION_STYLES, 'background': background, 'width': width}
     )
 
-def plotly_section(fig, height, flex=None, background="white"):
+def plotly_section(fig, height, flex=None, margin=None, background="white"):
     styles = {
         'background': background,
         **({'flex': flex} if flex else {}),
     }
-    return pn.pane.Plotly(fig, height=height, styles=styles, **COMMON_PLOTLY_KW)
+    return pn.pane.Plotly(fig, height=height, margin=margin, styles=styles, **COMMON_PLOTLY_KW)
 
 
 def make_vr(color="#ccc", margin="6px 0"):

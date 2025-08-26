@@ -16,13 +16,14 @@ def plot_barplot_proteins_per_sample(
     title: str = "Proteins Detected per Sample",
     width: int = 900,
     height: int = 500,
+    sort_by: str = "sample",
 ) -> go.Figure:
     """
     Count proteins per sample and draw as a bar plot using the generic helper.
     """
     # call the generic bar helper
 
-    fig = plot_stacked_proteins_by_category(adata)
+    fig = plot_stacked_proteins_by_category(adata, sort_by=sort_by)
     return fig
 
 @log_time("Plotting violins metrics per sample")
@@ -141,7 +142,9 @@ def plot_intensity_by_protein(state, contrast, protein, layer):
     df = df[df["condition"].isin([grp1, grp2])]
 
     # fix sample order
-    sample_order = ad.obs_names[ad.obs["CONDITION"].isin([grp1, grp2])].tolist()
+    names1 = ad.obs_names[ad.obs["CONDITION"] == grp1].tolist()
+    names2 = ad.obs_names[ad.obs["CONDITION"] == grp2].tolist()
+    sample_order = sorted(names1) + sorted(names2)
 
     # color mapping
     conditions = sorted(ad.obs["CONDITION"].unique())
@@ -274,6 +277,18 @@ def plot_peptide_trends_centered(adata, uniprot_id: str, contrast: str) -> go.Fi
     X = X[:, mask]
     sample_labels = np.array(cols)[mask]
     cond_labels   = conds[mask]
+
+    #order
+    order1 = sorted([s for s, c in zip(sample_labels, cond_labels) if c == grp1])
+    order2 = sorted([s for s, c in zip(sample_labels, cond_labels) if c == grp2])
+    new_labels = order1 + order2
+
+    pos = {s: i for i, s in enumerate(sample_labels)}
+    col_idx = [pos[s] for s in new_labels]
+
+    X = X[:, col_idx]
+    sample_labels = np.array(new_labels)
+    cond_labels = np.array([grp1] * len(order1) + [grp2] * len(order2))
 
     # 3) build figure: one line per peptide, marker color by condition
     fig = go.Figure()

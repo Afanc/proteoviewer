@@ -18,6 +18,9 @@ import matplotlib.patches as mpatches
 from utils import logger, log_time
 from functools import lru_cache
 
+def _abbr(s, head=12, tail=6):
+    return s if len(s) <= head+tail+1 else f"{s[:head]}…{s[-tail:]}"
+
 def get_color_map(
     labels: List[str],
     palette: List[str] = None,
@@ -50,12 +53,14 @@ def color_ticks_by_condition(fig, samples, cond_series, cmap):
     - cmap: dict {condition -> color}
     """
     colors = [cmap[str(cond_series.loc[s])] for s in samples]
+    short = [_abbr(s) for s in samples]
+
     tickvals = list(range(len(samples)))
-    ticktext = [f"<span style='color:{c}'>{s}</span>" for s, c in zip(samples, colors)]
+    ticktext = [f"<span style='color:{c}'>{s}</span>" for s, c in zip(short, colors)]
 
     fig.update_xaxes(tickmode="array", tickvals=tickvals, ticktext=ticktext, tickangle=30)
     fig.update_yaxes(tickmode="array", tickvals=tickvals,
-                     ticktext=[f"<span style='color:{c}'>{s}</span>" for s, c in zip(samples, colors)])
+                     ticktext=[f"<span style='color:{c}'>{s}</span>" for s, c in zip(short, colors)])
     return fig
 
 def categorize_proteins_by_run_count(df: pd.DataFrame) -> pd.Series:
@@ -88,6 +93,7 @@ def plot_stacked_proteins_by_category(
     width: int = 1200,
     height: int = 500,
     title: str = "Protein IDs by Sample and Category",
+    sort_by: Literal["condition","sample"] = "sample",   # <-- NEW
 ) -> go.Figure:
 
     samples = adata.obs.index.tolist()
@@ -125,49 +131,114 @@ def plot_stacked_proteins_by_category(
             "unique"  : "red",
         }
 
+    # --- NEW: decide x order without touching colors ---
+    if sort_by == "condition":
+        # group by condition (A,B,C...), then sort samples by name within each
+        ordered_samples = []
+        for cond in unique_conds:  # alphabetical condition order
+            group = [s for s in samples if sample_conditions[s] == cond]
+            ordered_samples.extend(sorted(group))
+    elif sort_by == "sample":
+        ordered_samples = sorted(samples)
+    else:
+        ordered_samples = samples[:]
+
+    pivot=pivot.reindex(index=ordered_samples)
+
     fig = go.Figure()
 
     # 5) actual bar traces (no legend entries)
     for cat in cats:
-        fig.add_trace(go.Bar(
-            x=samples, y=pivot[cat],
-            marker_color=category_colors[cat],
-            marker_line_color=edge_colors,
-            marker_line_width=2,
-            showlegend=False,
-            hovertemplate=(
-                f"Category: {cat.capitalize()}<br>"+
-                "Count: %{y}<extra></extra>"
-            ),
-        ))
+        for cond in unique_conds:
+            xs = [s for s in ordered_samples if sample_conditions[s] == cond]  # <-- use ordered
+            if not xs:
+                continue
+            ys = pivot.loc[xs, cat].tolist()
+            fig.add_trace(go.Bar(
+                x=xs,
+                y=ys,
+                marker_color=category_colors[cat],
+                marker_line_color=[cond_color_map[cond]] * len(xs),
+                marker_line_width=2,
+                showlegend=False,                    # controlled by dummy legend items below
+                legendgroup=f"COND::{cond}",         # <-- link to condition legend item
+                customdata=np.array(samples),  # FULL names
+                hovertemplate=(f"Category: {cat.capitalize()}<br>"
+                               "Sample: %{customdata}<br>"
+                               "Count: %{y}<extra></extra>"),
+            ))
 
     # 6) total annotations
     totals = pivot.sum(axis=1)
-    for s, tot in totals.items():
-        fig.add_annotation(
-            x=s, y=tot,
-            text=str(tot),
-            showarrow=False,
-            yanchor="bottom"
-        )
 
-    # 7) Protein Category legend (left)
-    for i, cat in enumerate(cats):
-        fig.add_trace(go.Scatter(
-            x=[None], y=[None],
-            mode="markers",
-            name=cat.capitalize(),
-            marker=dict(
-                symbol="square",
-                size=12,
-                color=category_colors[cat],
-                line=dict(color="black", width=2),
-            ),
-            legend="legend1",
-            #legendgrouptitle_text="Protein Category",
+    # padding above the bar tops so the label sits just above the stack
+    y_pad = max(1.0, 0.02 * float(totals.max()))  # 2% of max height
+
+    # build annotations (one per sample), rotated 45°
+    rot_annos = []
+    for s in ordered_samples:
+        v = float(totals[s])
+        rot_annos.append(dict(
+            x=s, y=v + y_pad,
+            xref="x", yref="y",
+            text=f"{int(round(v))}",
+            showarrow=False,
+            textangle=-30,
+            xanchor="center",     # so it leans away from the bar
+            yanchor="bottom",
+            font=dict(color="black", size=11),
         ))
 
-    # 8) Sample Condition legend (right)
+    # append to any annotations you already added (e.g., the categories row)
+    existing = list(fig.layout.annotations) if fig.layout.annotations else []
+    existing.extend(rot_annos)
+    fig.update_layout(annotations=existing)
+
+    # 7) Horizontal "Categories" legend row (inert) with a boxed background
+    cat_labels = ["Complete","Shared","Sparse","Unique"]
+    cat_keys   = ["complete","shared","sparse","unique"]
+
+    # background box (legend-like)
+    fig.add_shape(
+        type="rect",
+        xref="paper", yref="paper",
+        x0=0.57, x1=0.97,          # row span (tweak if needed)
+        y0=1.14, y1=1.25,          # height of the box above the plot
+        line=dict(color="black", width=1),
+        fillcolor="white",
+        layer="above"
+    )
+
+    # lay out swatches + labels horizontally inside the box
+    x0 = 0.59                      # start x (inside the box)
+    dx = 0.10                      # spacing between items
+    y  = 1.19                      # baseline y (centered in the box)
+    sw = 0.02                      # swatch width in paper coords
+    sh = 0.018                     # swatch half-height
+
+    for i,(lab,key) in enumerate(zip(cat_labels, cat_keys)):
+        xi = x0 + i*dx
+        # swatch with black border
+        fig.add_shape(
+            type="rect",
+            xref="paper", yref="paper",
+            x0=xi, x1=xi+sw,
+            y0=y-sh, y1=y+sh,
+            line=dict(color="black", width=2),
+            fillcolor=category_colors[key],
+            layer="above"
+        )
+        # label
+        fig.add_annotation(
+            xref="paper", yref="paper",
+            x=xi+sw+0.01, y=y,
+            text=f"{lab}",
+            showarrow=False,
+            xanchor="left", yanchor="middle",
+            font=dict(size=12, color="black")
+        )
+
+    # 8) Conditions legend (interactive) — put it in the *main* legend
     for j, cond in enumerate(unique_conds):
         fig.add_trace(go.Scatter(
             x=[None], y=[None],
@@ -179,37 +250,50 @@ def plot_stacked_proteins_by_category(
                 color="white",
                 line=dict(color=cond_color_map[cond], width=2),
             ),
-            legend="legend2",
-            legendgrouptitle_text="Condition",
+            showlegend=True,
+            legendgroup=f"COND::{cond}",            # links to bar+annotation traces
+            legendgrouptitle_text=("Condition" if j == 0 else None),
+            hoverinfo="skip",
         ))
 
-    # 9) layout with two legends
+    # 9) Layout: single (main) legend on the right; single‑click only
     fig.update_layout(
         barmode="stack",
         title=dict(text=title, x=0.4),
         xaxis_title="Sample",
         yaxis_title="Number of Proteins",
         template="plotly_white",
-        width=width, height=height,
-        # first legend (categories) on the left
+        margin=dict(t=150, r=160, l=60, b=60),      # top margin for the horiz row
         legend=dict(
-            #x=1.40, y=1,
-            x=1.12, y=1.2,
+            x=1.08, y=1.19,
             xanchor="right", yanchor="top",
             bordercolor="black", borderwidth=1,
-            orientation='h',
+            orientation="v",
+            groupclick="togglegroup",               # single-click toggles the group
+            itemclick=False,
+            itemdoubleclick=False,
         ),
-        # second legend (conditions) on the right
-        legend2=dict(
-            x=1.12, y=1,
-            xanchor="right", yanchor="top",
-            bordercolor="black", borderwidth=1
-        ),
-        legend_itemclick=False,
-        legend_itemdoubleclick=False,
-        #margin=dict(l=120, r=120),
     )
-    fig.update_xaxes(tickangle=30)
+
+    fig.update_layout(
+        meta=dict(
+            ordered_samples=ordered_samples,
+            sample2cond={s: str(sample_conditions[s]) for s in ordered_samples},
+            conditions=unique_conds,
+        )
+    )
+    tickvals = ordered_samples  # categorical axis: use the category names
+    ticktext = [
+        f"<span style='color:{cond_color_map[sample_conditions[s]]}'>{_abbr(s)}</span>"
+        for s in ordered_samples
+    ]
+    fig.update_xaxes(
+        tickangle=30,
+        categoryorder="array",
+        categoryarray=ordered_samples,
+        tickvals=ordered_samples,
+        ticktext=ticktext,
+    )
     return fig
 
 def plot_bar_plotly(
@@ -597,13 +681,6 @@ def plot_cluster_heatmap_plotly(
     # 1) Clean up: fill any NaNs, but keep all rows
     df = data
 
-    # 2) Column dendrogram (samples)
-    #dendro_col = ff.create_dendrogram(
-    #    df.values.T,
-    #    orientation="bottom",
-    #    labels=list(df.columns),
-    #    linkagefun=lambda x: sch.linkage(x, method=method, metric=metric)
-    #)
     dendro_col = ff.create_dendrogram(
         df.values.T,
         orientation="bottom",
@@ -616,13 +693,6 @@ def plot_cluster_heatmap_plotly(
     for trace in dendro_col.data:
         trace["yaxis"] = "y2"
 
-    # 3) Row dendrogram (proteins)
-    #dendro_row = ff.create_dendrogram(
-    #    df.values,
-    #    orientation="right",
-    #    labels=list(df.index),
-    #    linkagefun=lambda x: sch.linkage(x, method=method, metric=metric)
-    #)
     dendro_row = ff.create_dendrogram(
         df.values,
         orientation="right",
@@ -663,7 +733,6 @@ def plot_cluster_heatmap_plotly(
         zmid=0,
         zmin=zmin,
         zmax=zmax,
-        #hoverinfo="none",
         hoverinfo="text",
         hovertemplate=
             "Protein: %{y}<br>"
@@ -693,12 +762,14 @@ def plot_cluster_heatmap_plotly(
     cmap    = get_color_map(levels, px.colors.qualitative.Plotly)
     colours = [cmap[cond_series[s]] for s in df.columns]
 
+    short = [_abbr(s) for s in df.columns]
     # inject coloured tick labels via simple HTML <span>
     fig.update_xaxes(
         tickvals = fig.layout.xaxis.tickvals,
         ticktext = [
             f"<span style='color:{col};'>{lbl}</span>"
-            for lbl,col in zip(df.columns, colours)
+            #for lbl,col in zip(df.columns, colours)
+            for lbl,col in zip(short, colours)
         ]
     )
 
@@ -798,12 +869,13 @@ def plot_binary_cluster_heatmap_plotly(
     fig.update_layout(coloraxis_showscale=False)
 
     # 5) inject colored tick labels on x-axis
+    short = [_abbr(s) for s in sample_order]
     fig.update_xaxes(
         tickmode="array",
         tickvals=list(range(len(sample_order))),
         ticktext=[
             f"<span style='color:{col};'>{lbl}</span>"
-            for lbl, col in zip(sample_order, x_colors)
+            for lbl, col in zip(short, x_colors)
         ],
         tickangle=30,
         side="bottom",
@@ -1204,6 +1276,7 @@ def add_violin_traces(
     cats = df[x].unique()
     for cat in cats:
         sub = df[df[x] == cat]
+
         fig.add_trace(
             go.Violin(
                 x=sub[x],
@@ -1224,7 +1297,6 @@ def add_violin_traces(
 
                 # no outlier markers
                 points=False,
-                #hoverinfo="skip",
                 name="",
             ),
             row=row,

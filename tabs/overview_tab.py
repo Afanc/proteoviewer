@@ -105,7 +105,96 @@ def overview_tab(state: SessionState):
         }
     )
 
-    hist_ID_fig = plot_barplot_proteins_per_sample(adata)
+    id_sort_toggle = pn.widgets.RadioButtonGroup(
+        name="Order",
+        options=["By condition", "By sample"],
+        value="By condition",
+        button_type="default",
+        sizing_mode="fixed",
+        width=170,
+        margin=(20, 0, 0, 20),
+        styles={"z-index": "10"},
+    )
+
+    # translate widget → function arg
+    def _sort_arg(mode: str) -> str:
+        return "condition" if mode == "By condition" else "sample"
+
+    hist_ID_dmap = pn.bind(
+        plot_barplot_proteins_per_sample,
+        adata=adata,
+        sort_by=pn.bind(_sort_arg, id_sort_toggle),
+    )
+
+    hist_plot_pane = pn.pane.Plotly(hist_ID_dmap,
+                       height=500,
+                       margin=(-20, 20, 0, -190),
+                       styles={"flex":"1",
+                              }
+    )
+
+#    # simple state for debounce + change detection
+#    _pending = {"flag": False}
+#    _last_sig = {"val": None}
+#
+#    def _compact_xaxis_on_legend(event):
+#        if _pending["flag"]:
+#            return  # already scheduled; let the next-tick job run once
+#
+#        _pending["flag"] = True
+#
+#        def _run():
+#            try:
+#                fig = hist_plot_pane.object
+#                if fig is None:
+#                    return
+#
+#                meta = fig.layout.meta or {}
+#                base = list(meta.get("ordered_samples", []))
+#                s2c  = dict(meta.get("sample2cond", {}))
+#
+#                # 1) Which conditions are currently ON? (read from legend marker traces)
+#                conds_on = []
+#                for tr in fig.data:
+#                    if (
+#                        getattr(tr, "type", "") == "scatter"
+#                        and getattr(tr, "mode", "") == "markers"
+#                        and isinstance(getattr(tr, "legendgroup", None), str)
+#                        and tr.legendgroup.startswith("COND::")
+#                    ):
+#                        vis = getattr(tr, "visible", True)
+#                        if vis is True or vis is None:
+#                            conds_on.append(tr.name)
+#
+#                # 2) Build the new compact order from base (stable), filtered by conds_on
+#                if conds_on:
+#                    keep = set(conds_on)
+#                    new_order = [s for s in base if s2c.get(s) in keep]
+#                else:
+#                    # If user hid all conditions, keep base order (prevents empty axis weirdness)
+#                    new_order = base
+#
+#                # 3) Skip redundant updates (prevents churn)
+#                sig = (tuple(sorted(conds_on)), tuple(new_order))
+#                if sig == _last_sig["val"]:
+#                    return
+#                _last_sig["val"] = sig
+#
+#                # 4) Apply without animation; bump uirevision to force a clean re-layout
+#                fig.update_layout(transition={"duration": 0})
+#                fig.update_layout(uirevision=f"recat-{hash(sig)}")
+#                fig.update_xaxes(categoryorder="array", categoryarray=new_order)
+#
+#                # Trigger Panel redraw
+#                hist_plot_pane.object = fig
+#            finally:
+#                _pending["flag"] = False
+#
+#        # run after Plotly’s own restyle completes (next tick)
+#        pn.state.curdoc.add_next_tick_callback(_run)
+#
+#    # listen to legend-driven restyles (visibility toggles)
+#    hist_plot_pane.param.watch(_compact_xaxis_on_legend, "restyle_data")
 
     intro_pane = pn.Row(
         pn.Column(
@@ -115,12 +204,8 @@ def overview_tab(state: SessionState):
         ),
         make_vr(),
         pn.Spacer(width=20),
-        pn.pane.Plotly(hist_ID_fig,
-                       height=500,
-                       margin=(0, 20, 0, 0),
-                       styles={"flex":"1",
-                              }
-        ),
+        id_sort_toggle,
+        hist_plot_pane,
         height=530,
         margin=(0, 0, 0, 20),
         sizing_mode="stretch_width",
@@ -131,32 +216,16 @@ def overview_tab(state: SessionState):
         }
     )
 
-
-    ## IDs barplot
-    hist_ID_fig = plot_barplot_proteins_per_sample(adata)
-    hist_pane = pn.Row(
-            pn.pane.Markdown("##   Identifications",
-                               styles={"flex":"0.1"}),
-            hist_ID_fig,
-            height=530,
-            margin=(0, 0, 0, 20),
-            sizing_mode="stretch_width",
-            styles={
-                'border-radius':  '15px',
-                'box-shadow':     '3px 3px 5px #bcbcbc',
-                'width': '98vw',
-            }
-    )
-
     ## Metric Violins
     cv_fig, rmad_fig = plot_violin_cv_rmad_per_condition(adata)
     rmad_pane = pn.pane.Plotly(rmad_fig, height=500, sizing_mode="stretch_width",
-                               styles={"flex":"1"}, config={'responsive':True})
+                               styles={"flex":"1"}, config={'responsive':True},
+                               margin=(0,0,0,-100))
     cv_pane = pn.pane.Plotly(cv_fig, height=500, sizing_mode="stretch_width",
                                styles={"flex":"1"}, config={'responsive':True})
 
     metrics_pane = pn.Row(
-        pn.pane.Markdown("##   Metrics", styles={"flex":"0.1"}),
+        pn.pane.Markdown("##   Metrics", styles={"flex":"0.1", "z-index": "10"}),
         rmad_pane,
         pn.Spacer(width=25),
         make_vr(),
@@ -177,13 +246,14 @@ def overview_tab(state: SessionState):
                               height=500,
                               sizing_mode="stretch_width",
                               styles={"flex":"1"},
+                              margin=(0,0,0,-100),
                               )
     umap_pane = pn.pane.Plotly(plot_umap_2d(state.adata),
                                height=500,
                                sizing_mode="stretch_width",
                                styles={"flex":"1"})
     clustering_pane = pn.Row(
-            pn.pane.Markdown("##   Clustering", styles={"flex": "0.1"}),
+            pn.pane.Markdown("##   Clustering", styles={"flex": "0.1", "z-index": "10"}),
             pca_pane,
             make_vr(),
             pn.Spacer(width=60),
