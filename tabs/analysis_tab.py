@@ -189,9 +189,7 @@ def analysis_tab(state):
                 _building.discard(mode)
 
                 if heatmap_toggle.value == mode:
-                    # show this pane, hide the other
-                    for m, pane in _panes.items():
-                        pane.visible = (m == mode)
+                    _reveal_mode(mode)          # << no flicker here too
 
                 if not _building:
                     heatmap_holder.loading = False
@@ -200,13 +198,22 @@ def analysis_tab(state):
 
         executor.submit(compute)
 
+    def _reveal_mode(mode: str):
+        # 1) show target
+        if not _panes[mode].visible:
+            _panes[mode].visible = True
+        # 2) hide the rest
+        for m, p in _panes.items():
+            if m != mode and p.visible:
+                p.visible = False
+
     def _on_heatmap_mode(event):
         mode = event.new
         if mode in _heatmap_ready:
-            for m, pane in _panes.items():
-                pane.visible = (m == mode)
+            _reveal_mode(mode)             # << no flicker
         else:
             _build_mode_async(mode)
+
 
     def _build_initial():
         _build_mode_async(heatmap_toggle.value)
