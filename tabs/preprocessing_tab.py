@@ -23,7 +23,7 @@ from components.texts import (
 )
 from utils import logger, log_time
 from layout_utils import plotly_section, make_vr, make_hr, make_section, make_row, FRAME_STYLES
-import textwrap
+from types import SimpleNamespace
 
 executor = ThreadPoolExecutor()
 
@@ -102,7 +102,7 @@ def preprocessing_tab(state: SessionState):
     norm_violin_by_condition = plotly_section(plot_violin_intensity_by_condition(adata),
                                             height=500,
                                             flex="0.5",
-                                            margin=(0, 0, 0, -150))
+                                            margin=(0, 0, 0, -100))
 
     # Right becomes: tiny selector + swappable plot
     dist_mode = pn.widgets.RadioButtonGroup(
@@ -162,11 +162,11 @@ def preprocessing_tab(state: SessionState):
     rmad_pane = plotly_section(plot_rmad_by_condition(adata),
                                          height=500,
                                          flex="1",
-                                         margin=(0,0,0,-100))
+                                         margin=(20,0,0,-100))
     cv_pane = plotly_section(plot_cv_by_condition(adata),
                                          height=500,
                                          flex="1",
-                                         margin=(0,0,0,-50))
+                                         margin=(20,0,0,-50))
 
     norm_metrics_pane = pn.Row(
         pn.pane.Markdown("##   Metrics", styles={"flex":"0.1", "z-index": "10"}),
@@ -174,7 +174,7 @@ def preprocessing_tab(state: SessionState):
         make_vr(),
         pn.Spacer(width=60),
         cv_pane,
-        height=520,
+        height=540,
         margin=(0, 0, 0, 20),
         sizing_mode="stretch_width",
         styles={
@@ -191,7 +191,8 @@ def preprocessing_tab(state: SessionState):
         options=list(state.adata.obs_names),
         value=state.adata.obs_names[0],
         width=150,
-        styles={"z-index": "10"}
+        styles={"z-index": "10"},
+        margin=(-10,0,0,20),
     )
 
     status_text = pn.pane.Markdown("Computing…", visible=False)
@@ -199,7 +200,7 @@ def preprocessing_tab(state: SessionState):
 
     def make_ma_row(before, after):
         return pn.Row(
-            pn.pane.Plotly(before, sizing_mode="stretch_width", margin=(0,0,0,-100)),
+            pn.pane.Plotly(before, sizing_mode="stretch_width", margin=(0,0,0,-150)),
             make_vr(),
             pn.pane.Plotly(after,  sizing_mode="stretch_width"),
             sizing_mode="stretch_width",
@@ -245,7 +246,6 @@ def preprocessing_tab(state: SessionState):
     sample_sel.param.watch(on_sample_change, "value")
 
     # Initial lazy compute AFTER first paint
-    from types import SimpleNamespace
     def _initial_ma():
         on_sample_change(SimpleNamespace(new=sample_sel.value))
     bokeh_doc.add_next_tick_callback(_initial_ma)
@@ -277,7 +277,7 @@ def preprocessing_tab(state: SessionState):
     normalization_pane = make_section(
         header="Normalization",
         row = norm_content,
-        height=1720,
+        height=1740,
         width='95vw',
         background= '#FFE0B2',
     )
@@ -288,14 +288,15 @@ def preprocessing_tab(state: SessionState):
     mv_cond_pane = plotly_section(mv_cond_fig,
                                   height=500,
                                   flex="0.5",
-                                  margin=(0,0,0,-100))
+                                  margin=(20,0,0,-100))
 
     mv_sample_pane = plotly_section(mv_sample_fig,
                                     height=500,
-                                    flex="1")
+                                    flex="1",
+                                    margin=(20,0,0,0))
 
     # Placeholders that will get the real panes inserted later (keeps look/size)
-    mv_corr_holder   = pn.Column(height=600, sizing_mode="stretch_width", styles={"flex": "0.5"})
+    mv_corr_holder   = pn.Column(height=600, sizing_mode="stretch_width", styles={"flex": "0.6"})
     mv_binary_holder = pn.Column(height=600, sizing_mode="stretch_width", styles={"flex": "1"})
 
     # One-shot builder
@@ -316,8 +317,15 @@ def preprocessing_tab(state: SessionState):
             def finish():
                 nonlocal heatmaps_built
                 # Preserve your aesthetics by wrapping with plotly_section here
-                mv_corr_holder[:] = [plotly_section(corr_heatmap_fig,  height=600, flex="0.5", margin=(0,-150,0,-100))]
-                mv_binary_holder[:] = [plotly_section(binary_heatmap_fig, height=600, flex="1")]
+                mv_corr_holder[:] = [plotly_section(corr_heatmap_fig,
+                                                    height=600,
+                                                    flex="0.5",
+                                                    margin=(0,-50,0,-50),
+                                                    )]
+                mv_binary_holder[:] = [plotly_section(binary_heatmap_fig,
+                                                      height=600,
+                                                      flex="1",
+                                                      margin=(0,0,0,0))]
                 mv_corr_holder.loading = False
                 mv_binary_holder.loading = False
                 heatmaps_built = True
@@ -363,23 +371,23 @@ def preprocessing_tab(state: SessionState):
     imput_dist_cond_pane = plotly_section(plot_grouped_violin_imputation_by_condition(adata),
                                           height=500,
                                           flex="0.5",
-                                          margin=(0,0,0,-150))
+                                          margin=(20,0,0,-100))
 
     imput_dist_samp_pane = plotly_section(plot_grouped_violin_imputation_by_sample(adata),
                                           height=500,
                                           flex="1",
-                                          margin=(0,0,0,-50))
+                                          margin=(20,0,0,-50))
 
     rmad_cond_fig, cv_cond_fig = plot_grouped_violin_imputation_metrics_by_condition(adata)
     imput_rmad_pane = plotly_section(rmad_cond_fig,
                                      height=500,
                                      flex="1",
-                                     margin=(0,0,0,-100))
+                                     margin=(20,0,0,-100))
 
     imput_cv_pane = plotly_section(cv_cond_fig,
                                    height=500,
                                    flex="1",
-                                   margin=(0,0,0,-50))
+                                   margin=(20,0,0,-50))
 
     dist_row = make_row(
         pn.pane.Markdown("##   Distributions", styles={"flex": "0.1", "z-index": "10"}),
@@ -389,7 +397,7 @@ def preprocessing_tab(state: SessionState):
         pn.Spacer(width=60),
         imput_dist_samp_pane,
         width="92vw",
-        height=520,
+        height=540,
     )
 
     metrics_row = make_row(
@@ -399,7 +407,7 @@ def preprocessing_tab(state: SessionState):
         pn.Spacer(width=60),
         imput_cv_pane,
         width="92vw",
-        height=520,
+        height=540,
     )
 
     imputation_pane = make_section(
@@ -414,7 +422,7 @@ def preprocessing_tab(state: SessionState):
         ),
         background="#FFCC80",
         width="95vw",
-        height=2340,
+        height=2380,
     )
 
     # final protein pane
@@ -430,7 +438,7 @@ def preprocessing_tab(state: SessionState):
         ),
         background="#FFF8F0",
         width="98vw",
-        height=4740,
+        height=4800,
     )
 
     return pn.Column(

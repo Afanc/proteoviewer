@@ -3,7 +3,7 @@ import numpy as np
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Literal
 from functools import lru_cache
 from scipy.cluster.hierarchy import linkage, leaves_list
 from scipy.spatial.distance import squareform
@@ -136,15 +136,18 @@ def stat_shrinkage_scatter(adata, stat: str, contrast: str, max_points: int = 50
     return fig
 
 @log_time("Plotting Hierarchical Clustering")
-def plot_h_clustering_heatmap(adata):
-    # 1) Build (genes × samples) centered DataFrame
-    mat = adata.X.copy()               # samples × genes
-    # if you’ve stored the centered matrix in a layer, swap adata.X -> adata.layers["centered"]
-    df_z = pd.DataFrame(
-        adata.layers['centered'].T,
-        index=adata.var_names,
-        columns=adata.obs_names
-    )
+def plot_h_clustering_heatmap(adata, mode: Literal["Deviations","Intensities"]="Intensities"):
+
+    tag   = "centered" if mode == "Deviations" else "intensity"
+    title = "Clustergram of deviations to the mean" if tag == "centered" else "Clustergram of final intensities"
+
+    # data: (genes × samples)
+    if tag == "centered":
+        mat = adata.layers["centered"]                # samples × genes
+    else:
+        X = adata.X
+        mat = X.toarray() if hasattr(X, "toarray") else X  # samples × genes
+    df_z = pd.DataFrame(mat.T, index=adata.var_names, columns=adata.obs_names)
 
     # 2) Prepare labels & colors
     if "GENE_NAMES" in adata.var.columns:
@@ -164,7 +167,7 @@ def plot_h_clustering_heatmap(adata):
         y_labels=y_labels,
         cond_series=cond_ser,
         colorscale="RdBu",
-        title="Clustergram of deviations to the mean",
+        title=title,
         sample_linkage=sample_linkage,
         feature_linkage=feature_linkage,
     )

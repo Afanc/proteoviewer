@@ -53,7 +53,7 @@ def color_ticks_by_condition(fig, samples, cond_series, cmap):
     - cmap: dict {condition -> color}
     """
     colors = [cmap[str(cond_series.loc[s])] for s in samples]
-    short = [_abbr(s) for s in samples]
+    short = [_abbr(s, head=6) for s in samples]
 
     tickvals = list(range(len(samples)))
     ticktext = [f"<span style='color:{c}'>{s}</span>" for s, c in zip(short, colors)]
@@ -664,7 +664,7 @@ def plot_cluster_heatmap_plotly(
     method: str = "ward",
     metric: str = "euclidean",
     colorscale: str = "vlag",
-    width: int = 800,
+    width: int = 1700,
     height: int = 800,
     title: str = "Hierarchical Clustering Heatmap",
     sample_linkage: np.ndarray = None,
@@ -720,8 +720,19 @@ def plot_cluster_heatmap_plotly(
 
     # 6) Add the heatmap of the raw (or z-scored) values
     min_val, max_val = np.nanmin(df.values), np.nanmax(df.values)
-    abs_max = max(abs(min_val), abs(max_val))
-    zmin, zmax = -abs_max, abs_max
+
+    if (min_val < 0) and (max_val > 0):
+        # centered data → symmetric diverging scale
+        abs_max = max(abs(min_val), abs(max_val))
+        zmin, zmax = -abs_max, abs_max
+        zmid = 0
+        rev  = True
+    else:
+        # nonnegative (intensities) → natural range, no zero centering
+        zmin, zmax = float(min_val), float(max_val)
+        zmid = None
+        rev  = False
+
 
     #heat = go.Heatmapgl( ??
     heat = go.Heatmap(
@@ -730,7 +741,7 @@ def plot_cluster_heatmap_plotly(
         y=dendro_row.layout.yaxis["tickvals"],
         colorscale=colorscale,
         reversescale=True,
-        zmid=0,
+        zmid=zmid,
         zmin=zmin,
         zmax=zmax,
         hoverinfo="text",

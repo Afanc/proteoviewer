@@ -44,7 +44,9 @@ def overview_tab(state: SessionState):
     analysis_type  = analysis_cfg.get("analysis_type", "")
 
 
-    # numbers of PSM removed (as you do in PDF)
+    num_samples = len(adata.obs.index.unique())
+    num_conditions = len(adata.obs["CONDITION"].unique())
+    num_contrasts = int(num_conditions*(num_conditions-1)/2)
     flt_cfg = adata.uns.get("preprocessing", {}).get("filtering", [])
     n_cont   = flt_cfg.get("cont", {}).get("number_dropped", [])
     n_q   = flt_cfg.get("qvalue", {}).get("number_dropped", [])
@@ -83,6 +85,8 @@ def overview_tab(state: SessionState):
     # build a single Markdown string
     summary_md = textwrap.dedent(f"""
         **Analysis Type**: {analysis_type}
+
+        {num_samples} Samples - {num_conditions} Conditions - {num_contrasts} Contrasts
 
         **Pipeline steps**
         - **Filtering**:

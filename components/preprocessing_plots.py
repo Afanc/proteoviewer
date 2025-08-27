@@ -8,7 +8,7 @@ import plotly.graph_objects as go
 import plotly.express as px
 from scipy.stats import gaussian_kde
 from plotly.subplots import make_subplots
-from components.plot_utils import plot_histogram_plotly, add_violin_traces, compute_metric_by_condition, get_color_map, plot_bar_plotly, plot_binary_cluster_heatmap_plotly, color_ticks_by_condition
+from components.plot_utils import plot_histogram_plotly, add_violin_traces, compute_metric_by_condition, get_color_map, plot_bar_plotly, plot_binary_cluster_heatmap_plotly, color_ticks_by_condition, _abbr
 from regression_normalization import compute_reference_values, compute_MA, fit_regression
 from utils import logger, log_time
 
@@ -117,7 +117,7 @@ def plot_violin_by_group_go(
         rows=1, cols=2,
         shared_yaxes=False,
         subplot_titles=list(subplot_titles),
-        horizontal_spacing=0.08,
+        horizontal_spacing=0.05,
     )
 
     # add violins
@@ -140,6 +140,8 @@ def plot_violin_by_group_go(
 
     # add vertical grid‐lines at each category center
     cats = df_b[group_col].unique()
+    cats = list(cats)
+
     for i, _ in enumerate(cats):
         for xref in ("x1", "x2"):
             fig.add_shape(
@@ -167,6 +169,16 @@ def plot_violin_by_group_go(
         fig.update_yaxes(showline=True, mirror=True, linecolor="black",
                          row=rid, col=cid, title_text=key)
     fig.update_yaxes(row=1, col=2, side="right")
+
+    short = [_abbr(s) for s in cats]
+    fig.update_xaxes(
+        row=1, col=1,
+        tickmode="array", tickvals=list(range(len(cats))), ticktext=short, tickangle=30,
+    )
+    fig.update_xaxes(
+        row=1, col=2,
+        tickmode="array", tickvals=list(range(len(cats))), ticktext=short, tickangle=30,
+    )
 
     return fig
 
@@ -260,7 +272,7 @@ def plot_dynamic_range(
     sorted descending, plotted on log10 scale vs. rank.
     """
     mat = adata.layers['raw']
-    vals = np.asarray(mat.mean(axis=0)).ravel()
+    vals = np.asarray(np.nanmean(mat, axis=0)).ravel()
 
     # 2) filter out zero / non-finite, take log10
     mask = np.isfinite(vals) & (vals > 0)
@@ -355,7 +367,6 @@ def plot_violin_intensity_by_sample(adata) -> go.Figure:
         colors=("blue","red"),
         subplot_titles=("Before Normalization","After Normalization"),
         title="Distribution by Sample",
-        #width=max(1500, len(im.columns)*20),
         height=600,
     )
 
@@ -646,6 +657,7 @@ def plot_rmad_by_condition(adata: AnnData) -> go.Figure:
         width=900,
         height=600,
     )
+
 @log_time("Plotting Missing Values barplots")
 def plot_mv_barplots(adata: AnnData):
     # 1) Get the raw array and sample/condition metadata
@@ -717,7 +729,8 @@ def plot_mv_barplots(adata: AnnData):
             y=mvi_per_sample[m],
             name=cond,
             marker=dict(color=cond_color_map[cond]),
-            hovertemplate="Condition: " + cond + "<br>Sample: %{x}<br>Missing: %{y}<extra></extra>",
+            customdata=np.array(sample_names)[m],  # FULL names
+            hovertemplate="Condition: " + cond + "<br>Sample: %{customdata}<br>Missing: %{y}<extra></extra>",
             showlegend=True,
         ))
 
@@ -731,115 +744,22 @@ def plot_mv_barplots(adata: AnnData):
         legend=dict(
             title=" Conditions",
             orientation="h",
-            x=0.7, xanchor="left",
+            x=0.0, xanchor="left",
             y=1.05, yanchor="bottom",
             bordercolor="black", borderwidth=1,
         ),
         # allow interactive legend toggling
         legend_itemclick="toggle",
         legend_itemdoubleclick="toggleothers",
+        margin=dict(t=130),
     )
 
     # preserve sample order on the categorical axis
     fig_samp.update_xaxes(categoryorder="array", categoryarray=order)
 
-    return fig_cond, fig_samp
-@log_time("Plotting Missing Values barplots")
-def plot_mv_barplots_old(adata: AnnData):
-    # 1) Get the raw array and sample/condition metadata
-    arr = adata.layers['normalized']           # shape: (n_samples × n_proteins)
-    sample_names = adata.obs_names.tolist()    # same order as arr’s rows
-    conds = adata.obs['CONDITION'].values      # array of length n_samples
-
-    # 2) Compute missing per sample
-    mask = np.isnan(arr)
-    mvi_per_sample = mask.sum(axis=1).astype(int)   # 1D int array
-
-    # 3) Compute missing per condition
-    #    a) find unique conditions (sorted ascending) + inverse mapping
-    unique_conds, inv = np.unique(conds, return_inverse=True)
-    #    b) sum up sample‐wise missing counts into bins
-    mvi_per_condition_vals = np.bincount(inv, weights=mvi_per_sample).astype(int)
-    #    c) to match your old `cond_levels = .index.sort_values(ascending=False)`
-    cond_levels = unique_conds[::-1]               # descending alphabetical
-    mvi_desc = mvi_per_condition_vals[::-1]        # align with cond_levels
-
-    # 4) Totals & rate
-    total_imputed     = int(mvi_per_condition_vals.sum())
-    total_entries     = arr.size
-    total_non_imputed = total_entries - total_imputed
-    rate = total_imputed / total_entries
-
-    # 5) Assemble x/y for the **condition** barplot
-    cond_labels = ["Total (Non-Missing)", "Total (Missing)"] + cond_levels.tolist()
-    cond_y      = [total_non_imputed, total_imputed] + mvi_desc.tolist()
-
-    # 6) Build a stable color map exactly as before
-    palette = px.colors.qualitative.Plotly
-    cond_color_map = {
-        "Total (Non-Missing)": "#888888",
-        "Total (Missing)"    : "#CCCCCC",
-    }
-    for i, lbl in enumerate(cond_levels):
-        cond_color_map[lbl] = palette[i % len(palette)]
-
-    # 7) Plot missing‐by‐condition (log‐y)
-    fig_cond = plot_bar_plotly(
-        x       = cond_labels,
-        y       = cond_y,
-        colors  = [cond_color_map[c] for c in cond_labels],
-        title   = f"Missing Values (ratio = {100*rate:.2f}%)",
-        x_title = "Condition",
-        y_title = "Count",
-        width   = 800,
-        height  = 400,
-    )
-    fig_cond.update_yaxes(type="log", dtick=1, exponentformat="power")
-
-    # 8) Plot missing‐by‐sample
-    sample_colors = [cond_color_map[c] for c in conds]
-    fig_samp = plot_bar_plotly(
-        x       = sample_names,
-        y       = mvi_per_sample.tolist(),
-        colors  = sample_colors,
-        title   = "Missing Values per Sample",
-        x_title = "Sample",
-        y_title = "Count",
-        width   = 1200,
-        height  = 400,
-    )
-    # hide the main trace from the legend & attach condition info for hover
-    bar = fig_samp.data[0]
-    bar.showlegend = False
-    bar.customdata = conds.tolist()
-    bar.hovertemplate = (
-        "Condition: %{customdata}<br>"
-        "Sample: %{x}<br>"
-        "Missing: %{y}<extra></extra>"
-    )
-
-    # 9) Dummy‐scatter legend entries for each condition
-    for cond, color in cond_color_map.items():
-        if cond.startswith("Total"):  # skip the two totals
-            continue
-        fig_samp.add_trace(go.Scatter(
-            x=[None], y=[None],
-            mode="markers",
-            marker=dict(symbol="square", size=10, color=color),
-            name=cond,
-            showlegend=True,
-        ))
-    fig_samp.update_layout(
-        legend=dict(
-            title=" Conditions",
-            orientation="h",
-            x=0.7, xanchor="left",
-            y=1.02, yanchor="bottom",
-            bordercolor="black", borderwidth=1,
-        ),
-        legend_itemclick=False,
-        legend_itemdoubleclick=False,
-    )
+    s2c = dict(zip(sample_names, conds))
+    ticktext = [f"<span style='color:{cond_color_map[s2c[s]]}'>{_abbr(s)}</span>" for s in order]
+    fig_samp.update_xaxes(tickmode="array", tickvals=order, ticktext=ticktext, tickangle=30)
 
     return fig_cond, fig_samp
 
@@ -877,10 +797,14 @@ def plot_mv_heatmaps(adata:AnnData):
         labels=dict(x="", y="", color="Corr"),
     )
     fig_corr.update_layout(
-        title=dict(text="Missing Values Correlation Heatmap", x=0.5),
-        coloraxis_colorbar=dict(x=0.90),
+        title=dict(text="Missing Values Correlation Heatmap", x=0.5,
+                   pad=dict(t=0, b=0), y=0.90),
+        #coloraxis_colorbar=dict(x=0.10, y=-0.25, len=0.5, orientation='h'),
+        coloraxis_colorbar=dict(len=0.5),
     ),
     color_ticks_by_condition(fig_corr, samples, cond_ser, cmap_cond)
+
+    fig_corr.update_layout(margin=dict(pad=0))
 
     return (fig_binary, fig_corr)
 
@@ -1035,6 +959,13 @@ def plot_grouped_violin_imputation_by_sample(
                 width=offset * 1.8,
                 spanmode='hard',
                 scalemode='width',
+                #customdata=[sample] * len(sub),  # FULL sample name
+                #hovertemplate=(
+                #    "Type: %{fullData.name}<br>"   # “Measured” / “Imputed”
+                #    "Value: %{y:.3f}"
+                #    "<extra>%{customdata}</extra>" # ← only change the extra box
+                #),
+                #hovertemplate="Sample: %{customdata}<br>Type: %{fullData.name}<br>Value: %{y:.3f}<extra></extra>",
             ))
             first_seen[norm_label] = True
 
@@ -1044,6 +975,7 @@ def plot_grouped_violin_imputation_by_sample(
             x=i, line=dict(color='gray', dash='dot', width=1), layer='above'
         )
     fig.update_traces(box_visible=True, meanline_visible=True)
+    short = [_abbr(s) for s in samples]
     fig.update_layout(
         template='plotly_white',
         violinmode='overlay',
@@ -1053,7 +985,7 @@ def plot_grouped_violin_imputation_by_sample(
             title='Sample',
             tickmode='array',
             tickvals=list(idx_map.values()),
-            ticktext=samples,
+            ticktext=short,
             tickangle=30,
             showline=True, mirror=True, linecolor='black',
         ),
@@ -1212,7 +1144,7 @@ def plot_line_density_by_sample(
         rows=1, cols=2,
         shared_yaxes=False,
         subplot_titles=["Before Normalization", "After Normalization"],
-        horizontal_spacing=0.08,
+        horizontal_spacing=0.05,
     )
 
     # LEFT: Before  |  RIGHT: After
@@ -1245,7 +1177,7 @@ def plot_line_density_by_sample(
         title=dict(text="Distribution by Sample", x=0.5),
         legend=dict(
             y=1.0, yanchor="top",
-            x=1.02, xanchor="left",
+            x=1.08, xanchor="left",
             orientation="v",
             itemwidth=60,
             bordercolor="black", borderwidth=1,
@@ -1253,8 +1185,11 @@ def plot_line_density_by_sample(
         ),
         #margin=dict(l=60, r=140, t=60, b=60),
     )
+
     for c in (1, 2):
         fig.update_xaxes(title_text="Intensity", showline=True, linecolor="black", mirror=True, row=1, col=c)
         fig.update_yaxes(title_text="Density",   showline=True, linecolor="black", mirror=True, row=1, col=c)
+    fig.update_yaxes(row=1, col=2, side="right")
+
     return fig
 
