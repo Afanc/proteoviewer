@@ -798,7 +798,7 @@ def plot_mv_heatmaps(adata:AnnData):
     )
     fig_corr.update_layout(
         title=dict(text="Missing Values Correlation Heatmap", x=0.5,
-                   pad=dict(t=0, b=0), y=0.90),
+                   pad=dict(t=0, b=0), y=0.95),
         #coloraxis_colorbar=dict(x=0.10, y=-0.25, len=0.5, orientation='h'),
         coloraxis_colorbar=dict(len=0.5),
     ),
