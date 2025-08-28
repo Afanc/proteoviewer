@@ -137,69 +137,6 @@ def overview_tab(state: SessionState):
                               }
     )
 
-#    # simple state for debounce + change detection
-#    _pending = {"flag": False}
-#    _last_sig = {"val": None}
-#
-#    def _compact_xaxis_on_legend(event):
-#        if _pending["flag"]:
-#            return  # already scheduled; let the next-tick job run once
-#
-#        _pending["flag"] = True
-#
-#        def _run():
-#            try:
-#                fig = hist_plot_pane.object
-#                if fig is None:
-#                    return
-#
-#                meta = fig.layout.meta or {}
-#                base = list(meta.get("ordered_samples", []))
-#                s2c  = dict(meta.get("sample2cond", {}))
-#
-#                # 1) Which conditions are currently ON? (read from legend marker traces)
-#                conds_on = []
-#                for tr in fig.data:
-#                    if (
-#                        getattr(tr, "type", "") == "scatter"
-#                        and getattr(tr, "mode", "") == "markers"
-#                        and isinstance(getattr(tr, "legendgroup", None), str)
-#                        and tr.legendgroup.startswith("COND::")
-#                    ):
-#                        vis = getattr(tr, "visible", True)
-#                        if vis is True or vis is None:
-#                            conds_on.append(tr.name)
-#
-#                # 2) Build the new compact order from base (stable), filtered by conds_on
-#                if conds_on:
-#                    keep = set(conds_on)
-#                    new_order = [s for s in base if s2c.get(s) in keep]
-#                else:
-#                    # If user hid all conditions, keep base order (prevents empty axis weirdness)
-#                    new_order = base
-#
-#                # 3) Skip redundant updates (prevents churn)
-#                sig = (tuple(sorted(conds_on)), tuple(new_order))
-#                if sig == _last_sig["val"]:
-#                    return
-#                _last_sig["val"] = sig
-#
-#                # 4) Apply without animation; bump uirevision to force a clean re-layout
-#                fig.update_layout(transition={"duration": 0})
-#                fig.update_layout(uirevision=f"recat-{hash(sig)}")
-#                fig.update_xaxes(categoryorder="array", categoryarray=new_order)
-#
-#                # Trigger Panel redraw
-#                hist_plot_pane.object = fig
-#            finally:
-#                _pending["flag"] = False
-#
-#        # run after Plotly’s own restyle completes (next tick)
-#        pn.state.curdoc.add_next_tick_callback(_run)
-#
-#    # listen to legend-driven restyles (visibility toggles)
-#    hist_plot_pane.param.watch(_compact_xaxis_on_legend, "restyle_data")
-
     intro_pane = pn.Row(
         pn.Column(
             pn.pane.Markdown("##   Summary"),

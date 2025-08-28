@@ -4,6 +4,7 @@ import plotly.graph_objects as go
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 from types import SimpleNamespace
+from contextlib import contextmanager
 
 from components.analysis_plots import (
     residual_variance_hist,
@@ -128,7 +129,8 @@ def analysis_tab(state):
     )
 
     # Clustering
-    # --- Clustering (warning-free, stable panes) ---
+    # --- Clustering (same pattern as volcano detail: holder + single pane + loader) ---
+
     heatmap_toggle = pn.widgets.RadioButtonGroup(
         name="Matrix",
         options=["Deviations", "Intensities"],
@@ -136,90 +138,93 @@ def analysis_tab(state):
         button_type="default",
         width=170,
         styles={"z-index": "10"},
-        margin=(10,0,0,0),
+        margin=(10, 0, 0, 0),
     )
 
-    _modes = ("Deviations", "Intensities")
+    # One persistent pane for fast swaps
+    _heatmap_pane = pn.pane.Plotly(
+        go.Figure(),
+        height=800,
+        sizing_mode="stretch_width",
+        config={"responsive": True},
+        margin=(0,100,0,-100),
+        styles={'width': '95vw'},
+    )
 
-    # persistent Plotly panes; we never remove them, just toggle .visible and update .object
-    _panes = {
-        m: plotly_section(go.Figure(),
-                          height=800,
-                          margin=(0,0,0,-200),
-                          flex='1')
-        for m in _modes
-    }
-    for m, pane in _panes.items():
-        pane.visible = False
-        pane.min_width = 0
+    # Holder starts with a Spacer so the first-load overlay is visible
+    heatmap_holder = pn.Column(
+        pn.Spacer(height=800),
+        sizing_mode="stretch_width",
+        height=820,
+        margin=(0,100,0,-100),
+        styles={"flex": "1", "min-width": "0", 'width': '95vw'},
+    )
 
-    # a Column that always contains both panes (stable children)
-    heatmap_holder = pn.Column(*_panes.values(),
-                               height=800,
-                               sizing_mode="stretch_width",
-                               margin=(0,0,0,-100),
-                               styles={"flex": "1", "min-width": "0"})
+    # Cache & worker (single worker; build only on demand)
+    _heatmap_cache: dict[str, go.Figure] = {}
+    _building: set[str] = set()
+    _executor = ThreadPoolExecutor(max_workers=1)
+    bokeh_doc = pn.state.curdoc
 
-    _heatmap_ready = set()
-    _building       = set()
-    _last_req_id    = {m: 0 for m in _modes}
+    def _render_heatmap(mode: str) -> go.Figure:
+        return plot_h_clustering_heatmap(adata, mode=mode)
 
-    def _build_mode_async(mode: str):
-        if mode in _heatmap_ready or mode in _building:
+    def _normalize_plotly(fig: go.Figure) -> go.Figure:
+        # Clear hard sizes so Panel can stretch it
+        try:
+            fig.update_layout(autosize=True)
+            fig.layout.width = None
+            # Let the pane control height (we set pane height=800)
+            if getattr(fig.layout, "height", None) is not None:
+                fig.layout.height = None
+        except Exception:
+            pass
+        return fig
+
+    def _mount_once():
+        if _heatmap_pane not in heatmap_holder.objects:
+            heatmap_holder[:] = [_heatmap_pane]
+
+    def _apply_figure(fig: go.Figure):
+        _heatmap_pane.object = fig
+        _mount_once()
+
+    def _build_async(mode: str, show_after_build: bool):
+        if mode in _heatmap_cache or mode in _building:
             return
         _building.add(mode)
-        _last_req_id[mode] += 1
-        req_id = _last_req_id[mode]
+        if show_after_build:
+            heatmap_holder.loading = True
 
-        heatmap_holder.loading = True
-
-        def compute():
-            fig = plot_h_clustering_heatmap(adata, mode=mode)
+        def worker():
+            fig = _normalize_plotly(_render_heatmap(mode))
 
             def finish():
-                if req_id != _last_req_id[mode]:
-                    _building.discard(mode)
-                    if not _building:
-                        heatmap_holder.loading = False
-                    return
-
-                # update persistent pane
-                _panes[mode].object = fig
-                _heatmap_ready.add(mode)
-                _building.discard(mode)
-
-                if heatmap_toggle.value == mode:
-                    _reveal_mode(mode)          # << no flicker here too
-
-                if not _building:
+                _heatmap_cache[mode] = fig
+                if show_after_build:
+                    _apply_figure(fig)
+                    # Clear the overlay regardless of other background work
                     heatmap_holder.loading = False
+                _building.discard(mode)
 
             bokeh_doc.add_next_tick_callback(finish)
 
-        executor.submit(compute)
+        _executor.submit(worker)
 
-    def _reveal_mode(mode: str):
-        # 1) show target
-        if not _panes[mode].visible:
-            _panes[mode].visible = True
-        # 2) hide the rest
-        for m, p in _panes.items():
-            if m != mode and p.visible:
-                p.visible = False
+    def _show_mode(mode: str):
+        if mode in _heatmap_cache:
+            _apply_figure(_heatmap_cache[mode])  # instant swap
+        else:
+            _build_async(mode, show_after_build=True)
 
     def _on_heatmap_mode(event):
-        mode = event.new
-        if mode in _heatmap_ready:
-            _reveal_mode(mode)             # << no flicker
-        else:
-            _build_mode_async(mode)
+        if event.old == event.new:
+            return
+        _show_mode(event.new)
 
-
-    def _build_initial():
-        _build_mode_async(heatmap_toggle.value)
-
+    heatmap_holder.loading = True
+    bokeh_doc.add_next_tick_callback(lambda: _show_mode(heatmap_toggle.value))
     heatmap_toggle.param.watch(_on_heatmap_mode, "value")
-    bokeh_doc.add_next_tick_callback(_build_initial)
 
     h_clustering_pane = make_row(
         pn.pane.Markdown("##   Clustering", styles={"flex": "0.05", "z-index": "10"}),

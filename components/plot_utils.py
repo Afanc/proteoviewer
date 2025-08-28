@@ -809,7 +809,7 @@ def plot_cluster_heatmap_plotly(
 
     # 7) Tidy up layout
     fig.update_layout({
-        "width": width, "height": height,
+        #"width": width, "height": height,
         "showlegend": True,
         "hovermode": "closest",
         "title": {"text": title, "x": 0.5},
@@ -826,9 +826,9 @@ def plot_cluster_heatmap_plotly(
                              "zeroline":False, "showticklabels":False,
                              "ticks":""})
     fig.update_layout(yaxis2={"domain":[0.825,0.975], "mirror":False,
-                              "showgrid":False, "showline":False,
-                              "zeroline":False, "showticklabels":False,
-                              "ticks":""})
+                      "showgrid":False, "showline":False,
+                      "zeroline":False, "showticklabels":False,
+                      "ticks":""})
 
     return fig
 
