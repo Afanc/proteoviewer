@@ -1,6 +1,6 @@
 # -*- mode: python -*-
 block_cipher = None
-VERSION = "1.2.1" #until we package that thing
+VERSION = "1.2.2" #until we package that thing
 
 from PyInstaller.utils.hooks import copy_metadata
 

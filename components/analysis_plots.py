@@ -158,8 +158,10 @@ def plot_h_clustering_heatmap(adata, mode: Literal["Deviations","Intensities"]="
     cond_ser = adata.obs["CONDITION"].reindex(df_z.columns)
 
     # 3) Grab your precomputed linkages
-    sample_linkage  = adata.uns["sample_linkage"]
-    feature_linkage = adata.uns["feature_linkage"]
+    sample_link_name = f"{tag}_sample_linkage"
+    feature_link_name = f"{tag}_feature_linkage"
+    sample_linkage  = adata.uns[sample_link_name]
+    feature_linkage = adata.uns[feature_link_name]
 
     # 4) Draw the heatmap using those linkages
     fig = plot_cluster_heatmap_plotly(
