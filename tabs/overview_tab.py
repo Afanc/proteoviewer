@@ -56,6 +56,24 @@ def overview_tab(state: SessionState):
     thresh_pep = flt_cfg.get("pep", {}).get("threshold", 0)
     thresh_re = flt_cfg.get("rec", {}).get("threshold", 0)
 
+    def _fmt_step(step: dict, name: str, default_thr: str) -> tuple[str, str]:
+        if not step:
+            return "Skipped", "n/a"
+        if step.get("skipped"):
+            # our preprocessing metadata sets 'skipped': True when the column is absent
+            return "Skipped", "n/a"
+        return f"{step.get('number_dropped', 0):,} PSM removed", str(step.get("threshold", default_thr))
+
+    cont_step = flt_cfg.get("cont", {})
+    q_step    = flt_cfg.get("qvalue", {})
+    pep_step  = flt_cfg.get("pep", {})
+    rec_step  = flt_cfg.get("rec", {})
+
+    cont_txt, _          = _fmt_step(cont_step, "cont", "n/a")
+    q_txt,    q_thr_txt  = _fmt_step(q_step,    "qvalue", "n/a")
+    pep_txt,  pep_thr_txt= _fmt_step(pep_step,  "pep", "n/a")
+    rec_txt,  rec_thr_txt= _fmt_step(rec_step,  "rec", "n/a")
+
     contaminants_files = [os.path.basename(p) for p in flt_cfg.get('cont', {}).get('files', [])]
 
     # Norm condensation
@@ -90,10 +108,10 @@ def overview_tab(state: SessionState):
 
         **Pipeline steps**
         - **Filtering**:
-            - Contaminants ({', '.join(contaminants_files)}): {n_cont:,} PSM removed
-            - q-value ≤ {thresh_q}: {n_q:,} PSM removed
-            - PEP ≤ {thresh_pep}: {n_pep:,} PSM removed
-            - Min. run evidence count = {thresh_re}: {n_re:,} PSM removed
+            - Contaminants ({', '.join(contaminants_files)}): {cont_txt}
+            - q-value ≤ {q_thr_txt}: {q_txt}
+            - PEP ≤ {pep_thr_txt}: {pep_txt}
+            - Min. run evidence count = {rec_thr_txt}: {rec_txt}
         - **Normalization**: {norm_methods}
         - **Imputation**: {imp_method}
         - **Differential expression**: eBayes via {ebayes_method}
@@ -338,8 +356,22 @@ def overview_tab(state: SessionState):
             else:
                 return f"{v:.2e}"
 
-        re_count = _fmt_int(adata.var["PRECURSORS_EXP"].iloc[idx])
-        ibaq_val = _fmt_ibaq(adata.var["IBAQ"].iloc[idx])
+        def _safe_var(name, default=None):
+            try:
+                if name in adata.var.columns:
+                    return adata.var[name].iloc[idx]
+            except Exception:
+                pass
+            return default
+
+        #re_count = _fmt_int(adata.var["PRECURSORS_EXP"].iloc[idx])
+        #ibaq_val = _fmt_ibaq(adata.var["IBAQ"].iloc[idx])
+
+        rec_val  = _safe_var("PRECURSORS_EXP", default=None)
+        ibaq_raw = _safe_var("IBAQ", default=None)
+
+        re_count = _fmt_int(rec_val) if rec_val is not None else "n/a"
+        ibaq_val = _fmt_ibaq(ibaq_raw) if ibaq_raw is not None else "n/a"
 
         Number = pn.indicators.Number
 
@@ -416,13 +448,25 @@ def overview_tab(state: SessionState):
         except Exception:
             string_link = ""
 
+        left_bits = []
+        if rec_val is not None:
+            left_bits.append(f"Precursors (global): <b>{re_count}</b>")
+        if ibaq_raw is not None:
+            left_bits.append(f"iBAQ: <b>{ibaq_val}</b>")
+        # If neither is available, show a friendly placeholder
+        if not left_bits:
+            left_bits.append("No extra protein metrics available")
+
         footer_left = pn.pane.HTML(
-            f"<span style='font-size: 12px;'>"
-            f"Precursors (global): <b>{re_count}</b>"
-            f" &nbsp;|&nbsp; "
-            f"iBAQ: <b>{ibaq_val}</b>"
-            f"</span>"
+            "<span style='font-size: 12px;'>" + " &nbsp;|&nbsp; ".join(left_bits) + "</span>"
         )
+        #footer_left = pn.pane.HTML(
+        #    f"<span style='font-size: 12px;'>"
+        #    f"Precursors (global): <b>{re_count}</b>"
+        #    f" &nbsp;|&nbsp; "
+        #    f"iBAQ: <b>{ibaq_val}</b>"
+        #    f"</span>"
+        #)
 
         footer_right = pn.pane.HTML(
             f"<span style='font-size: 12px;'>"

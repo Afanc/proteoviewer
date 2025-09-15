@@ -733,7 +733,6 @@ def plot_cluster_heatmap_plotly(
         zmid = None
         rev  = False
 
-
     #heat = go.Heatmapgl( ??
     heat = go.Heatmap(
         z=df.values,

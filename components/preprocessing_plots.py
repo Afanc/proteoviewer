@@ -12,6 +12,16 @@ from components.plot_utils import plot_histogram_plotly, add_violin_traces, comp
 from regression_normalization import compute_reference_values, compute_MA, fit_regression
 from utils import logger, log_time
 
+def _placeholder_plot(title: str, subtitle: str = "Not available for this dataset"):
+    fig = go.Figure()
+    fig.update_layout(
+        title=dict(text=f"<b>{title}</b><br><sup>{subtitle}</sup>", x=0.5),
+        xaxis_visible=False, yaxis_visible=False,
+        margin=dict(l=10, r=10, t=60, b=10),
+        showlegend=False,
+    )
+    return fig
+
 def prepare_long_df(
     df: pd.DataFrame,
     label: str,
@@ -184,6 +194,71 @@ def plot_violin_by_group_go(
 
 @log_time("Plotting filtered data histograms")
 def plot_filter_histograms(adata: AnnData) -> Dict[str, go.Figure]:
+    flt = adata.uns.get("preprocessing", {}).get("filtering", {})
+    figs: Dict[str, go.Figure] = {}
+
+    def _one(metric_key: str, label: str) -> go.Figure:
+        m = flt.get(metric_key) or {}
+        thr = m.get("threshold", None)
+        vals = m.get("raw_values", None)
+        if m.get("skipped") or thr is None or vals is None or len(vals) == 0:
+            return _placeholder_plot(f"{label} filtering")
+
+        vals = np.asarray(vals)
+        vals = vals[np.isfinite(vals)]
+
+        # Direction-aware title for PEP (FragPipe)
+        dir_note = m.get("direction", "lower_or_equal")
+        if dir_note == "greater_or_equal":
+            thr_label = f"Cutoff: ≥ {thr}"
+        else:
+            thr_label = f"Cutoff: ≤ {thr}"
+
+        kept    = m.get("number_kept", 0)
+        dropped = m.get("number_dropped", 0)
+        fmt = lambda n: f"{n:,}".replace(",", "'")
+
+        title_md = f"{label}<br>{thr_label}, kept: {fmt(kept)}, dropped: {fmt(dropped)}"
+
+        fig = go.Figure(go.Histogram(
+            x=vals, nbinsx=80,
+            marker_line_color="black", marker_line_width=1,
+            showlegend=False, hoverinfo="none",
+        ))
+        fig.add_vline(x=thr, line=dict(color="red", dash="dash"))
+
+        if metric_key == "pep":
+            x_min, x_max = float(np.nanmin(vals)), float(np.nanmax(vals))
+            # If values live in [0,1], use that domain; else keep data-driven min/max
+            prob_domain = 0.0 <= x_min <= 1.0 and 0.0 <= x_max <= 1.0
+            if dir_note == "greater_or_equal":      # FragPipe MaxPepProb
+                lo = max(thr, 0.0) if prob_domain else max(thr, x_min)
+                hi = 1.0 if prob_domain else x_max
+            else:                                    # Spectronaut PEP
+                lo = 0.0 if prob_domain else x_min
+                hi = min(thr, x_max)
+            fig.update_xaxes(range=[lo, hi])
+            # tighten bins to the visible range
+            nbins = 80
+            fig.update_traces(xbins=dict(
+                start=lo, end=hi, size=max((hi - lo) / nbins, 1e-6)
+            ))
+
+        fig.update_layout(
+            title=dict(text=title_md, x=0.5),
+            xaxis_title=label, yaxis_title="Count",
+            yaxis_type="log", template="plotly_white",
+            width=600, height=400,
+        )
+        fig.update_yaxes(dtick=1, exponentformat="power", showexponent="all")
+        return fig
+
+    figs["qvalue"]             = _one("qvalue", "Q-value")
+    figs["pep"]                = _one("pep", "PEP")
+    figs["run_evidence_count"] = _one("rec", "Run Evidence Count")
+    return figs
+
+def plot_filter_histograms_old(adata: AnnData) -> Dict[str, go.Figure]:
     """
     Return three separate histograms (Q-value, PEP, run evidence count)
     of everything *before* filtering, each with its own threshold line.

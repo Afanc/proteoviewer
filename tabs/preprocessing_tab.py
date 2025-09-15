@@ -16,6 +16,7 @@ from components.preprocessing_plots import (
     plot_grouped_violin_imputation_by_condition,
     plot_grouped_violin_imputation_by_sample,
     plot_grouped_violin_imputation_metrics_by_condition,
+    _placeholder_plot,
 )
 from components.texts import (
     intro_preprocessing_text,
@@ -40,11 +41,28 @@ def preprocessing_tab(state: SessionState):
     adata = state.adata
 
     ## filtering histograms
-    hists = plot_filter_histograms(adata)
+    try:
+        hists = plot_filter_histograms(adata)
+        q_fig = hists.get('qvalue')
+        p_fig = hists.get('pep')
+        r_fig = hists.get('run_evidence_count')
+    except Exception as e:
+        # Make it crystal clear in logs but keep the UI alive
+        logger.warning(f"plot_filter_histograms failed ({e}); showing placeholders.")
+        q_fig = p_fig = r_fig = None
 
-    q = plotly_section(hists['qvalue'], height=400, flex="0.32", margin=(0,0,0,-100))
-    p = plotly_section(hists['pep'], height=400, flex='0.32')
-    r = plotly_section(hists['run_evidence_count'], height=400, flex='0.32')
+    # Graceful placeholders if any figure is missing
+    q = plotly_section(q_fig if q_fig is not None else _placeholder_plot("q-value filtering"),
+                       height=400, flex="0.32", margin=(0,0,0,-100))
+    p = plotly_section(p_fig if p_fig is not None else _placeholder_plot("PEP filtering"),
+                       height=400, flex='0.32')
+    r = plotly_section(r_fig if r_fig is not None else _placeholder_plot("Run-evidence filtering"),
+                       height=400, flex='0.32')
+    #hists = plot_filter_histograms(adata)
+
+    #q = plotly_section(hists['qvalue'], height=400, flex="0.32", margin=(0,0,0,-100))
+    #p = plotly_section(hists['pep'], height=400, flex='0.32')
+    #r = plotly_section(hists['run_evidence_count'], height=400, flex='0.32')
 
     filtering_row = make_row(
         pn.pane.Markdown("##   Filtering", styles={"flex": "0.05", "z-index": "10"}),
