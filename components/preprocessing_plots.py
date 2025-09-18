@@ -209,7 +209,7 @@ def plot_filter_histograms(adata: AnnData) -> Dict[str, go.Figure]:
 
         # Direction-aware title for PEP (FragPipe)
         dir_note = m.get("direction", "lower")
-        if dir_note == "greater":
+        if dir_note == "greater_or_equal":
             thr_label = f"Cutoff: ≥ {thr}"
         else:
             thr_label = f"Cutoff: ≤ {thr}"
