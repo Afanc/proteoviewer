@@ -54,7 +54,7 @@ def preprocessing_tab(state: SessionState):
     # Graceful placeholders if any figure is missing
     q = plotly_section(q_fig if q_fig is not None else _placeholder_plot("q-value filtering"),
                        height=400, flex="0.32", margin=(0,0,0,-100))
-    p = plotly_section(p_fig if p_fig is not None else _placeholder_plot("PEP filtering"),
+    p = plotly_section(p_fig if p_fig is not None else _placeholder_plot("Probab. filtering"),
                        height=400, flex='0.32')
     r = plotly_section(r_fig if r_fig is not None else _placeholder_plot("Run-evidence filtering"),
                        height=400, flex='0.32')

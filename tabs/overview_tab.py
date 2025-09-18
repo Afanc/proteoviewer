@@ -20,6 +20,24 @@ from layout_utils import plotly_section, make_vr, make_hr, make_section, make_ro
 from utils import logger, log_time
 import textwrap
 
+def _fmt_files_list(files, max_items=6):
+    """Return bullet lines for files, truncated to max_items with a '+N more' line."""
+    if not files:
+        return []
+    short = [f"  - {os.path.basename(str(f))}" for f in files[:max_items]]
+    rest = max(0, len(files) - max_items)
+    if rest:
+        short.append(f"  - … (+{rest} more)")
+    return short
+
+def _fmt_tags_list(tags):
+    """Format tags as 'a, b, c' (no brackets/quotes)."""
+    if tags is None:
+        return ""
+    if isinstance(tags, (list, tuple)):
+        return ", ".join(str(t) for t in tags)
+    return str(tags)
+
 @log_time("Preparing Overview Tab")
 def overview_tab(state: SessionState):
     """
@@ -40,9 +58,9 @@ def overview_tab(state: SessionState):
     filtering      = preproc_cfg.get("filtering", {})
     normalization  = preproc_cfg.get("normalization", {})
     imputation     = preproc_cfg.get("imputation", {})
+    analysis_type  = preproc_cfg.get("analysis_type", "DIA")
     ebayes_method  = analysis_cfg.get("ebayes_method", "limma")
-    analysis_type  = analysis_cfg.get("analysis_type", "")
-
+    input_layout  = preproc_cfg.get("input_layout", "")
 
     num_samples = len(adata.obs.index.unique())
     num_conditions = len(adata.obs["CONDITION"].unique())
@@ -72,17 +90,25 @@ def overview_tab(state: SessionState):
     cont_txt, _          = _fmt_step(cont_step, "cont", "n/a")
     q_txt,    q_thr_txt  = _fmt_step(q_step,    "qvalue", "n/a")
     pep_txt,  pep_thr_txt= _fmt_step(pep_step,  "pep", "n/a")
+    pep_op = "≥" if flt_cfg.get("pep").get("direction").startswith("greater") else "≤"
     rec_txt,  rec_thr_txt= _fmt_step(rec_step,  "rec", "n/a")
 
     contaminants_files = [os.path.basename(p) for p in flt_cfg.get('cont', {}).get('files', [])]
 
     # Norm condensation
-    norm_methods = normalization.get("method", [])
-    if isinstance(norm_methods, list):
-        norm_methods = "+".join(norm_methods)
+    norm_methods = normalization.get("method", []).tolist()
+    #if isinstance(norm_methods, list):
+    #    norm_methods = "+".join(norm_methods)
     if "loess" in norm_methods:
-        loess_span = preproc.get("normalization").get("loess_span")
+        loess_span = preproc_cfg.get("normalization").get("loess_span")
         norm_methods += f" (loess_span={loess_span})"
+    if "median_equalization_by_tag" in norm_methods:
+        tags = preproc_cfg.get("normalization").get("reference_tag").tolist()
+        tag_matches = preproc_cfg.get("normalization").get("tag_matches")
+        median_index = norm_methods.index("median_equalization_by_tag")
+        norm_methods[median_index] += " " + f"(tags={tags}, matches={tag_matches})  "
+
+    norm_methods = ", ".join(norm_methods)
 
     # Imputation condensation
     imp_method = imputation.get("method", "")
@@ -102,15 +128,18 @@ def overview_tab(state: SessionState):
 
     # build a single Markdown string
     summary_md = textwrap.dedent(f"""
+
         **Analysis Type**: {analysis_type}
 
         {num_samples} Samples - {num_conditions} Conditions - {num_contrasts} Contrasts
+
+        **Input Layout**: {input_layout}
 
         **Pipeline steps**
         - **Filtering**:
             - Contaminants ({', '.join(contaminants_files)}): {cont_txt}
             - q-value ≤ {q_thr_txt}: {q_txt}
-            - PEP ≤ {pep_thr_txt}: {pep_txt}
+            - PEP {pep_op} {pep_thr_txt}: {pep_txt}
             - Min. run evidence count = {rec_thr_txt}: {rec_txt}
         - **Normalization**: {norm_methods}
         - **Imputation**: {imp_method}
@@ -122,8 +151,11 @@ def overview_tab(state: SessionState):
         sizing_mode="stretch_width",
         margin=(-10, 0, 0, 20),
         styles={
-            "line-height":"1.4em"
+            "line-height":"1.4em",
             #"white-space": "pre-wrap",
+            "word-break": "break-word",
+            "overflow-wrap": "anywhere",
+            "min-width": "0",
         }
     )
 
@@ -159,7 +191,7 @@ def overview_tab(state: SessionState):
         pn.Column(
             pn.pane.Markdown("##   Summary"),
             summary_pane,
-            styles={"flex":"0.32"}
+            styles={"flex":"0.32", "min-width": "0"}
         ),
         make_vr(),
         pn.Spacer(width=20),
