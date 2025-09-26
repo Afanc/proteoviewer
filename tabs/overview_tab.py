@@ -9,6 +9,8 @@ from components.overview_plots import (
     plot_intensity_by_protein,
     get_protein_info,
     plot_peptide_trends_centered,
+    resolve_pattern_to_uniprot_ids,
+    plot_group_violin_for_volcano,
 )
 from components.plot_utils import plot_pca_2d, plot_umap_2d
 from components.texts import (
@@ -65,6 +67,7 @@ def overview_tab(state: SessionState):
     num_samples = len(adata.obs.index.unique())
     num_conditions = len(adata.obs["CONDITION"].unique())
     num_contrasts = int(num_conditions*(num_conditions-1)/2)
+    quant_method = preproc_cfg.get("quantification_method", "sum")
     flt_cfg = adata.uns.get("preprocessing", {}).get("filtering", [])
     n_cont   = flt_cfg.get("cont", {}).get("number_dropped", [])
     n_q   = flt_cfg.get("qvalue", {}).get("number_dropped", [])
@@ -103,7 +106,9 @@ def overview_tab(state: SessionState):
         loess_span = preproc_cfg.get("normalization").get("loess_span")
         norm_methods += f" (loess_span={loess_span})"
     if "median_equalization_by_tag" in norm_methods:
-        tags = preproc_cfg.get("normalization").get("reference_tag").tolist()
+        tags = preproc_cfg.get("normalization").get("reference_tag")
+        if isinstance(tags, str):
+            tags = [tags]
         tag_matches = preproc_cfg.get("normalization").get("tag_matches")
         median_index = norm_methods.index("median_equalization_by_tag")
         norm_methods[median_index] += " " + f"(tags={tags}, matches={tag_matches})  "
@@ -136,6 +141,7 @@ def overview_tab(state: SessionState):
         **Input Layout**: {input_layout}
 
         **Pipeline steps**
+        - **Quantification**: {quant_method}
         - **Filtering**:
             - Contaminants ({', '.join(contaminants_files)}): {cont_txt}
             - q-value ≤ {q_thr_txt}: {q_txt}
@@ -268,6 +274,7 @@ def overview_tab(state: SessionState):
         name="Contrast",
         options=contrasts,
         value=contrasts[0],
+        width=250,
     )
 
     show_measured  = pn.widgets.Checkbox(name="Observed in Both", value=True)
@@ -299,11 +306,46 @@ def overview_tab(state: SessionState):
         name="Search Protein",
         options=list(state.adata.var["GENE_NAMES"]),
         placeholder="Type gene name…",
+        width=200,
     )
 
-    clear_search = pn.widgets.Button(name="Clear Search", width=100)
+    clear_search = pn.widgets.Button(name="Clear", width=80)
     clear_search.on_click(lambda event: setattr(search_input, "value", ""))
 
+    search_field_sel = pn.widgets.Select(
+        name="Field",
+        options=["FASTA headers", "Gene names", "UniProt IDs"],
+        value="FASTA headers",
+        width=130,
+        styles={"z-index": "10"},
+    )
+
+    search_input_group = pn.widgets.TextInput(
+        name="Cohort", placeholder="e.g. *_ECOLI* or gene[0-9]+",
+        width=200, styles={"z-index": "10"}
+    )
+    clear_group = pn.widgets.Button(name="Clear", width=80)
+    clear_group.on_click(lambda event: setattr(search_input_group, "value", ""))
+
+    # Turn (pattern, field) → sorted list of UniProt IDs using the shared helper
+    def _group_ids(pattern, field):
+        #pattern='ECOLI'
+        try:
+            ids = resolve_pattern_to_uniprot_ids(state.adata, field, pattern)
+            return sorted(ids)
+        except Exception:
+            return []
+
+    group_ids_dmap = pn.bind(_group_ids, search_input_group, search_field_sel)
+    def _fmt_group_count(ids):
+        if not ids:
+            return ""
+        return f"({len(ids)} match{'es' if len(ids)!=1 else ''})"
+
+    group_count_text = pn.bind(_fmt_group_count, group_ids_dmap)
+    group_count_md   = pn.pane.Markdown(group_count_text,
+                                        styles={"min-width":"80px"},
+                                        margin=(-10,0,0,120))
     volcano_dmap = pn.bind(
         plot_volcanoes_wrapper,
         state=state,
@@ -313,6 +355,7 @@ def overview_tab(state: SessionState):
         show_imp_cond1=show_imp_cond1,
         show_imp_cond2=show_imp_cond2,
         highlight=search_input,
+        highlight_group=group_ids_dmap,
         sign_threshold=0.05,
         width=None,
         height=900,
@@ -338,6 +381,44 @@ def overview_tab(state: SessionState):
     )
     volcano_plot.param.watch(_on_volcano_click, "click_data")
 
+    volcano_pane_height = 1060
+    # Cohort Violin View
+    def _cohort_violin(ids, contrast, sm, s1, s2):
+        if not ids:
+            return pn.Spacer(height=0)  # collapses cleanly when no cohort
+        fig = plot_group_violin_for_volcano(
+            state=state,
+            contrast=contrast,
+            highlight_group=ids,
+            show_measured=sm,
+            show_imp_cond1=s1,
+            show_imp_cond2=s2,
+            width=1200,
+            height=100,
+        )
+        volcano_pane_height = 1200
+        return pn.pane.Plotly(
+            fig,
+            height=150,
+            margin=(-10, 0, 10, 20),
+            sizing_mode="stretch_width",
+            config={'responsive': True},
+            styles={
+                'border-radius':  '8px',
+                'box-shadow':     '3px 3px 5px #bcbcbc',
+            }
+        )
+
+    # Bind reactivity via pn.bind (don’t pass bind objects into @depends)
+    cohort_violin_view = pn.bind(
+        _cohort_violin,
+        group_ids_dmap,        # ids
+        contrast_sel,          # contrast
+        show_measured,         # sm
+        show_imp_cond1,        # s1
+        show_imp_cond2,        # s2
+    )
+
     # bind a detail‐plot function to the same contrast & search_input
     layers = ["Processed", "Log (pre-norm)", "Raw"]
 
@@ -348,6 +429,7 @@ def overview_tab(state: SessionState):
         width=100,
         margin=(20, 0, 0, 20),
     )
+
     def _toggle_layers_visibility(event):
         layers_sel.visible = bool(event.new)
 
@@ -395,9 +477,6 @@ def overview_tab(state: SessionState):
             except Exception:
                 pass
             return default
-
-        #re_count = _fmt_int(adata.var["PRECURSORS_EXP"].iloc[idx])
-        #ibaq_val = _fmt_ibaq(adata.var["IBAQ"].iloc[idx])
 
         rec_val  = _safe_var("PRECURSORS_EXP", default=None)
         ibaq_raw = _safe_var("IBAQ", default=None)
@@ -492,13 +571,6 @@ def overview_tab(state: SessionState):
         footer_left = pn.pane.HTML(
             "<span style='font-size: 12px;'>" + " &nbsp;|&nbsp; ".join(left_bits) + "</span>"
         )
-        #footer_left = pn.pane.HTML(
-        #    f"<span style='font-size: 12px;'>"
-        #    f"Precursors (global): <b>{re_count}</b>"
-        #    f" &nbsp;|&nbsp; "
-        #    f"iBAQ: <b>{ibaq_val}</b>"
-        #    f"</span>"
-        #)
 
         footer_right = pn.pane.HTML(
             f"<span style='font-size: 12px;'>"
@@ -687,6 +759,7 @@ def overview_tab(state: SessionState):
     volcano_and_detail = pn.Row(
         pn.Column(                 # left container that can stretch
             volcano_plot,
+            cohort_violin_view,
             sizing_mode="stretch_both",
             styles={
                 "flex": "1",               # ← soak up remaining horizontal space
@@ -699,30 +772,38 @@ def overview_tab(state: SessionState):
         styles={
             "align-items": "stretch",       # match heights nicely
         },
-        margin=(-80, 0, 0, 0),
+        margin=(20, 0, 0, 0),
     )
 
     volcano_pane = pn.Column(
         pn.pane.Markdown("##   Volcano plots"),
         pn.Row(
             contrast_sel,
-            pn.Spacer(width=40),
+            pn.Spacer(width=20),
             color_by,
-            pn.Spacer(width=40),
-            pn.Row(
+            pn.Spacer(width=30),
+            pn.Column(
                 show_measured,
                 show_imp_cond1,
                 show_imp_cond2,
-                margin=(25,0,0,0),
+                margin=(-5,0,0,0),
             ),
-            pn.Spacer(width=240),
+            pn.Spacer(width=20),
+            make_vr(),
+            pn.Spacer(width=10),
             search_input,
             pn.Row(clear_search, margin = (17,0,0,0)),
-            pn.Spacer(width=30),
+            pn.Spacer(width=20),
+            make_vr(),
+            pn.Spacer(width=20),
+            search_field_sel,
+            pn.Column(search_input_group, group_count_md),
+            pn.Row(clear_group, margin = (17,0,0,0)),
+            pn.Spacer(width=20),
             pn.Row(layers_sel, margin = (-17,0,0,0), ),
             sizing_mode="fixed",
             width=300,
-            height=160,
+            height=70,
         ),
         volcano_and_detail,
         height=1060,
@@ -733,8 +814,8 @@ def overview_tab(state: SessionState):
             'box-shadow':     '3px 3px 5px #bcbcbc',
             'width': '98vw',
         }
-
     )
+    volcano_pane.height = pn.bind(lambda ids: 1200 if ids else 1060, group_ids_dmap)
 
     # Tab layout
 
