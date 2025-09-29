@@ -50,7 +50,7 @@ def analysis_tab(state):
                 contrast_sel_logfc,
                 log2fc_pane,
         ),
-        height=460,
+        height=490,
         width='95vw',
     )
 
@@ -59,7 +59,7 @@ def analysis_tab(state):
         row=lin_reg_row,
         background="#E3F2FD",
         width="98vw",
-        height=540
+        height=570
     )
 
     # ---------- section: stats distributions (p & q, overlay raw vs eBayes) ----------

@@ -1276,6 +1276,10 @@ def plot_volcanoes_old(
                     showlegend=False,
                     name="",
                 ))
+
+        gene_name=adata.var["GENE_NAMES"][mask]
+        #gene_name = adata.var_names[mask]
+
         trace_kwargs = dict(
             x=x[mask], y=y[mask],
             mode="markers",
@@ -1285,7 +1289,8 @@ def plot_volcanoes_old(
                 opacity=base_opacity[mask],
             ),
             name=name,
-            text=adata.var["GENE_NAMES"][mask],
+            text=gene_name,
+            #text=adata.var["GENE_NAMES"][mask],
             hovertemplate="Gene: %{text}<br>log2FC: %{x:.2f}<br>-log10(q): %{y:.2f}<extra></extra>"
         )
         # continuous coloring
