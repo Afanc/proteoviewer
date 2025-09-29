@@ -27,7 +27,7 @@ def analysis_tab(state):
         contrast_names = [f"C{i}" for i in range(n)]
 
     # ---------- widgets ----------
-    contrast_sel_logfc = pn.widgets.Select(name="", options=list(contrast_names), value=contrast_names[0], width=160, styles={"z-index": "10"}, margin=(-10,0,0,0))
+    contrast_sel_logfc = pn.widgets.Select(name="Contrast", options=list(contrast_names), value=contrast_names[0], width=160, styles={"z-index": "10"}, margin=(-10,0,0,0))
 
     # ---------- section: linear model (residual variance) ----------
     resvar_fig = plotly_section(

@@ -127,8 +127,12 @@ def overview_tab(state: SessionState):
             imp_method += " (" + ", ".join(extras) + ")"
 
     if "rf" in imp_method:
-        rf_max_iter = preproc.get("imputation").get("rf_max_iter")
+        rf_max_iter = preproc_cfg.get("imputation").get("rf_max_iter")
         imp_method += f", rf_max_iter={rf_max_iter}"
+
+    if "lc_conmed" in imp_method:
+        lc_conmed_lod_k = preproc_cfg.get("imputation").get("lc_conmed_lod_k")
+        imp_method += f", lod_k={lc_conmed_lod_k}"
 
 
     # build a single Markdown string
@@ -367,8 +371,14 @@ def overview_tab(state: SessionState):
             gene = click["points"][0]["text"]
             search_input.value = gene
 
+    def _with_uirevision(fig, contrast):
+        fig.update_layout(uirevision=f"volcano-{contrast}")
+        return fig
+
+    volcano_dmap_wrapped = pn.bind(_with_uirevision, volcano_dmap, contrast_sel)
+
     volcano_plot = pn.pane.Plotly(
-        volcano_dmap,
+        volcano_dmap_wrapped,
         height=900,
         margin=(0, 0, 0, 20),
         sizing_mode="stretch_width",
@@ -456,6 +466,11 @@ def overview_tab(state: SessionState):
         protein_info = get_protein_info(state, contrast, protein, layers_sel)  # OK: we only read layer-agnostic bits
         uniprot_id   = protein_info['uniprot_id']
         idx = protein_info['index']  # already used below for "Protein Index"
+
+        def _first_token(x):
+            if isinstance(x, str) and ";" in x:
+                return x.split(";", 1)[0].strip()
+            return x
 
         def _fmt_int(x):
             v = int(x)
@@ -554,8 +569,9 @@ def overview_tab(state: SessionState):
         )
 
         # STRING link is layer-agnostic; fetch once & cache
+        uid_for_link = _first_token(uniprot_id) or ""
         try:
-            string_link = _cached_string_link(uniprot_id)
+            string_link = _cached_string_link(uid_for_link)
         except Exception:
             string_link = ""
 
@@ -574,7 +590,7 @@ def overview_tab(state: SessionState):
 
         footer_right = pn.pane.HTML(
             f"<span style='font-size: 12px;'>"
-            f"🔗 <a href='https://www.uniprot.org/uniprotkb/{uniprot_id}/entry' target='_blank' rel='noopener'>UniProt Entry</a>"
+            f"🔗 <a href='https://www.uniprot.org/uniprotkb/{uid_for_link}/entry' target='_blank' rel='noopener'>UniProt Entry</a>"
             f" &nbsp;|&nbsp; "
             f"<a href='{string_link}' target='_blank' rel='noopener'>STRING Entry</a>"
             f"</span>"
