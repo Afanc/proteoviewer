@@ -213,7 +213,7 @@ def get_protein_info(state, contrast, protein, layer):
     layer_data = ad.X
     if layer.value == "Raw":
         layer_data = ad.layers.get('raw')
-    elif layer.value == "Log-Normalized":
+    elif layer.value == "Log-only":
         layer_data = ad.layers.get('lognorm')
 
     # log2FC & q-value

@@ -313,6 +313,7 @@ def overview_tab(state: SessionState):
         options=list(state.adata.var["GENE_NAMES"]),
         placeholder="Type gene name…",
         width=200,
+        case_sensitive=False,
     )
 
     clear_search = pn.widgets.Button(name="Clear", width=80)
@@ -543,10 +544,10 @@ def overview_tab(state: SessionState):
     )
 
     # bind a detail‐plot function to the same contrast & search_input
-    layers = ["Processed", "Log (pre-norm)", "Raw"]
+    layers = ["Final", "Log-only", "Raw"]
 
     layers_sel = pn.widgets.Select(
-        name="Protein Data Layer",
+        name="Protein Data View",
         options=layers,
         value=layers[0],
         width=100,
@@ -925,7 +926,6 @@ def overview_tab(state: SessionState):
                 search_field_sel,
             ),
             pn.Spacer(width=10),
-            #search_field_sel,
             pn.Column(
                 search_input_group,
                 file_holder,
@@ -936,20 +936,13 @@ def overview_tab(state: SessionState):
                 pn.Row(clear_all, margin=(0,0,0,0)),
                 status_pane,
             ),
-            #search_field_sel,
-            #pn.Column(search_input_group, group_count_md),
-            #pn.Row(clear_group, margin = (17,0,0,0)),
-            #pn.Column(file_upload, file_info_pane),
-            #pn.Row(clear_file, margin = (17,0,0,0)),
             pn.Spacer(width=20),
             make_vr(),
             pn.Spacer(width=20),
-            #pn.Spacer(width=80),
             search_input,
             pn.Row(clear_search, margin = (17,0,0,0)),
-            pn.Spacer(width=20),
-            pn.Spacer(width=20),
-            pn.Row(layers_sel, margin = (-17,0,0,0), ),
+            pn.Spacer(width=70),
+            pn.Row(layers_sel, margin = (-17,0,0,0)),
             sizing_mode="fixed",
             width=300,
             height=80,
@@ -964,9 +957,6 @@ def overview_tab(state: SessionState):
             'width': '98vw',
         }
     )
-    #volcano_pane.height = pn.bind(lambda ids: 1200 if ids else 1060, group_ids_dmap)
-    #volcano_pane.height = pn.bind(lambda ids: 1200 if ids else 1060, group_ids_combined)
-    #volcano_pane.height = pn.bind(lambda ids: 1200 if ids else 1060, group_ids_combined)
     volcano_pane.height = pn.bind(lambda ids: 1200 if ids else 1060, group_ids_selected)
 
 
