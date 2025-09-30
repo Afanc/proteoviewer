@@ -1,4 +1,5 @@
 import os
+import re
 import panel as pn
 from functools import lru_cache
 from session_state import SessionState
@@ -10,6 +11,7 @@ from components.overview_plots import (
     get_protein_info,
     plot_peptide_trends_centered,
     resolve_pattern_to_uniprot_ids,
+    resolve_exact_list_to_uniprot_ids,
     plot_group_violin_for_volcano,
 )
 from components.plot_utils import plot_pca_2d, plot_umap_2d
@@ -317,19 +319,18 @@ def overview_tab(state: SessionState):
     clear_search.on_click(lambda event: setattr(search_input, "value", ""))
 
     search_field_sel = pn.widgets.Select(
-        name="Field",
+        name="Search Field",
         options=["FASTA headers", "Gene names", "UniProt IDs"],
         value="FASTA headers",
         width=130,
         styles={"z-index": "10"},
+        margin=(2,0,0,0),
     )
 
     search_input_group = pn.widgets.TextInput(
-        name="Cohort", placeholder="e.g. *_ECOLI* or gene[0-9]+",
+        name="Pattern or File", placeholder="*_ECOLI+ or ^gene[0-9]$",
         width=200, styles={"z-index": "10"}
     )
-    clear_group = pn.widgets.Button(name="Clear", width=80)
-    clear_group.on_click(lambda event: setattr(search_input_group, "value", ""))
 
     # Turn (pattern, field) → sorted list of UniProt IDs using the shared helper
     def _group_ids(pattern, field):
@@ -341,15 +342,127 @@ def overview_tab(state: SessionState):
             return []
 
     group_ids_dmap = pn.bind(_group_ids, search_input_group, search_field_sel)
-    def _fmt_group_count(ids):
-        if not ids:
-            return ""
-        return f"({len(ids)} match{'es' if len(ids)!=1 else ''})"
 
-    group_count_text = pn.bind(_fmt_group_count, group_ids_dmap)
-    group_count_md   = pn.pane.Markdown(group_count_text,
-                                        styles={"min-width":"80px"},
-                                        margin=(-10,0,0,120))
+    # --- Exact-match cohort via FileInput, with robust reset & single status line ---
+    # Hidden text holder (reactive bind target) and filename label
+    _file_text = pn.widgets.TextAreaInput(visible=False)
+    cohort_filename = pn.widgets.StaticText(name="", value="")
+
+    # FileInput holder to allow hot-swapping (lets users reselect same file after clear)
+    file_holder = pn.Column()
+
+    def _new_file_input():
+        fi = pn.widgets.FileInput(accept=".txt,.csv,.tsv", multiple=False, width=200)
+        def _on_change(event):
+            b = event.new or b""
+            try:
+                txt = b.decode("utf-8", errors="ignore")
+            except Exception:
+                txt = ""
+            _file_text.value = txt
+            cohort_filename.value = fi.filename or ""
+            # EITHER-OR: if a file is provided, clear any existing pattern
+            if txt.strip():
+                # Clear pattern *visually* as well
+                try:
+                    search_input_group.value = ""
+                    # also clear raw text to guarantee UI empties immediately
+                    if hasattr(search_input_group, "value_input"):
+                        search_input_group.value_input = ""
+                except Exception:
+                    pass
+        fi.param.watch(_on_change, "value")
+        return fi
+
+#    def _new_file_input():
+#        fi = pn.widgets.FileInput(accept=".txt,.csv,.tsv", multiple=False, width=200)
+#        def _on_change(event):
+#            b = event.new or b""
+#            try:
+#                txt = b.decode("utf-8", errors="ignore")
+#            except Exception:
+#                txt = ""
+#            _file_text.value = txt
+#            cohort_filename.value = fi.filename or ""
+#        fi.param.watch(_on_change, "value")
+#        return fi
+
+    file_upload = _new_file_input()
+    file_holder.objects = [file_upload]
+
+    def _parse_file_text(text: str) -> list[str]:
+        if not text:
+            return []
+        tokens = re.split(r"[,\t;\r\n\s]+", text)
+        return sorted({t.strip() for t in tokens if t and not t.isspace()})
+
+    def _file_ids(file_text: str, field: str):
+        items = _parse_file_text(file_text or "")
+        try:
+            return sorted(resolve_exact_list_to_uniprot_ids(state.adata, field, items))
+        except Exception:
+            return []
+
+    group_file_ids_dmap = pn.bind(_file_ids, _file_text, search_field_sel)
+
+    def _either(ids_pat, ids_file, pat_text, file_text):
+        use_file = bool((file_text or "").strip())
+        return ids_file if use_file else ids_pat
+    group_ids_selected = pn.bind(_either, group_ids_dmap, group_file_ids_dmap, search_input_group, _file_text)
+
+    def _fmt_status(ids_pat, ids_file, fname, pat_text, file_text):
+        # Hide when nothing searched; otherwise show 0/1/N matches (singular/plural)
+        if not (pat_text and pat_text.strip()) and not (file_text and file_text.strip()):
+            return ""
+        # pick the active set (either-or)
+        active_from_file = bool((file_text or "").strip())
+        n = len(ids_file or []) if active_from_file else len(ids_pat or [])
+        label = "match" if n == 1 else "matches"
+        name = os.path.basename(str(fname)) if (active_from_file and fname) else ""
+        return f"**{n} {label}**"
+
+    status_md = pn.bind(_fmt_status, group_ids_dmap, group_file_ids_dmap, cohort_filename, search_input_group, _file_text)
+    status_pane = pn.pane.Markdown(status_md, margin=(-10, 0, 0, 0), align="center")
+    # Also toggle visibility: invisible when no query; visible for any query (even if 0 matches)
+    def _has_query(pat_text, file_text):
+        return bool((pat_text or "").strip()) or bool((file_text or "").strip())
+    status_pane.visible = pn.bind(_has_query, search_input_group, _file_text)
+
+    # One CLEAR for both pattern + file, and guarantee same-file reselect works
+    clear_all = pn.widgets.Button(name="Clear", width=90)
+    def _on_clear_all(event):
+        # reset pattern
+        search_input_group.value = ""
+        # reset file state
+        _file_text.value = ""
+        cohort_filename.value = ""
+        # recreate FileInput to ensure browsers fire change for same file
+        new_file = _new_file_input()
+        file_holder.objects = [new_file]
+        nonlocal file_upload
+        file_upload = new_file
+
+
+    clear_all.on_click(_on_clear_all)
+
+    # EITHER-OR: if user types a non-empty pattern, clear any uploaded file
+    def _on_pattern_change(event):
+        val = event.new or ""
+        if val.strip():
+            _file_text.value = ""
+            cohort_filename.value = ""
+            # hard reset FileInput so the same file can be picked again later
+            new_file = _new_file_input()
+            file_holder.objects = [new_file]
+            nonlocal file_upload
+            file_upload = new_file
+        elif (event.old or "").strip() and not val.strip():
+            # if user cleared the pattern manually, keep things consistent:
+            # status will auto-hide via existing binding; nothing else needed.
+            pass
+
+    search_input_group.param.watch(_on_pattern_change, "value")
+
     volcano_dmap = pn.bind(
         plot_volcanoes_wrapper,
         state=state,
@@ -359,7 +472,7 @@ def overview_tab(state: SessionState):
         show_imp_cond1=show_imp_cond1,
         show_imp_cond2=show_imp_cond2,
         highlight=search_input,
-        highlight_group=group_ids_dmap,
+        highlight_group=group_ids_selected,
         sign_threshold=0.05,
         width=None,
         height=900,
@@ -422,7 +535,7 @@ def overview_tab(state: SessionState):
     # Bind reactivity via pn.bind (don’t pass bind objects into @depends)
     cohort_violin_view = pn.bind(
         _cohort_violin,
-        group_ids_dmap,        # ids
+        group_ids_selected,    # ids (either file OR pattern)
         contrast_sel,          # contrast
         show_measured,         # sm
         show_imp_cond1,        # s1
@@ -806,20 +919,40 @@ def overview_tab(state: SessionState):
             ),
             pn.Spacer(width=20),
             make_vr(),
+            pn.Spacer(width=20),
+            pn.Column(
+                pn.pane.Markdown("**Cohort Inspector**", align="start", margin=(-20,0,0,0)),
+                search_field_sel,
+            ),
             pn.Spacer(width=10),
-            search_input,
-            pn.Row(clear_search, margin = (17,0,0,0)),
+            #search_field_sel,
+            pn.Column(
+                search_input_group,
+                file_holder,
+                margin=(-25,0,0,0)
+            ),
+            pn.Column(
+                pn.Spacer(height=8),
+                pn.Row(clear_all, margin=(0,0,0,0)),
+                status_pane,
+            ),
+            #search_field_sel,
+            #pn.Column(search_input_group, group_count_md),
+            #pn.Row(clear_group, margin = (17,0,0,0)),
+            #pn.Column(file_upload, file_info_pane),
+            #pn.Row(clear_file, margin = (17,0,0,0)),
             pn.Spacer(width=20),
             make_vr(),
             pn.Spacer(width=20),
-            search_field_sel,
-            pn.Column(search_input_group, group_count_md),
-            pn.Row(clear_group, margin = (17,0,0,0)),
+            #pn.Spacer(width=80),
+            search_input,
+            pn.Row(clear_search, margin = (17,0,0,0)),
+            pn.Spacer(width=20),
             pn.Spacer(width=20),
             pn.Row(layers_sel, margin = (-17,0,0,0), ),
             sizing_mode="fixed",
             width=300,
-            height=70,
+            height=80,
         ),
         volcano_and_detail,
         height=1060,
@@ -831,7 +964,11 @@ def overview_tab(state: SessionState):
             'width': '98vw',
         }
     )
-    volcano_pane.height = pn.bind(lambda ids: 1200 if ids else 1060, group_ids_dmap)
+    #volcano_pane.height = pn.bind(lambda ids: 1200 if ids else 1060, group_ids_dmap)
+    #volcano_pane.height = pn.bind(lambda ids: 1200 if ids else 1060, group_ids_combined)
+    #volcano_pane.height = pn.bind(lambda ids: 1200 if ids else 1060, group_ids_combined)
+    volcano_pane.height = pn.bind(lambda ids: 1200 if ids else 1060, group_ids_selected)
+
 
     # Tab layout
 

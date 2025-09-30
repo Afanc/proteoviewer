@@ -311,6 +311,43 @@ def resolve_pattern_to_uniprot_ids(adata, field: str, pattern: Optional[str]) ->
         mask = np.fromiter((bool(rx.search(u)) for u in ids), dtype=bool, count=len(ids))
         return set(ids[mask])
 
+def resolve_exact_list_to_uniprot_ids(adata, field: str, items: List[str] | Set[str]) -> Set[str]:
+    """
+    Map a *list of exact identifiers* to UniProt IDs (adata.var_names), interpreting
+    the list according to `field`:
+      - "FASTA headers": exact match against FASTA_HEADERS
+      - "Gene names":    exact match against any token of GENE_NAMES split on ; , whitespace
+      - "UniProt IDs":   exact match against adata.var_names
+    Returns a set of UniProt IDs (strings).
+    """
+    if not items:
+        return set()
+    items = set(map(str, items))
+
+    ids = np.array(adata.var_names, dtype=str)
+    var = adata.var
+
+    if field == "FASTA headers":
+        col = "FASTA_HEADERS"
+        if col not in var.columns:
+            return set()
+        texts = var[col].astype(str).to_numpy()
+        mask = np.isin(texts, list(items))
+        return set(ids[mask])
+
+    elif field == "Gene names":
+        if "GENE_NAMES" not in var.columns:
+            return set()
+        gn = var["GENE_NAMES"].astype(str).to_numpy()
+        splitter = re.compile(r"[;,\s]+")
+        def matches_any_token(s: str) -> bool:
+            return any((tok in items) for tok in splitter.split(s) if tok)
+        mask = np.fromiter((matches_any_token(s) for s in gn), dtype=bool, count=len(gn))
+        return set(ids[mask])
+
+    else:  # "UniProt IDs"
+        return set(u for u in ids if u in items)
+
 @log_time("Plotting Peptide Trends (centered)")
 def plot_peptide_trends_centered(adata, uniprot_id: str, contrast: str) -> go.Figure:
     # 1) pull & slice peptide matrices

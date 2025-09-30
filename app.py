@@ -18,7 +18,7 @@ logging.getLogger().setLevel(logging.INFO)
 # Plotly support + loading overlay on slow renders
 pn.extension('plotly', defer_load=True, loading_indicator=True)
 
-MIN_PF_VERSION = os.environ.get("PF_MIN_PF_VERSION", "1.5.0")  # until we package
+MIN_PF_VERSION = os.environ.get("PF_MIN_PF_VERSION", "1.5.1")  # until we package
 DEV = False  # change for env variable
 
 
