@@ -23,7 +23,8 @@ a = Analysis(
         'tkinter.filedialog',
     ],
     hookspath=[],
-    runtime_hooks=[],
+    #runtime_hooks=[],
+    runtime_hooks=['rthook_logging.py'],   # <-- add this line
     excludes=[],
     cipher=block_cipher,
 )
