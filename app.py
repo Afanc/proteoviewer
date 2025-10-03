@@ -10,7 +10,10 @@ from tabs.overview_tab import overview_tab
 from tabs.preprocessing_tab import preprocessing_tab
 from tabs.analysis_tab import analysis_tab
 
-from utils import logger, log_time
+from utils import logger, log_time, logging
+
+from logging.handlers import RotatingFileHandler
+from pathlib import Path
 
 # Verbose server-side logs while we’re iterating
 logging.getLogger().setLevel(logging.INFO)
@@ -18,9 +21,74 @@ logging.getLogger().setLevel(logging.INFO)
 # Plotly support + loading overlay on slow renders
 pn.extension('plotly', defer_load=True, loading_indicator=True)
 
-MIN_PF_VERSION = os.environ.get("PF_MIN_PF_VERSION", "1.5.1")  # until we package
-DEV = False  # change for env variable
+MIN_PF_VERSION = os.environ.get("PF_MIN_PF_VERSION", "1.5.0")  # until we package
 
+#DEV = True  # change for env variable
+DEV = os.getenv("PV_DEV", "0") == "1"
+
+def setup_logging(app_name="ProteoViewer", filename="proteoviewer.log"):
+    # Prefer the folder containing the EXE (or the script during dev)
+    if getattr(sys, "frozen", False):  # PyInstaller
+        base_dir = Path(sys.executable).resolve().parent
+    else:
+        base_dir = Path(__file__).resolve().parent
+
+    log_path = base_dir / filename
+    fallback_used = False
+
+    # If we can't write next to the exe (e.g., Program Files), fall back
+    try:
+        base_dir.mkdir(parents=True, exist_ok=True)  # no-op if exists
+        with open(log_path, "a", encoding="utf-8"):  # permission probe
+            pass
+    except Exception:
+        fallback_used = True
+        alt_base = (os.getenv("LOCALAPPDATA")
+                    or os.getenv("APPDATA")
+                    or str(Path.home()))
+        base_dir = Path(alt_base) / app_name
+        base_dir.mkdir(parents=True, exist_ok=True)
+        log_path = base_dir / filename
+
+    root = logging.getLogger()
+    root.setLevel(logging.INFO)
+
+    fh = RotatingFileHandler(log_path, maxBytes=5*1024*1024, backupCount=3, encoding="utf-8")
+    fh.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+    root.addHandler(fh)
+
+    # Also capture Bokeh/Panel/Tornado logs
+    for name in ("bokeh", "panel", "tornado"):
+        logging.getLogger(name).setLevel(logging.INFO)
+
+    # Redirect print()/tracebacks to the log file
+    class _StreamToLogger:
+        def __init__(self, level): self.level = level
+        def write(self, buf):
+            for line in buf.rstrip().splitlines():
+                logging.log(self.level, line)
+        def flush(self): pass
+
+    sys.stdout = _StreamToLogger(logging.INFO)
+    sys.stderr = _StreamToLogger(logging.ERROR)
+
+    def _excepthook(exc_type, exc, tb):
+        logging.exception("Unhandled exception", exc_info=(exc_type, exc, tb))
+        try:
+            print(f"A fatal error occurred. See log at: {log_path}")
+        except Exception:
+            pass
+    sys.excepthook = _excepthook
+
+    if fallback_used:
+        logging.warning(
+            "Could not write log next to the executable; using fallback at: %s",
+            log_path
+        )
+
+    return str(log_path)
+
+LOGFILE = setup_logging()
 
 def _parse_semver(v: str):
     try:
@@ -178,9 +246,17 @@ def build_app():
 
     # Dev mode: load default without clicking
     if DEV:
-        from anndata import read_h5ad
-        adata = read_h5ad("proteoflux_results.h5ad")
-        _load(adata, "proteoflux_results.h5ad")
+        try:
+            from anndata import read_h5ad
+            adata = read_h5ad("proteoflux_results.h5ad")
+            _load(adata, "proteoflux_results.h5ad")
+            logging.info("DEV autoload successful.")
+        except Exception:
+            logging.exception("DEV autoload failed; starting with empty UI.")
+    #if DEV:
+    #    from anndata import read_h5ad
+    #    adata = read_h5ad("proteoflux_results.h5ad")
+    #    _load(adata, "proteoflux_results.h5ad")
 
     controls = pn.Column(
         pn.Row(pick_btn, exit_btn, sizing_mode="stretch_width"),
