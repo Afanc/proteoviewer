@@ -13,6 +13,7 @@ from components.overview_plots import (
     resolve_pattern_to_uniprot_ids,
     resolve_exact_list_to_uniprot_ids,
     plot_group_violin_for_volcano,
+    #_ensure_gene
 )
 from components.plot_utils import plot_pca_2d, plot_umap_2d
 from components.texts import (
@@ -308,10 +309,35 @@ def overview_tab(state: SessionState):
     contrast_sel.param.watch(_update_toggle_labels, "value")
 
     # search widget
+    def _ensure_gene(token: str) -> str | None:
+        """
+        Return a gene symbol for `token`.
+        - If `token` is already a gene in adata.var["GENE_NAMES"], return it.
+        - Else, if `token` matches a UniProt ID (var_names), map it to its gene (first token before ';').
+        - Else, return the original token (so downstream error handling can show 'No match').
+        """
+        if not token:
+            return None
+        ad = state.adata
+        names = ad.var["GENE_NAMES"].astype(str)
+        t = str(token)
+
+        # fast path: exact gene match
+        if t in set(names):
+            return t
+
+        # fallback: UniProt → gene
+        try:
+            idx = ad.var_names.get_loc(t)  # exact UID match
+            gene = names.iloc[idx]
+            return gene.split(";", 1)[0].strip() if isinstance(gene, str) else str(gene)
+        except KeyError:
+            return t
+
     search_input = pn.widgets.AutocompleteInput(
         name="Search Protein",
-        options=list(state.adata.var["GENE_NAMES"]),
-        placeholder="Type gene name…",
+        options=list(state.adata.var["GENE_NAMES"]) + list(state.adata.var_names),
+        placeholder="Gene name or Uniprot ID",
         width=200,
         case_sensitive=False,
     )
@@ -577,7 +603,9 @@ def overview_tab(state: SessionState):
             return pn.Spacer(width=800, height=170)
 
         # --- pull values that do not depend on the "layer" toggle ---
-        protein_info = get_protein_info(state, contrast, protein, layers_sel)  # OK: we only read layer-agnostic bits
+        gene = _ensure_gene(protein)
+        protein_info = get_protein_info(state, contrast, gene, layers_sel)  # OK: we only read layer-agnostic bits
+        #protein_info = get_protein_info(state, contrast, protein, layers_sel)  # OK: we only read layer-agnostic bits
         uniprot_id   = protein_info['uniprot_id']
         idx = protein_info['index']  # already used below for "Protein Index"
 
@@ -660,7 +688,11 @@ def overview_tab(state: SessionState):
             "flex": "0.1",
             "margin": "0px 0px",
         }
-        gene_md = pn.pane.Markdown(f"**Gene(s)**: {protein}", styles=item_styles)
+        gene = _ensure_gene(protein)
+        uid  = protein_info["uniprot_id"]
+
+        #gene_md = pn.pane.Markdown(f"**Gene(s)**: {protein}", styles=item_styles)
+        gene_md = pn.pane.Markdown(f"**Gene(s)**: {gene}", styles=item_styles)
         sep1    = pn.pane.Markdown("|", styles=sep_styles)
         uid_md  = pn.pane.Markdown(f"**Uniprot ID**: {uniprot_id}", styles=item_styles)
         sep2    = pn.pane.Markdown("|", styles=sep_styles)
@@ -757,7 +789,9 @@ def overview_tab(state: SessionState):
             return pn.Spacer(width=800, height=500, margin=(-30, 0, 0, 0))
 
         # --- bar plot (unchanged) ---
-        fig = plot_intensity_by_protein(state, contrast, protein, layers_sel)
+        gene = _ensure_gene(protein)
+        #fig = plot_intensity_by_protein(state, contrast, protein, layers_sel)
+        fig = plot_intensity_by_protein(state, contrast, gene, layers_sel)
         barplot_pane = pn.pane.Plotly(
             fig,
             width=800,
@@ -770,7 +804,9 @@ def overview_tab(state: SessionState):
         )
 
         # --- intensity Number (layer-dependent) ---
-        protein_info   = get_protein_info(state, contrast, protein, layers_sel)
+        gene = _ensure_gene(protein)
+        #protein_info   = get_protein_info(state, contrast, protein, layers_sel)
+        protein_info   = get_protein_info(state, contrast, gene, layers_sel)
         intensity_scale = "Avg Log Intensity" if layer != "Raw" else "Avg Intensity"
 
         # NOTE: preserve your original formatting logic exactly
@@ -821,6 +857,7 @@ def overview_tab(state: SessionState):
         if not gene:
             return None
         # cheap call; we only need the ID
+        gene = _ensure_gene(gene)
         info = get_protein_info(state, contrast_sel.value, gene, layers_sel)
         return info["uniprot_id"]
 

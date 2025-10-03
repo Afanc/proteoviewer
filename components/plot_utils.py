@@ -966,6 +966,9 @@ def plot_volcanoes(
     if highlight and highlight in genes:
         is_high = (genes == highlight)
         high_idx = int(np.where(is_high)[0][0])
+    elif highlight and highlight in protids:
+        is_high = (protids == highlight)
+        high_idx = int(np.where(is_high)[0][0])
     else:
         is_high = np.zeros(len(genes), dtype=bool)
         high_idx = None
@@ -1132,11 +1135,11 @@ def plot_volcanoes(
     rest = int(len(all_x) - up - down)
 
     annos = [
-        dict(x=0.05, y=0.95, xref="paper", yref="paper",
+        dict(x=0.02, y=0.98, xref="paper", yref="paper", opacity=0.7,
              text=f"<b>{down}</b>", bgcolor="blue", font=dict(color="white"), showarrow=False),
-        dict(x=0.4875, y=0.95, xref="paper", yref="paper",
+        dict(x=0.500, y=0.98, xref="paper", yref="paper",
              text=f"<b>{rest}</b>", bgcolor="lightgrey", font=dict(color="black"), showarrow=False),
-        dict(x=0.95, y=0.95, xref="paper", yref="paper",
+        dict(x=0.98, y=0.98, xref="paper", yref="paper", opacity = 0.7,
              text=f"<b>{up}</b>", bgcolor="red", font=dict(color="white"), showarrow=False),
     ]
 
@@ -1156,253 +1159,6 @@ def plot_volcanoes(
         yaxis=dict(title="-log10(q-value)", autorange=True),
         height=height,
     )
-    return fig
-
-
-
-def plot_volcanoes_old(
-    state,
-    contrast: str,
-    sign_threshold: float = 0.05,
-    width: int = 900,
-    height: int = 900,
-    show_measured: bool = True,
-    show_imp_cond1: bool = True,
-    show_imp_cond2: bool = True,
-    highlight: str = None,
-    highlight_group: Optional[Sequence[str]] = None,
-    color_by: str = "SNR",
-) -> go.Figure:
-    """
-    Single‐contrast volcano with separate toggles for:
-      - measured in both
-      - imputed in condition1
-      - imputed in condition2
-    """
-    adata = state.adata
-    genes = np.array(adata.var["GENE_NAMES"])
-    protids = np.array(adata.var_names, dtype=str)
-
-    if highlight and highlight in genes:
-        is_high = (genes == highlight)
-        base_opacity = np.where(is_high, 1.0, 0.1)
-        # stash index for annotation
-        high_idx = np.where(is_high)[0][0]
-    else:
-        base_opacity = np.ones(len(genes))
-        high_idx = None
-
-    # group highlight (no global opacity change; we’ll add a background halo)
-    if highlight_group:
-        group = set(map(str, highlight_group))
-        in_group = np.array([(g in group) or (p in group) for g, p in zip(genes, protids)], dtype=bool)
-        if in_group.any() and high_idx is None:
-            # pick a representative for the arrow only if single highlight not set
-            pts = np.flatnonzero(in_group)
-    else:
-        in_group = np.zeros_like(protids, dtype=bool)
-
-    # prepare data
-    df_fc = pd.DataFrame(
-        adata.varm["log2fc"],
-        index=adata.var_names,
-        columns=adata.uns["contrast_names"]
-    )
-    df_q  = pd.DataFrame(
-        adata.varm["q_ebayes"],
-        index=adata.var_names,
-        columns=adata.uns["contrast_names"]
-    )
-    x = df_fc[contrast]
-    y = -np.log10(df_q[contrast])
-
-    # missingness masks
-    miss = pd.DataFrame(adata.uns["missingness"])
-    grp1, grp2 = contrast.split("_vs_")
-    a = miss[grp1].values >= 1.0
-    b = miss[grp2].values >= 1.0
-    measured_mask = (~a & ~b)
-    imp1_mask     = (a & ~b)
-    imp2_mask     = (b & ~a)
-
-    # significance coloring
-    sig_up   = (df_q[contrast] < sign_threshold) & (x > 0)
-    sig_down = (df_q[contrast] < sign_threshold) & (x < 0)
-
-    # --- prepare color arrays/scales based on color_by ---
-    if color_by == "Significance":
-        # discrete red/blue/gray
-        color_vals = np.where(sig_up, "red",
-                      np.where(sig_down, "blue", "gray"))
-        colorscale = None
-        colorbar   = None
-
-    elif color_by == "Avg Expression":
-        # placeholder: average of some expression layer (e.g. lognorm)
-        expr_layer = adata.X
-        mat = expr_layer.toarray() if hasattr(expr_layer, "toarray") else expr_layer
-        idx1 = adata.obs["CONDITION"] == grp1
-        idx2 = adata.obs["CONDITION"] == grp2
-        mean1 = mat[idx1, :].mean(axis=0)
-        mean2 = mat[idx2, :].mean(axis=0)
-        avg_expr = pd.Series((mean1 + mean2) / 2, index=adata.var_names)
-        color_vals = avg_expr
-        colorscale = "thermal"
-        colorbar = dict(title="Mean log expr", len=0.5)
-
-    else:
-        raise ValueError(f"Unknown color_by mode: {color_by!r}")
-
-    # helper to build a trace
-#    def add_group_trace(mask, name, symbol):
-    HIGHLIGHT_GROUP_COLOR = "#6c5ce7"  # pleasant indigo; not red/blue/gray/yellow
-
-    def add_group_trace(mask, name, symbol):
-        # If any of this subgroup is in the highlight group, draw a background halo first
-        if highlight_group:
-            halo_mask = (mask.values if hasattr(mask, "values") else mask) & in_group
-            if np.any(halo_mask):
-                fig.add_trace(go.Scattergl(
-                    x=x[halo_mask], y=y[halo_mask],
-                    mode="markers",
-                    marker=dict(
-                        symbol=symbol,
-                        size=12,                 # slightly larger than main markers
-                        color=HIGHLIGHT_GROUP_COLOR,
-                        opacity=0.28,
-                        line=dict(width=0),
-                    ),
-                    hoverinfo="skip",
-                    showlegend=False,
-                    name="",
-                ))
-
-        gene_name=adata.var["GENE_NAMES"][mask]
-        #gene_name = adata.var_names[mask]
-
-        trace_kwargs = dict(
-            x=x[mask], y=y[mask],
-            mode="markers",
-            marker=dict(
-                symbol=symbol,
-                size=6,
-                opacity=base_opacity[mask],
-            ),
-            name=name,
-            text=gene_name,
-            #text=adata.var["GENE_NAMES"][mask],
-            hovertemplate="Gene: %{text}<br>log2FC: %{x:.2f}<br>-log10(q): %{y:.2f}<extra></extra>"
-        )
-        # continuous coloring
-        add_colorbar = False
-        if color_by != "Significance" and name == "Observed in both":
-            add_colorbar = True
-        if color_by != "significance":
-            trace_kwargs["marker"].update(
-                color=color_vals[mask],
-                colorscale=colorscale,
-                showscale = True if add_colorbar else False,
-                colorbar=colorbar if add_colorbar else None,
-            )
-        else:
-            trace_kwargs["marker"]["color"] = color_vals[mask]
-
-        fig.add_trace(go.Scattergl(**trace_kwargs))
-
-    fig = go.Figure()
-
-    if show_measured:   add_group_trace(measured_mask, "Observed in both", "circle")
-    if show_imp_cond1:  add_group_trace(imp1_mask, f"Imputed in {grp1}", "triangle-up")
-    if show_imp_cond2:  add_group_trace(imp2_mask, f"Imputed in {grp2}", "triangle-down")
-
-    # threshold & axes with padding
-    thr_y = -np.log10(sign_threshold)
-    all_x = np.concatenate([
-        x[measured_mask] if show_measured else np.array([]),
-        x[imp1_mask]     if show_imp_cond1 else np.array([]),
-        x[imp2_mask]     if show_imp_cond2 else np.array([]),
-    ])
-    all_y = np.concatenate([
-        y[measured_mask] if show_measured else np.array([]),
-        y[imp1_mask]     if show_imp_cond1 else np.array([]),
-        y[imp2_mask]     if show_imp_cond2 else np.array([]),
-    ])
-    if all_x.size == 0:
-        # no points to show → default safe view
-        xmin, xmax = -1.0, 1.0
-        ymin, ymax = 0.0, 1.0
-    else:
-        xmin, xmax = float(all_x.min()), float(all_x.max())
-        ymin, ymax = float(all_y.min()), float(all_y.max())
-
-    pad_x = (xmax - xmin) * 0.05
-    pad_y = (ymax - ymin) * 0.05
-
-    # annotations
-    up   = int(((x > 0) & (df_q[contrast] < sign_threshold) & np.isin(x, all_x)).sum())
-    down = int(((x < 0) & (df_q[contrast] < sign_threshold) & np.isin(x, all_x)).sum())
-    rest = int(len(all_x) - up - down)
-
-    # mask to know whether to show annotation
-    visible_mask = np.zeros_like(measured_mask)
-    if show_measured:
-        visible_mask |= measured_mask
-    if show_imp_cond1:
-        visible_mask |= imp1_mask
-    if show_imp_cond2:
-        visible_mask |= imp2_mask
-
-    arrow_ann = None
-    if high_idx is not None and visible_mask[high_idx]:
-        sign = 1 if x.iloc[high_idx] >= 0 else -1
-        xh = float(x.iloc[high_idx])
-        yh = float(y.iloc[high_idx])
-        arrow_ann = dict(
-            x=xh+sign*0.05, y=yh+0.05,
-            ax=xh+sign*0.5, ay=yh+0.5,
-            xref="x", yref="y",
-            axref="x", ayref="y",
-            text=genes[high_idx],
-        )
-
-    annos = [
-        dict(x=0.05, y=0.95, xref="paper", yref="paper",
-             text=f"<b>{down}</b>", bgcolor="blue", font=dict(color="white"), showarrow=False),
-        dict(x=0.4875, y=0.95, xref="paper", yref="paper",
-             text=f"<b>{rest}</b>", bgcolor="lightgrey", font=dict(color="black"), showarrow=False),
-        dict(x=0.95, y=0.95, xref="paper", yref="paper",
-             text=f"<b>{up}</b>", bgcolor="red", font=dict(color="white"), showarrow=False),
-    ]
-    if arrow_ann:
-        annos.append(arrow_ann)
-
-    fig.update_layout(
-        margin=dict(
-            l=60,
-            r=120,
-            t=60,
-            b=60,
-            autoexpand=False   # <- disable legends/colorbars pushing the plot area
-        ),
-        annotations=annos,
-        title=dict(text=f"{contrast}",
-                        x=0.5),
-        showlegend=False,
-        shapes=[
-            dict(type="line",
-                 x0=xmin-pad_x, x1=xmax+pad_x,
-                 y0=thr_y,      y1=thr_y,
-                 line=dict(color="black", dash="dash")),
-            dict(type="line",
-                 x0=0,           x1=0,
-                 y0=ymin-pad_y,  y1=ymax+pad_y,
-                 line=dict(color="black", dash="dash")),
-        ],
-        xaxis=dict(title="log2 Fold Change", autorange=True),
-        yaxis=dict(title="-log10(q-value)", autorange=True),
-        height=height,
-    )
-
     return fig
 
 def plot_histogram_plotly(
