@@ -941,7 +941,7 @@ def overview_tab(state: SessionState):
             pn.Spacer(width=20),
             search_input,
             pn.Row(clear_search, margin = (17,0,0,0)),
-            pn.Spacer(width=70),
+            pn.Spacer(width=0),
             pn.Row(layers_sel, margin = (-17,0,0,0)),
             sizing_mode="fixed",
             width=300,
