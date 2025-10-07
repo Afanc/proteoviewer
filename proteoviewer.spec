@@ -21,10 +21,20 @@ a = Analysis(
         'skmisc',
         'tkinter',
         'tkinter.filedialog',
+		'asyncio.base_events',
+		'asyncio.events',
+		'asyncio.format_helpers',
+		'asyncio.futures',
+		'asyncio.protocols',
+		'asyncio.tasks',
+		'asyncio.transports',
+		'asyncio.selector_events',
+		'asyncio.windows_events',
+		'asyncio.windows_utils',
     ],
     hookspath=[],
     #runtime_hooks=[],
-    runtime_hooks=['rthook_logging.py'],   # <-- add this line
+    runtime_hooks=['rthook_logging.py'],
     excludes=[],
     cipher=block_cipher,
 )
@@ -39,7 +49,7 @@ exe = EXE(
     name=f'proteoviewer-{VERSION}',
     debug=False,
     strip=False,
-    upx=True,
+    upx=False,
     console=True,
 )
 
@@ -49,7 +59,7 @@ coll = COLLECT(
     a.zipfiles,
     a.datas,
     strip=False,
-    upx=True,
+    upx=False,
     name=f'proteoviewer-{VERSION}',
 )
 
