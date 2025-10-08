@@ -1,4 +1,32 @@
 import os, sys
+# --- Harden asyncio import order on Windows *before* importing Panel ---
+if sys.platform.startswith("win"):
+    import importlib, logging
+    for _m in (
+        'asyncio.base_events','asyncio.events','asyncio.format_helpers',
+        'asyncio.futures','asyncio.protocols','asyncio.tasks','asyncio.transports',
+        'asyncio.selector_events','asyncio.windows_events','asyncio.windows_utils',
+    ):
+        try:
+            importlib.import_module(_m)
+        except Exception as e:
+            logging.getLogger(__name__).warning("Preload failed for %s: %s", _m, e)
+    import asyncio
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+    from tornado.platform.asyncio import AsyncIOMainLoop
+    AsyncIOMainLoop().install()
+    # Optional tiny diagnostic
+    try:
+        import inspect
+        logging.getLogger(__name__).info(
+            "asyncio loaded from: %s",
+            (inspect.getsourcefile(asyncio) or inspect.getfile(asyncio))
+        )
+        import asyncio.base_events as _be  # assert import works
+    except Exception as e:
+        logging.getLogger(__name__).exception("Asyncio diagnostic failed: %s", e)
+
+
 from PySide6.QtWidgets import QApplication, QFileDialog
 from PySide6.QtCore import Qt, QUrl, QStandardPaths
 
