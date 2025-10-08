@@ -1,13 +1,13 @@
-# --- force a safer asyncio policy on Windows *before* importing Panel ---
-try:
-    import sys, asyncio
-    if sys.platform.startswith("win"):
-        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-        # Ensure Tornado binds to the current asyncio loop explicitly
-        from tornado.platform.asyncio import AsyncIOMainLoop
-        AsyncIOMainLoop().install()
-except Exception:
-    pass
+## --- force a safer asyncio policy on Windows *before* importing Panel ---
+#try:
+#    import sys, asyncio
+#    if sys.platform.startswith("win"):
+#        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+#        # Ensure Tornado binds to the current asyncio loop explicitly
+#        from tornado.platform.asyncio import AsyncIOMainLoop
+#        AsyncIOMainLoop().install()
+#except Exception:
+#    pass
 
 import logging
 import os
