@@ -1,17 +1,24 @@
-## --- force a safer asyncio policy on Windows *before* importing Panel ---
-#try:
-#    import sys, asyncio
-#    if sys.platform.startswith("win"):
-#        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-#        # Ensure Tornado binds to the current asyncio loop explicitly
-#        from tornado.platform.asyncio import AsyncIOMainLoop
-#        AsyncIOMainLoop().install()
-#except Exception:
-#    pass
+import os, sys
+
+if sys.platform.startswith("linux"):
+    os.environ.setdefault("QT_QPA_PLATFORM", "xcb")
+
+from PySide6.QtWidgets import QApplication, QFileDialog
+from PySide6.QtCore import Qt
+
+_QT_APP = QApplication.instance() or QApplication(sys.argv)
+
+def pick_h5ad_path(title: str = "Select .h5ad file") -> str | None:
+    # Use non-native dialog to avoid portal deadlocks on Linux.
+    # Harmless on Windows/macOS.
+    opts = QFileDialog.Options(QFileDialog.DontUseNativeDialog | QFileDialog.ReadOnly)
+    path, _ = QFileDialog.getOpenFileName(
+        None, title, "", "AnnData H5AD (*.h5ad);;All files (*)", options=opts
+    )
+    _QT_APP.processEvents()  # ensure dialog fully tears down
+    return path or None
 
 import logging
-import os
-import sys
 import socket
 
 import panel as pn
@@ -209,27 +216,6 @@ def build_app():
         content.clear()
         content.append(tabs)
         status.object = f"**Loaded:** {fname}"
-
-    os.environ.setdefault("QT_QPA_PLATFORM", "xcb")
-
-    from PySide6.QtWidgets import QApplication, QFileDialog
-    from PySide6.QtCore import Qt
-
-    _QT_APP = QApplication.instance() or QApplication(sys.argv)
-
-    def pick_h5ad_path(title: str = "Select .h5ad file") -> str | None:
-        # Non-native dialog avoids GTK/portal deadlocks; read-only is fine for open.
-        opts = QFileDialog.Options(QFileDialog.DontUseNativeDialog | QFileDialog.ReadOnly)
-        path, _ = QFileDialog.getOpenFileName(
-            None,
-            title,
-            "",
-            "AnnData H5AD (*.h5ad);;All files (*)",
-            options=opts,
-        )
-        # Flush any pending Qt events so the dialog fully tears down.
-        _QT_APP.processEvents()
-        return path or None
 
     # Native system file dialog (local dev) → loads directly from path (no WS)
     def _on_pick_path(event):
