@@ -1,27 +1,27 @@
 import os, sys
-
 from PySide6.QtWidgets import QApplication, QFileDialog
-from PySide6.QtCore import Qt, QUrl
-from PySide6.QtCore import QStandardPaths
+from PySide6.QtCore import Qt, QUrl, QStandardPaths
 
 _QT_APP = QApplication.instance() or QApplication(sys.argv)
 
-# Linux: avoid Wayland/portal hangs
 if sys.platform.startswith("linux"):
     os.environ.setdefault("QT_QPA_PLATFORM", "xcb")
 
 def pick_h5ad_path(title="Select .h5ad file") -> str | None:
-    # Native on Win/mac (gets Quick Access/Recents); non-native on Linux
     non_native = sys.platform.startswith("linux")
-    opts = QFileDialog.Options(QFileDialog.ReadOnly |
-                               (QFileDialog.DontUseNativeDialog if non_native else 0))
+
+    # Build options correctly (no mixing with int 0)
+    opts = QFileDialog.Options()
+    opts |= QFileDialog.Option.ReadOnly
+    if non_native:
+        opts |= QFileDialog.Option.DontUseNativeDialog  # native on Win/mac, non-native on Linux
 
     dlg = QFileDialog(None, title)
-    dlg.setFileMode(QFileDialog.ExistingFile)
+    dlg.setFileMode(QFileDialog.FileMode.ExistingFile)
     dlg.setNameFilters(["AnnData H5AD (*.h5ad)", "All files (*.*)"])
     dlg.setOptions(opts)
 
-    # Optional: add common folders to the sidebar (works in both modes)
+    # Optional sidebar (works in both modes)
     sidebar = []
     for loc in (QStandardPaths.DocumentsLocation,
                 QStandardPaths.DesktopLocation,
@@ -32,7 +32,7 @@ def pick_h5ad_path(title="Select .h5ad file") -> str | None:
         dlg.setSidebarUrls(sidebar)
 
     path = None
-    if dlg.exec() == QFileDialog.Accepted:
+    if dlg.exec() == QFileDialog.DialogCode.Accepted:
         sel = dlg.selectedFiles()
         if sel:
             path = sel[0]
