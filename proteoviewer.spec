@@ -4,7 +4,7 @@ VERSION = "1.5.2" #until we package that thing
 
 from PyInstaller.utils.hooks import copy_metadata
 
-datas=copy_metadata('anndata') + copy_metadata('scanpy') + copy_metadata('scikit-learn') + copy_metadata('scikit-misc')
+datas=copy_metadata('anndata') + copy_metadata('scanpy') + copy_metadata('scikit-learn') + copy_metadata('scikit-misc') + copy_metadata('PySide6')
 a = Analysis(
     ['app.py'],           # your entry-point
     pathex=[],
@@ -14,23 +14,23 @@ a = Analysis(
     hiddenimports=[
         'panel.io.server',
         'hatchling',
-        'PIL._tkinter_finder',
+        #'PIL._tkinter_finder',
         'sklearn._cyutility',
         'fastcluster',
         'binascii',
         'skmisc',
-        'tkinter',
-        'tkinter.filedialog',
-		'asyncio.base_events',
-		'asyncio.events',
-		'asyncio.format_helpers',
-		'asyncio.futures',
-		'asyncio.protocols',
-		'asyncio.tasks',
-		'asyncio.transports',
-		'asyncio.selector_events',
-		'asyncio.windows_events',
-		'asyncio.windows_utils',
+        #'tkinter',
+        #'tkinter.filedialog',
+	#	'asyncio.base_events',
+	#	'asyncio.events',
+	#	'asyncio.format_helpers',
+	#	'asyncio.futures',
+	#	'asyncio.protocols',
+	#	'asyncio.tasks',
+	#	'asyncio.transports',
+	#	'asyncio.selector_events',
+	#	'asyncio.windows_events',
+	#	'asyncio.windows_utils',
     ],
     hookspath=[],
     #runtime_hooks=[],

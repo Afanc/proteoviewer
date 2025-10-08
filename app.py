@@ -210,26 +210,49 @@ def build_app():
         content.append(tabs)
         status.object = f"**Loaded:** {fname}"
 
+    os.environ.setdefault("QT_QPA_PLATFORM", "xcb")
+
+    from PySide6.QtWidgets import QApplication, QFileDialog
+    from PySide6.QtCore import Qt
+
+    _QT_APP = QApplication.instance() or QApplication(sys.argv)
+
+    def pick_h5ad_path(title: str = "Select .h5ad file") -> str | None:
+        # Non-native dialog avoids GTK/portal deadlocks; read-only is fine for open.
+        opts = QFileDialog.Options(QFileDialog.DontUseNativeDialog | QFileDialog.ReadOnly)
+        path, _ = QFileDialog.getOpenFileName(
+            None,
+            title,
+            "",
+            "AnnData H5AD (*.h5ad);;All files (*)",
+            options=opts,
+        )
+        # Flush any pending Qt events so the dialog fully tears down.
+        _QT_APP.processEvents()
+        return path or None
+
     # Native system file dialog (local dev) → loads directly from path (no WS)
     def _on_pick_path(event):
         from anndata import read_h5ad
         try:
             status.object = "Waiting for system file dialog…"
-            import tkinter as tk
-            from tkinter import filedialog
+            path = pick_h5ad_path()
 
-            root = tk.Tk()
-            root.withdraw()
-            try:
-                root.attributes('-topmost', True)  # bring dialog to front (best effort)
-            except Exception:
-                pass
+            #import tkinter as tk
+            #from tkinter import filedialog
 
-            path = filedialog.askopenfilename(
-                title="Select .h5ad file",
-                filetypes=[("AnnData H5AD", "*.h5ad"), ("All files", "*.*")],
-            )
-            root.destroy()
+            #root = tk.Tk()
+            #root.withdraw()
+            #try:
+            #    root.attributes('-topmost', True)  # bring dialog to front (best effort)
+            #except Exception:
+            #    pass
+
+            #path = filedialog.askopenfilename(
+            #    title="Select .h5ad file",
+            #    filetypes=[("AnnData H5AD", "*.h5ad"), ("All files", "*.*")],
+            #)
+            #root.destroy()
 
             if not path:
                 status.object = "Selection cancelled."
