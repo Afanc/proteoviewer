@@ -1,21 +1,43 @@
 import os, sys
 
-if sys.platform.startswith("linux"):
-    os.environ.setdefault("QT_QPA_PLATFORM", "xcb")
-
 from PySide6.QtWidgets import QApplication, QFileDialog
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QUrl
+from PySide6.QtCore import QStandardPaths
 
 _QT_APP = QApplication.instance() or QApplication(sys.argv)
 
-def pick_h5ad_path(title: str = "Select .h5ad file") -> str | None:
-    # Use non-native dialog to avoid portal deadlocks on Linux.
-    # Harmless on Windows/macOS.
-    opts = QFileDialog.Options(QFileDialog.DontUseNativeDialog | QFileDialog.ReadOnly)
-    path, _ = QFileDialog.getOpenFileName(
-        None, title, "", "AnnData H5AD (*.h5ad);;All files (*)", options=opts
-    )
-    _QT_APP.processEvents()  # ensure dialog fully tears down
+# Linux: avoid Wayland/portal hangs
+if sys.platform.startswith("linux"):
+    os.environ.setdefault("QT_QPA_PLATFORM", "xcb")
+
+def pick_h5ad_path(title="Select .h5ad file") -> str | None:
+    # Native on Win/mac (gets Quick Access/Recents); non-native on Linux
+    non_native = sys.platform.startswith("linux")
+    opts = QFileDialog.Options(QFileDialog.ReadOnly |
+                               (QFileDialog.DontUseNativeDialog if non_native else 0))
+
+    dlg = QFileDialog(None, title)
+    dlg.setFileMode(QFileDialog.ExistingFile)
+    dlg.setNameFilters(["AnnData H5AD (*.h5ad)", "All files (*.*)"])
+    dlg.setOptions(opts)
+
+    # Optional: add common folders to the sidebar (works in both modes)
+    sidebar = []
+    for loc in (QStandardPaths.DocumentsLocation,
+                QStandardPaths.DesktopLocation,
+                QStandardPaths.DownloadLocation):
+        for p in QStandardPaths.standardLocations(loc):
+            sidebar.append(QUrl.fromLocalFile(p))
+    if sidebar:
+        dlg.setSidebarUrls(sidebar)
+
+    path = None
+    if dlg.exec() == QFileDialog.Accepted:
+        sel = dlg.selectedFiles()
+        if sel:
+            path = sel[0]
+
+    _QT_APP.processEvents()
     return path or None
 
 import logging
