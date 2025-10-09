@@ -1,34 +1,32 @@
 import os, sys
-# --- Harden asyncio import order on Windows *before* importing Panel ---
-if sys.platform.startswith("win"):
-    import importlib, logging
-    for _m in (
-        'asyncio.base_events','asyncio.events','asyncio.format_helpers',
-        'asyncio.futures','asyncio.protocols','asyncio.tasks','asyncio.transports',
-        'asyncio.selector_events','asyncio.windows_events','asyncio.windows_utils',
-    ):
-        try:
-            importlib.import_module(_m)
-        except Exception as e:
-            logging.getLogger(__name__).warning("Preload failed for %s: %s", _m, e)
-    import asyncio
-    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-    from tornado.platform.asyncio import AsyncIOMainLoop
-    AsyncIOMainLoop().install()
-    # Optional tiny diagnostic
-    try:
-        import inspect
-        logging.getLogger(__name__).info(
-            "asyncio loaded from: %s",
-            (inspect.getsourcefile(asyncio) or inspect.getfile(asyncio))
-        )
-        import asyncio.base_events as _be  # assert import works
-    except Exception as e:
-        logging.getLogger(__name__).exception("Asyncio diagnostic failed: %s", e)
-
-
 from PySide6.QtWidgets import QApplication, QFileDialog
 from PySide6.QtCore import Qt, QUrl, QStandardPaths
+
+import logging
+import socket
+
+import panel as pn
+
+from session_state import SessionState
+from tabs.overview_tab import overview_tab
+from tabs.preprocessing_tab import preprocessing_tab
+from tabs.analysis_tab import analysis_tab
+
+from utils import logger, log_time, logging
+
+from logging.handlers import RotatingFileHandler
+from pathlib import Path
+
+# Verbose server-side logs while we’re iterating
+logging.getLogger().setLevel(logging.INFO)
+
+# Plotly support + loading overlay on slow renders
+pn.extension('plotly', defer_load=True, loading_indicator=True)
+
+MIN_PF_VERSION = os.environ.get("PF_MIN_PF_VERSION", "1.5.0")  # until we package
+
+#DEV = True  # change for env variable
+DEV = os.getenv("PV_DEV", "0") == "1"
 
 _QT_APP = QApplication.instance() or QApplication(sys.argv)
 
@@ -68,31 +66,6 @@ def pick_h5ad_path(title="Select .h5ad file") -> str | None:
     _QT_APP.processEvents()
     return path or None
 
-import logging
-import socket
-
-import panel as pn
-
-from session_state import SessionState
-from tabs.overview_tab import overview_tab
-from tabs.preprocessing_tab import preprocessing_tab
-from tabs.analysis_tab import analysis_tab
-
-from utils import logger, log_time, logging
-
-from logging.handlers import RotatingFileHandler
-from pathlib import Path
-
-# Verbose server-side logs while we’re iterating
-logging.getLogger().setLevel(logging.INFO)
-
-# Plotly support + loading overlay on slow renders
-pn.extension('plotly', defer_load=True, loading_indicator=True)
-
-MIN_PF_VERSION = os.environ.get("PF_MIN_PF_VERSION", "1.5.0")  # until we package
-
-#DEV = True  # change for env variable
-DEV = os.getenv("PV_DEV", "0") == "1"
 
 def setup_logging(app_name="ProteoViewer", filename="proteoviewer.log"):
     # Prefer the folder containing the EXE (or the script during dev)
