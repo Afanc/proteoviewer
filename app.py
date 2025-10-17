@@ -9,6 +9,7 @@ import panel as pn
 
 from session_state import SessionState
 from tabs.overview_tab import overview_tab
+from tabs.overview_tab_phospho import overview_tab_phospho
 from tabs.preprocessing_tab import preprocessing_tab
 from tabs.analysis_tab import analysis_tab
 
@@ -22,6 +23,7 @@ logging.getLogger().setLevel(logging.INFO)
 
 # Plotly support + loading overlay on slow renders
 pn.extension('plotly', defer_load=True, loading_indicator=True)
+pn.extension('tabulator', defer_load=True, loading_indicator=True)
 
 MIN_PF_VERSION = os.environ.get("PF_MIN_PF_VERSION", "1.5.0")  # until we package
 
@@ -175,6 +177,10 @@ def _lazy_tabs(state):
         ("Preprocessing", lambda: preprocessing_tab(state)),
         ("Analysis",      lambda: analysis_tab(state)),
     ]
+    if state.adata.uns['analysis'].get('analysis_type'.lower(), "DIA") == "phospho":
+        specs = [
+            ("Overview",      lambda: overview_tab_phospho(state)),
+        ]
 
     tabs = pn.Tabs(dynamic=False)  # keep content mounted once built
     holders, builders, built = [], [], []
@@ -291,8 +297,8 @@ def build_app():
     if DEV:
         try:
             from anndata import read_h5ad
-            adata = read_h5ad("proteoflux_results.h5ad")
-            _load(adata, "proteoflux_results.h5ad")
+            adata = read_h5ad("proteoflux_results_phospho.h5ad")
+            _load(adata, "proteoflux_results_phospho.h5ad")
             logging.info("DEV autoload successful.")
         except Exception:
             logging.exception("DEV autoload failed; starting with empty UI.")
