@@ -295,7 +295,7 @@ def overview_tab(state: SessionState):
         name="Color by",
         options=color_options,
         value=color_options[0],
-        width=200,
+        width=150,
     )
     # 3) Function to update toggle labels whenever contrast changes
     def _update_toggle_labels(event=None):
@@ -307,6 +307,20 @@ def overview_tab(state: SessionState):
     _update_toggle_labels()
 
     contrast_sel.param.watch(_update_toggle_labels, "value")
+
+    # Non-imputed datapoints per condition filter (same as phospho)
+    num_rep = int(adata.obs["REPLICATE"].max())
+    min_meas_options = {f"≥{i}": i for i in range(1, num_rep + 1)}
+
+    min_meas_sel = pn.widgets.Select(
+        name="Measured / condition",
+        options=list(min_meas_options.keys()),
+        value="≥1",
+        width=100,
+    )
+
+    def _min_meas_value(label: str) -> int:
+        return min_meas_options[label]
 
     # search widget
     def _ensure_gene(token: str) -> str | None:
@@ -498,6 +512,7 @@ def overview_tab(state: SessionState):
         show_measured=show_measured,
         show_imp_cond1=show_imp_cond1,
         show_imp_cond2=show_imp_cond2,
+        min_nonimp_per_cond=pn.bind(_min_meas_value, min_meas_sel),
         highlight=search_input,
         highlight_group=group_ids_selected,
         sign_threshold=0.05,
@@ -531,7 +546,6 @@ def overview_tab(state: SessionState):
     )
     volcano_plot.param.watch(_on_volcano_click, "click_data")
 
-    volcano_pane_height = 1060
     # Cohort Violin View
     def _cohort_violin(ids, contrast, sm, s1, s2):
         if not ids:
@@ -546,7 +560,6 @@ def overview_tab(state: SessionState):
             width=1200,
             height=100,
         )
-        volcano_pane_height = 1200
         return pn.pane.Plotly(
             fig,
             height=150,
@@ -948,13 +961,17 @@ def overview_tab(state: SessionState):
             contrast_sel,
             pn.Spacer(width=20),
             color_by,
-            pn.Spacer(width=30),
+            pn.Spacer(width=20),
+            make_vr(),
+            pn.Spacer(width=20),
             pn.Column(
                 show_measured,
                 show_imp_cond1,
                 show_imp_cond2,
                 margin=(-5,0,0,0),
             ),
+            pn.Spacer(width=10),
+            min_meas_sel,
             pn.Spacer(width=20),
             make_vr(),
             pn.Spacer(width=20),

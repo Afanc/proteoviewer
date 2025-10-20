@@ -103,6 +103,7 @@ def plot_violin_cv_rmad_per_condition(
 def plot_volcanoes_wrapper(
     state,
     sign_threshold: float = 0.05,
+    data_type: str = "default",
     width: int = 900,
     height: int = 900,
     show_measured: bool = True,
@@ -118,6 +119,7 @@ def plot_volcanoes_wrapper(
     fig =  plot_volcanoes(
         state=state,               # if `im` is your SessionState
         contrast=contrast,
+        data_type=data_type,
         sign_threshold=sign_threshold,
         height=height,
         show_measured=show_measured,

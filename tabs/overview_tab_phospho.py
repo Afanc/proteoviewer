@@ -404,7 +404,8 @@ def overview_tab_phospho(state: SessionState):
     _update_toggle_labels()
     contrast_sel.param.watch(_update_toggle_labels, "value")
 
-    min_meas_options = {"≥1": 1, "≥2": 2, "≥3": 3}
+    num_rep = max(adata.obs["REPLICATE"])
+    min_meas_options = {f"≥{i}": i for i in range(1,num_rep+1)}
     min_meas_sel = pn.widgets.Select(name="Measured / condition",
                                      options=list(min_meas_options.keys()), value="≥1", width=100)
 
@@ -470,6 +471,7 @@ def overview_tab_phospho(state: SessionState):
         plot_volcanoes_wrapper,
         state=state,
         contrast=contrast_sel,
+        data_type="phospho",
         color_by=color_by,
         show_measured=show_measured,
         show_imp_cond1=show_imp_cond1,
@@ -479,7 +481,7 @@ def overview_tab_phospho(state: SessionState):
         highlight_group=group_ids_dmap,
         sign_threshold=0.05,
         width=None,
-        height=900,
+        height=950,
     )
 
     def _on_volcano_click(event):
@@ -493,6 +495,7 @@ def overview_tab_phospho(state: SessionState):
         return fig
 
     volcano_dmap_wrapped = pn.bind(_with_uirevision, volcano_dmap, contrast_sel)
+
     volcano_plot = pn.pane.Plotly(
         volcano_dmap_wrapped,
         height=950,
@@ -552,6 +555,8 @@ def overview_tab_phospho(state: SessionState):
     pep_table_holder = pn.Column()
     main_bar_holder = pn.Column()
     cov_bar_holder = pn.Column()
+
+    bokeh_doc = pn.state.curdoc
 
     def _render_main_info():
         site_id = search_input.value
@@ -932,7 +937,7 @@ def overview_tab_phospho(state: SessionState):
         styles={"margin-left": "auto"},
     )
 
-    bokeh_doc = pn.state.curdoc
+    #bokeh_doc = pn.state.curdoc
     bokeh_doc.add_next_tick_callback(lambda: (_update_info(), _update_main_bar(), _update_cov_bar(), _update_peptide_table()))
 
     volcano_and_detail = pn.Row(

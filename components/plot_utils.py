@@ -940,6 +940,7 @@ def plot_binary_cluster_heatmap_plotly(
 def plot_volcanoes(
     state,
     contrast: str,
+    data_type: str = "default",
     sign_threshold: float = 0.05,
     width: int = 900,
     height: int = 900,
@@ -1011,12 +1012,21 @@ def plot_volcanoes(
         base_size = np.where(in_group, base_size * 1.05, base_size)
 
     # ---- data prep (same stats pipeline) ----
-    df_fc = pd.DataFrame(
-        adata.varm["raw_log2fc"], index=adata.var_names, columns=adata.uns["contrast_names"]
-    )
-    df_q  = pd.DataFrame(
-        adata.varm["raw_q_ebayes"], index=adata.var_names, columns=adata.uns["contrast_names"]
-    )
+    if data_type == "default":
+        df_fc = pd.DataFrame(
+            adata.varm["log2fc"], index=adata.var_names, columns=adata.uns["contrast_names"]
+        )
+        df_q  = pd.DataFrame(
+            adata.varm["q_ebayes"], index=adata.var_names, columns=adata.uns["contrast_names"]
+        )
+    elif data_type == "phospho":
+        df_fc = pd.DataFrame(
+            adata.varm["raw_log2fc"], index=adata.var_names, columns=adata.uns["contrast_names"]
+        )
+        df_q  = pd.DataFrame(
+            adata.varm["raw_q_ebayes"], index=adata.var_names, columns=adata.uns["contrast_names"]
+        )
+
     x = df_fc[contrast]
     y = -np.log10(df_q[contrast])
 
@@ -1101,6 +1111,29 @@ def plot_volcanoes(
         raise ValueError(f"Unknown color_by mode: {color_by!r}")
 
     fig = go.Figure()
+
+    use_coloraxis = (color_by != "Significance")
+    if use_coloraxis:
+        v = np.asarray(color_vals, dtype=float)
+        v = v[np.isfinite(v)]
+        if v.size == 0:
+            vmin, vmax, cmid = 0.0, 1.0, None
+        elif "LogFC" in color_by:  # center FC scales on 0
+            vmax = float(np.nanmax(np.abs(v)))
+            vmin, vmax, cmid = -vmax, vmax, 0.0
+        else:
+            vmin, vmax, cmid = float(np.nanmin(v)), float(np.nanmax(v)), None
+
+        # Define coloraxis in layout BEFORE traces so the colorbar space is reserved immediately
+        fig.update_layout(
+            coloraxis=dict(
+                colorscale=colorscale,
+                colorbar=(colorbar or dict(title=color_by, len=0.5)),
+                cmin=vmin, cmax=vmax, cmid=cmid,
+                showscale=True,
+            ),
+            coloraxis_showscale=True,
+        )
 
     def add_group_trace(mask, name, symbol):
         # NOTE: keep 'text' = gene for click → search to stay identical
@@ -1196,29 +1229,29 @@ def plot_volcanoes(
     ]
     if arrow_ann: annos.append(arrow_ann)
 
-    use_coloraxis = (color_by != "Significance")
-    if use_coloraxis:
-        v = np.asarray(color_vals, dtype=float)
-        v = v[np.isfinite(v)]
-        if v.size == 0:
-            vmin, vmax, cmid = 0.0, 1.0, None
-        elif "LogFC" in color_by:  # center FC scales on 0 (optional)
-            vmax = float(np.nanmax(np.abs(v)))
-            vmin, vmax, cmid = -vmax, vmax, 0.0
-        else:
-            vmin, vmax, cmid = float(np.nanmin(v)), float(np.nanmax(v)), None
+    #use_coloraxis = (color_by != "Significance")
+    #if use_coloraxis:
+    #    v = np.asarray(color_vals, dtype=float)
+    #    v = v[np.isfinite(v)]
+    #    if v.size == 0:
+    #        vmin, vmax, cmid = 0.0, 1.0, None
+    #    elif "LogFC" in color_by:  # center FC scales on 0 (optional)
+    #        vmax = float(np.nanmax(np.abs(v)))
+    #        vmin, vmax, cmid = -vmax, vmax, 0.0
+    #    else:
+    #        vmin, vmax, cmid = float(np.nanmin(v)), float(np.nanmax(v)), None
 
-        # single, persistent colorbar living in layout
-        fig.update_layout(
-            coloraxis=dict(
-                colorscale=colorscale,
-                colorbar=colorbar or dict(title=color_by, len=0.5),
-                cmin=vmin, cmax=vmax, cmid=cmid,
-                showscale=True,
-            )
-        )
+    #    # single, persistent colorbar living in layout
+    #    fig.update_layout(
+    #        coloraxis=dict(
+    #            colorscale=colorscale,
+    #            colorbar=colorbar or dict(title=color_by, len=0.5),
+    #            cmin=vmin, cmax=vmax, cmid=cmid,
+    #            showscale=True,
+    #        )
+    #    )
 
-        fig.update_layout(coloraxis_showscale=True)
+    #    fig.update_layout(coloraxis_showscale=True)
 
     fig.update_layout(
         margin=dict(l=60, r=120, t=60, b=60, autoexpand=False),
@@ -1233,230 +1266,6 @@ def plot_volcanoes(
         yaxis=dict(title="-log10(q-value)",  autorange=True),
         height=height,
         #width=width,
-    )
-    return fig
-
-def plot_volcanoes_old(
-    state,
-    contrast: str,
-    sign_threshold: float = 0.05,
-    width: int = 900,
-    height: int = 900,
-    show_measured: bool = True,
-    show_imp_cond1: bool = True,
-    show_imp_cond2: bool = True,
-    highlight: str = None,
-    highlight_group: Optional[Sequence[str]] = None,
-    color_by: str = "SNR",
-) -> go.Figure:
-    """
-    Volcano with *styling-only* changes for highlight logic:
-      - none: everyone at 1.0
-      - single highlight only: others at 0.1 (arrow shown)
-      - cohort only: non-cohort at 0.3 (keep halo)
-      - both: single at 1.0, cohort (minus that single) at 0.3, non-cohort at 0.1
-    Everything else matches `plot_volcanoes`.
-    """
-    adata = state.adata
-    genes = np.array(adata.var["GENE_NAMES"])
-    protids = np.array(adata.var_names, dtype=str)
-
-    # --- identify single highlight ---
-    if highlight and highlight in genes:
-        is_high = (genes == highlight)
-        high_idx = int(np.where(is_high)[0][0])
-    elif highlight and highlight in protids:
-        is_high = (protids == highlight)
-        high_idx = int(np.where(is_high)[0][0])
-    else:
-        is_high = np.zeros(len(genes), dtype=bool)
-        high_idx = None
-
-    # --- identify cohort membership (by gene or protein id) ---
-    if highlight_group:
-        group = set(map(str, highlight_group))
-        in_group = np.array([(g in group) or (p in group) for g, p in zip(genes, protids)], dtype=bool)
-    else:
-        in_group = np.zeros_like(protids, dtype=bool)
-
-    # --- opacity rules (style-only change) ---
-    # default: everyone fully visible
-    base_opacity = np.ones(len(genes), dtype=float)
-
-    any_group = bool(in_group.any())
-    any_single = bool(is_high.any())
-
-    if any_single and not any_group:
-        # single only → others at 0.1
-        base_opacity = np.where(is_high, 1.0, 0.08)
-    elif any_group and not any_single:
-        # cohort only → non-cohort at 0.3
-        base_opacity = np.where(in_group, 1.0, 0.08)
-    elif any_group and any_single:
-        # both → single at 1.0; cohort (minus single) at 0.3; everyone else 0.1
-        tmp = np.where(in_group, 0.2, 0.05)
-        base_opacity = np.where(is_high, 1.0, tmp)
-    # else: none → leave as ones
-
-    # --- size rules (style-only change) ---
-    # default marker size
-    base_size = np.full(len(genes), 6.0, dtype=float)
-    # +10% for single highlight
-    if any_single:
-        #base_size = np.where(is_high, base_size * 1.10, base_size)
-        base_size = np.where(is_high, base_size * 1.05, base_size)
-    # +10% for cohort membership (additive via multiplication; both ≈ +21%)
-    if any_group:
-        base_size = np.where(in_group, base_size * 1.05, base_size)
-
-    #base_size = np.round(base_size).astype(float)
-
-    # --- data prep (unchanged) ---
-    df_fc = pd.DataFrame(
-        adata.varm["log2fc"],
-        index=adata.var_names,
-        columns=adata.uns["contrast_names"]
-    )
-    df_q  = pd.DataFrame(
-        adata.varm["q_ebayes"],
-        index=adata.var_names,
-        columns=adata.uns["contrast_names"]
-    )
-    x = df_fc[contrast]
-    y = -np.log10(df_q[contrast])
-
-    miss = pd.DataFrame(adata.uns["missingness"])
-    grp1, grp2 = contrast.split("_vs_")
-    a = miss[grp1].values >= 1.0
-    b = miss[grp2].values >= 1.0
-    measured_mask = (~a & ~b)
-    imp1_mask     = (a & ~b)
-    imp2_mask     = (b & ~a)
-
-    sig_up   = (df_q[contrast] < sign_threshold) & (x > 0)
-    sig_down = (df_q[contrast] < sign_threshold) & (x < 0)
-
-    if color_by == "Significance":
-        color_vals = np.where(sig_up, "red",
-                      np.where(sig_down, "blue", "gray"))
-        colorscale = None
-        colorbar   = None
-    elif color_by == "Avg Expression":
-        expr_layer = adata.X
-        mat = expr_layer.toarray() if hasattr(expr_layer, "toarray") else expr_layer
-        idx1 = adata.obs["CONDITION"] == grp1
-        idx2 = adata.obs["CONDITION"] == grp2
-        mean1 = mat[idx1, :].mean(axis=0)
-        mean2 = mat[idx2, :].mean(axis=0)
-        avg_expr = pd.Series((mean1 + mean2) / 2, index=adata.var_names)
-        color_vals = avg_expr
-        colorscale = "thermal"
-        colorbar = dict(title="Mean log expr", len=0.5)
-    else:
-        raise ValueError(f"Unknown color_by mode: {color_by!r}")
-
-    HIGHLIGHT_GROUP_COLOR = "#6c5ce7"
-
-    fig = go.Figure()
-
-    def add_group_trace(mask, name, symbol):
-        trace_kwargs = dict(
-            x=x[mask], y=y[mask],
-            mode="markers",
-            marker=dict(
-                symbol=symbol,
-                #size=6,
-                size=base_size[mask],
-                opacity=base_opacity[mask],
-                line=dict(width=0),   # prevent hairline stroke/fringe
-            ),
-            name=name,
-            text=adata.var["GENE_NAMES"][mask],
-            hovertemplate="Gene: %{text}<br>log2FC: %{x:.2f}<br>-log10(q): %{y:.2f}<extra></extra>"
-        )
-        add_colorbar = False
-        if color_by != "Significance" and name == "Observed in both":
-            add_colorbar = True
-        if color_by != "significance":
-            trace_kwargs["marker"].update(
-                color=color_vals[mask],
-                colorscale=colorscale,
-                showscale = True if add_colorbar else False,
-                colorbar=colorbar if add_colorbar else None,
-            )
-        else:
-            trace_kwargs["marker"]["color"] = color_vals[mask]
-        fig.add_trace(go.Scattergl(**trace_kwargs))
-
-    if show_measured:   add_group_trace(measured_mask, "Observed in both", "circle")
-    if show_imp_cond1:  add_group_trace(imp1_mask, f"Imputed in {grp1}", "triangle-up")
-    if show_imp_cond2:  add_group_trace(imp2_mask, f"Imputed in {grp2}", "triangle-down")
-
-    thr_y = -np.log10(sign_threshold)
-    all_x = np.concatenate([
-        x[measured_mask] if show_measured else np.array([]),
-        x[imp1_mask]     if show_imp_cond1 else np.array([]),
-        x[imp2_mask]     if show_imp_cond2 else np.array([]),
-    ])
-    all_y = np.concatenate([
-        y[measured_mask] if show_measured else np.array([]),
-        y[imp1_mask]     if show_imp_cond1 else np.array([]),
-        y[imp2_mask]     if show_imp_cond2 else np.array([]),
-    ])
-    if all_x.size == 0:
-        xmin, xmax = -1.0, 1.0
-        ymin, ymax = 0.0, 1.0
-    else:
-        xmin, xmax = float(all_x.min()), float(all_x.max())
-        ymin, ymax = float(all_y.min()), float(all_y.max())
-    pad_x = (xmax - xmin) * 0.05
-    pad_y = (ymax - ymin) * 0.05
-
-    visible_mask = np.zeros_like(measured_mask)
-    if show_measured:  visible_mask |= measured_mask
-    if show_imp_cond1: visible_mask |= imp1_mask
-    if show_imp_cond2: visible_mask |= imp2_mask
-
-    arrow_ann = None
-    if (high_idx is not None) and visible_mask[high_idx]:
-        sign = 1 if x.iloc[high_idx] >= 0 else -1
-        xh = float(x.iloc[high_idx]); yh = float(y.iloc[high_idx])
-        arrow_ann = dict(
-            x=xh+sign*0.05, y=yh+0.05,
-            ax=xh+sign*0.5, ay=yh+0.5,
-            xref="x", yref="y", axref="x", ayref="y",
-            text=genes[high_idx],
-        )
-
-    # annotations
-    up   = int(((x > 0) & (df_q[contrast] < sign_threshold) & np.isin(x, all_x)).sum())
-    down = int(((x < 0) & (df_q[contrast] < sign_threshold) & np.isin(x, all_x)).sum())
-    rest = int(len(all_x) - up - down)
-
-    annos = [
-        dict(x=0.02, y=0.98, xref="paper", yref="paper", opacity=0.7,
-             text=f"<b>{down}</b>", bgcolor="blue", font=dict(color="white"), showarrow=False),
-        dict(x=0.500, y=0.98, xref="paper", yref="paper",
-             text=f"<b>{rest}</b>", bgcolor="lightgrey", font=dict(color="black"), showarrow=False),
-        dict(x=0.98, y=0.98, xref="paper", yref="paper", opacity = 0.7,
-             text=f"<b>{up}</b>", bgcolor="red", font=dict(color="white"), showarrow=False),
-    ]
-
-    all_annotations = annos + [arrow_ann] if arrow_ann else annos
-
-    fig.update_layout(
-        margin=dict(l=60, r=120, t=60, b=60, autoexpand=False),
-        annotations=all_annotations,
-        #annotations=[arrow_ann] if arrow_ann else [],
-        title=dict(text=f"{contrast}", x=0.5),
-        showlegend=False,
-        shapes=[
-            dict(type="line", x0=xmin-pad_x, x1=xmax+pad_x, y0=thr_y, y1=thr_y, line=dict(color="black", dash="dash")),
-            dict(type="line", x0=0, x1=0, y0=ymin-pad_y, y1=ymax+pad_y, line=dict(color="black", dash="dash")),
-        ],
-        xaxis=dict(title="log2 Fold Change", autorange=True),
-        yaxis=dict(title="-log10(q-value)", autorange=True),
-        height=height,
     )
     return fig
 
