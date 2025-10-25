@@ -25,7 +25,7 @@ logging.getLogger().setLevel(logging.INFO)
 pn.extension('plotly', defer_load=True, loading_indicator=True)
 pn.extension('tabulator', defer_load=True, loading_indicator=True)
 
-MIN_PF_VERSION = os.environ.get("PF_MIN_PF_VERSION", "1.6.0")  # until we package
+MIN_PF_VERSION = os.environ.get("PF_MIN_PF_VERSION", "1.7.0")  # until we package
 
 #DEV = True  # change for env variable
 DEV = os.getenv("PV_DEV", "0") == "1"

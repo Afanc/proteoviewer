@@ -45,7 +45,7 @@ def preprocessing_tab(state: SessionState):
         hists = plot_filter_histograms(adata)
         q_fig = hists.get('qvalue')
         p_fig = hists.get('pep')
-        r_fig = hists.get('run_evidence_count')
+        prec_fig = hists.get('precursors')
     except Exception as e:
         # Make it crystal clear in logs but keep the UI alive
         logger.warning(f"plot_filter_histograms failed ({e}); showing placeholders.")
@@ -56,7 +56,7 @@ def preprocessing_tab(state: SessionState):
                        height=400, flex="0.32", margin=(0,0,0,-100))
     p = plotly_section(p_fig if p_fig is not None else _placeholder_plot("Probab. filtering"),
                        height=400, flex='0.32')
-    r = plotly_section(r_fig if r_fig is not None else _placeholder_plot("Run-evidence filtering"),
+    prec = plotly_section(prec_fig if prec_fig is not None else _placeholder_plot("Precursors filtering"),
                        height=400, flex='0.32')
     #hists = plot_filter_histograms(adata)
 
@@ -68,7 +68,7 @@ def preprocessing_tab(state: SessionState):
         pn.pane.Markdown("##   Filtering", styles={"flex": "0.05", "z-index": "10"}),
         q, pn.Spacer(width=10), make_vr(), pn.Spacer(width=20),
         p, pn.Spacer(width=10), make_vr(), pn.Spacer(width=20),
-        r,
+        prec,
         height=420,
         width='95vw',
     )

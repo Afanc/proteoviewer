@@ -948,6 +948,7 @@ def plot_volcanoes(
     show_imp_cond1: bool = True,
     show_imp_cond2: bool = True,
     min_nonimp_per_cond: int = 0,
+    min_precursors: int = 1,
     highlight: str = None,
     highlight_group: Optional[Sequence[str]] = None,
     color_by: str = "Significance",
@@ -961,6 +962,8 @@ def plot_volcanoes(
     - Highlighting accepts gene, UniProt, or site labels.
     """
     adata = state.adata
+
+    has_cov = bool(adata.uns["has_covariate"])
 
     # ---- labels & ids (robust to phospho) ----
     genes   = np.array(adata.var.get("GENE_NAMES", pd.Series(index=adata.var_names, dtype=str)).astype(str))
@@ -1000,7 +1003,7 @@ def plot_volcanoes(
     if any_single and not any_group:
         base_opacity = np.where(is_high, 1.0, 0.08)
     elif any_group and not any_single:
-        base_opacity = np.where(in_group, 1.0, 0.08)
+        base_opacity = np.where(in_group, 1.0, 0.05)
     elif any_group and any_single:
         tmp = np.where(in_group, 0.2, 0.05)
         base_opacity = np.where(is_high, 1.0, tmp)
@@ -1012,7 +1015,7 @@ def plot_volcanoes(
         base_size = np.where(in_group, base_size * 1.05, base_size)
 
     # ---- data prep (same stats pipeline) ----
-    if data_type == "default":
+    if data_type == "default" or has_cov == False:
         df_fc = pd.DataFrame(
             adata.varm["log2fc"], index=adata.var_names, columns=adata.uns["contrast_names"]
         )
@@ -1026,17 +1029,46 @@ def plot_volcanoes(
         df_q  = pd.DataFrame(
             adata.varm["raw_q_ebayes"], index=adata.var_names, columns=adata.uns["contrast_names"]
         )
+    elif data_type == "flowthrough":
+        # flowthrough volcano: use FT-adjusted stats (experiment-wide covariate)
+        df_fc = pd.DataFrame(
+            adata.varm["ft_log2fc"], index=adata.var_names, columns=adata.uns["contrast_names"]
+        )
+        df_q  = pd.DataFrame(
+            adata.varm["ft_q_ebayes"], index=adata.var_names, columns=adata.uns["contrast_names"]
+        )
+
 
     x = df_fc[contrast]
     y = -np.log10(df_q[contrast])
 
     miss = pd.DataFrame(adata.uns["missingness"])
     grp1, grp2 = contrast.split("_vs_")
-    a = miss[grp1].values >= 1.0
-    b = miss[grp2].values >= 1.0
+    # number of replicates in each condition (can differ)
+    n1 = int((adata.obs["CONDITION"] == grp1).sum())
+    n2 = int((adata.obs["CONDITION"] == grp2).sum())
+
+    # fully missing in condition if count == number of replicates
+    a = miss[grp1].to_numpy() >= n1   # fully missing in grp1
+    b = miss[grp2].to_numpy() >= n2   # fully missing in grp2
     measured_mask = (~a & ~b)
     imp1_mask     = (a & ~b)
     imp2_mask     = (b & ~a)
+
+    # --- NEW: filter by experiment-wide min precursors ---
+    # Uses PG.NrOfPrecursorsIdentified (experiment-wide) harmonized as PRECURSORS_EXP.
+    # Any feature with PRECURSORS_EXP < min_precursors is hidden from all groups.
+    if data_type == "phospho":
+        arr = np.nanmax(np.asarray(adata.layers["spectral_counts"], dtype=float), axis=0)
+        prec = pd.Series(arr, index=adata.var_names, name="PRECURSORS_EXP")
+    else:
+        prec = adata.var.get("PRECURSORS_EXP")
+
+    prec = pd.to_numeric(prec, errors="coerce").fillna(0)
+    keep = (prec.values >= int(min_precursors))
+    measured_mask &= keep
+    imp1_mask     &= keep
+    imp2_mask     &= keep
 
     # --- NEW: per-condition non-imputed counts (from raw intensities) ---
     # We treat "measurement" as a non-NaN value in the raw layer.
@@ -1205,6 +1237,8 @@ def plot_volcanoes(
     if show_imp_cond2: visible_mask |= imp2_mask
 
     arrow_ann = None
+    #print(visible_mask[high_idx])
+    #print(show_measured, show_imp_cond1, show_imp_cond2)
     if (high_idx is not None) and visible_mask[high_idx]:
         sign = 1 if x.iloc[high_idx] >= 0 else -1
         xh = float(x.iloc[high_idx]); yh = float(y.iloc[high_idx])
@@ -1228,30 +1262,6 @@ def plot_volcanoes(
              text=f"<b>{up}</b>", bgcolor="red",   font=dict(color="white"), showarrow=False),
     ]
     if arrow_ann: annos.append(arrow_ann)
-
-    #use_coloraxis = (color_by != "Significance")
-    #if use_coloraxis:
-    #    v = np.asarray(color_vals, dtype=float)
-    #    v = v[np.isfinite(v)]
-    #    if v.size == 0:
-    #        vmin, vmax, cmid = 0.0, 1.0, None
-    #    elif "LogFC" in color_by:  # center FC scales on 0 (optional)
-    #        vmax = float(np.nanmax(np.abs(v)))
-    #        vmin, vmax, cmid = -vmax, vmax, 0.0
-    #    else:
-    #        vmin, vmax, cmid = float(np.nanmin(v)), float(np.nanmax(v)), None
-
-    #    # single, persistent colorbar living in layout
-    #    fig.update_layout(
-    #        coloraxis=dict(
-    #            colorscale=colorscale,
-    #            colorbar=colorbar or dict(title=color_by, len=0.5),
-    #            cmin=vmin, cmax=vmax, cmid=cmid,
-    #            showscale=True,
-    #        )
-    #    )
-
-    #    fig.update_layout(coloraxis_showscale=True)
 
     fig.update_layout(
         margin=dict(l=60, r=120, t=60, b=60, autoexpand=False),

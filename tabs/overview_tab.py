@@ -313,14 +313,26 @@ def overview_tab(state: SessionState):
     min_meas_options = {f"≥{i}": i for i in range(1, num_rep + 1)}
 
     min_meas_sel = pn.widgets.Select(
-        name="Measured / condition",
+        name="Min / condition",
         options=list(min_meas_options.keys()),
         value="≥1",
-        width=100,
+        width=80,
     )
 
     def _min_meas_value(label: str) -> int:
         return min_meas_options[label]
+
+    # Min numb. precursors options
+    min_prec_options = {f"≥{i}": i for i in range(1, 6)}
+    min_prec_sel = pn.widgets.Select(
+        name="Precursors",
+        options=list(min_prec_options.keys()),
+        value="≥1",
+        width=80,
+    )
+
+    def _min_prec_value(label: str) -> int:
+        return min_prec_options[label]
 
     # search widget
     def _ensure_gene(token: str) -> str | None:
@@ -513,6 +525,7 @@ def overview_tab(state: SessionState):
         show_imp_cond1=show_imp_cond1,
         show_imp_cond2=show_imp_cond2,
         min_nonimp_per_cond=pn.bind(_min_meas_value, min_meas_sel),
+        min_precursors=pn.bind(_min_prec_value, min_prec_sel),
         highlight=search_input,
         highlight_group=group_ids_selected,
         sign_threshold=0.05,
@@ -971,7 +984,11 @@ def overview_tab(state: SessionState):
                 margin=(-5,0,0,0),
             ),
             pn.Spacer(width=10),
-            min_meas_sel,
+            pn.Column(
+                min_meas_sel,
+                min_prec_sel,
+                margin=(-30,0,0,0),
+            ),
             pn.Spacer(width=20),
             make_vr(),
             pn.Spacer(width=20),

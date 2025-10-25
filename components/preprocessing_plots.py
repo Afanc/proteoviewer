@@ -255,7 +255,7 @@ def plot_filter_histograms(adata: AnnData) -> Dict[str, go.Figure]:
 
     figs["qvalue"]             = _one("qvalue", "Q-value")
     figs["pep"]                = _one("pep", "PEP")
-    figs["run_evidence_count"] = _one("rec", "Run Evidence Count")
+    figs["precursors"] = _one("prec", "Precursors")
     return figs
 
 def plot_filter_histograms_old(adata: AnnData) -> Dict[str, go.Figure]:

@@ -107,27 +107,52 @@ def _pep_dir_symbol(step: dict) -> str:
 # ---------- Cached accessors bound to a specific AnnData ----------
 
 def _make_adata_views(adata):
-    """
-    Create fast, cached views and lambdas bound to this AnnData snapshot.
-    All returned callables close over `adata` to avoid re-locating arrays.
-    """
+    var_index = pd.Index(adata.var_names, name="INDEX")
     contrast_names = tuple(adata.uns["contrast_names"])
-    var_index = adata.var_names
 
-    # varm matrices (DataFrame-backed for convenient .loc)
-    def _df(varm_key: str, fallback=None) -> pd.DataFrame:
-        arr = adata.varm.get(varm_key, fallback)
+    def _df_opt(varm_key):
+        """Return DataFrame if varm_key exists, else None."""
+        arr = adata.varm.get(varm_key, None)
         if arr is None:
-            raise KeyError(f"Missing adata.varm['{varm_key}']")
+            return None
         return pd.DataFrame(arr, index=var_index, columns=contrast_names)
+    # Required (always written by limma)
+    df_log2fc = _df_opt("log2fc");  assert df_log2fc is not None, "Missing varm['log2fc']"
+    df_q      = _df_opt("q_ebayes"); assert df_q      is not None, "Missing varm['q_ebayes']"
+    # Optional: fall back to adjusted if raw_* are absent (no covariate run)
+    df_raw_fc = _df_opt("raw_log2fc")
+    if df_raw_fc is None:
+        df_raw_fc = df_log2fc
+    df_raw_q = _df_opt("raw_q_ebayes")
+    if df_raw_q is None:
+        df_raw_q = df_q
 
-    df_log2fc = _df("log2fc")
-    df_q = _df("q_ebayes")
-    df_raw_q = _df("raw_q_ebayes")
-    df_raw_fc = _df("raw_log2fc", fallback=np.zeros_like(df_log2fc.values))
-    df_ft_q = _df("ft_q_ebayes")
-    df_ft_fc = _df("ft_log2fc")
-    df_cov_part = _df("cov_part", fallback=np.full_like(df_log2fc.values, np.nan))
+    # Optional FT/covariate outputs
+    df_ft_q     = _df_opt("ft_q_ebayes")
+    df_ft_fc    = _df_opt("ft_log2fc")
+    df_cov_part = _df_opt("cov_part")
+#def _make_adata_views(adata):
+#    """
+#    Create fast, cached views and lambdas bound to this AnnData snapshot.
+#    All returned callables close over `adata` to avoid re-locating arrays.
+#    """
+#    contrast_names = tuple(adata.uns["contrast_names"])
+#    var_index = adata.var_names
+#
+#    # varm matrices (DataFrame-backed for convenient .loc)
+#    def _df(varm_key: str, fallback=None) -> pd.DataFrame:
+#        arr = adata.varm.get(varm_key, fallback)
+#        if arr is None:
+#            raise KeyError(f"Missing adata.varm['{varm_key}']")
+#        return pd.DataFrame(arr, index=var_index, columns=contrast_names)
+
+#    df_log2fc = _df("log2fc")
+#    df_q = _df("q_ebayes")
+#    df_raw_q = _df("raw_q_ebayes")
+#    df_raw_fc = _df("raw_log2fc", fallback=np.zeros_like(df_log2fc.values))
+#    df_ft_q = _df("ft_q_ebayes")
+#    df_ft_fc = _df("ft_log2fc")
+#    df_cov_part = _df("cov_part", fallback=np.full_like(df_log2fc.values, np.nan))
 
     # layers frequently queried
     spectral_counts = pd.DataFrame(
@@ -287,6 +312,7 @@ def overview_tab_phospho(state: SessionState):
     """
     adata = state.adata
     views = _make_adata_views(adata)
+    has_cov = bool(adata.uns["has_covariate"])
     contrast_names = list(views["contrast_names"])
 
     # ---------- Summary / Intro ----------
@@ -387,14 +413,26 @@ def overview_tab_phospho(state: SessionState):
 
     # ---------- Volcanoes ----------
     contrasts = contrast_names
-    contrast_sel = pn.widgets.Select(name="Contrast", options=contrasts, value=contrasts[0], width=200)
+    contrast_sel = pn.widgets.Select(name="Contrast", options=contrasts, value=contrasts[0], width=180)
+
+    # which volcano to plot
+    volcano_src_opts = (["Phospho (raw)"] if not has_cov
+                        else ["Phospho (raw)", "Phospho (adj.)", "Flowthrough"])
+    volcano_src_sel = pn.widgets.Select(name="Volcano source", options=volcano_src_opts, value=volcano_src_opts[0], width=130)
+
+    def _volcano_dtype(label: str) -> str:
+        return {
+            "Phospho (raw)"      : "phospho",   # raw_* columns
+            "Phospho (adj.)" : "default",   # adjusted columns
+            "Flowthrough"   : "flowthrough",  # ft_* columns
+        }[label]
 
     show_measured = pn.widgets.Checkbox(name="Observed in Both", value=True)
     show_imp_cond1 = pn.widgets.Checkbox(name="", value=True)
     show_imp_cond2 = pn.widgets.Checkbox(name="", value=True)
 
-    color_options = ["Significance", "Adj. LogFC", "FT LogFC"]
-    color_by = pn.widgets.Select(name="Color by", options=color_options, value=color_options[0], width=150)
+    color_options = ["Significance"] + (["Raw LogFC", "Adj. LogFC", "FT LogFC"] if has_cov else [])
+    color_by = pn.widgets.Select(name="Color by", options=color_options, value=color_options[0], width=120)
 
     def _update_toggle_labels(_=None):
         grp1, grp2 = contrast_sel.value.split("_vs_")
@@ -406,11 +444,24 @@ def overview_tab_phospho(state: SessionState):
 
     num_rep = max(adata.obs["REPLICATE"])
     min_meas_options = {f"≥{i}": i for i in range(1,num_rep+1)}
-    min_meas_sel = pn.widgets.Select(name="Measured / condition",
-                                     options=list(min_meas_options.keys()), value="≥1", width=100)
+    min_meas_sel = pn.widgets.Select(name="Min / condition",
+                                     options=list(min_meas_options.keys()), value="≥1", width=80)
 
     def _min_meas_value(label: str) -> int:
         return min_meas_options[label]
+
+    # Min numb. precursors options
+    min_prec_options = {f"≥{i}": i for i in range(1, 6)}
+    min_prec_sel = pn.widgets.Select(
+        name="Precursors",
+        options=list(min_prec_options.keys()),
+        value="≥1",
+        width=80,
+    )
+
+    def _min_prec_value(label: str) -> int:
+        return min_prec_options[label]
+
 
     search_input = pn.widgets.AutocompleteInput(
         name="Search Phosphosite",
@@ -436,7 +487,7 @@ def overview_tab_phospho(state: SessionState):
         options=list(set(adata.var.get("GENE_NAMES", pd.Series(dtype=str)))) +
                 list(set(adata.var.get("PARENT_PROTEIN", pd.Series(dtype=str)))),
         case_sensitive=False,
-        width=200,
+        width=180,
         styles={"z-index": "10"},
         margin=(2, 0, 0, 0),
     )
@@ -464,19 +515,22 @@ def overview_tab_phospho(state: SessionState):
 
     status_pane.visible = pn.bind(_has_query, search_input_group)
 
-    clear_all = pn.widgets.Button(name="Clear", width=90)
+    clear_all = pn.widgets.Button(name="Clear", width=80)
     clear_all.on_click(lambda _e: setattr(search_input_group, "value", ""))
 
     volcano_dmap = pn.bind(
         plot_volcanoes_wrapper,
         state=state,
         contrast=contrast_sel,
-        data_type="phospho",
+        #data_type="phospho",
+        #data_type=pn.bind(_volcano_dtype, volcano_src_sel),
+        data_type=(lambda: "phospho") if not has_cov else pn.bind(_volcano_dtype, volcano_src_sel),
         color_by=color_by,
         show_measured=show_measured,
         show_imp_cond1=show_imp_cond1,
         show_imp_cond2=show_imp_cond2,
         min_nonimp_per_cond=pn.bind(_min_meas_value, min_meas_sel),
+        min_precursors=pn.bind(_min_prec_value, min_prec_sel),
         highlight=search_input,
         highlight_group=group_ids_dmap,
         sign_threshold=0.05,
@@ -539,7 +593,7 @@ def overview_tab_phospho(state: SessionState):
     layers_phos_sel = pn.widgets.Select(name="Phospho View", options=layers_phos, value=layers_phos[0],
                                         width=100, margin=(20, 0, 0, 0))
     layers_cov_sel = pn.widgets.Select(name="Flowthrough View", options=layers_cov, value=layers_cov[0],
-                                       width=100, margin=(20, 0, 0, 0))
+                                       width=100, margin=(20, 0, 0, 0), visible=has_cov)
 
     def _toggle_layers_visibility(event):
         visible = bool(event.new)
@@ -551,10 +605,27 @@ def overview_tab_phospho(state: SessionState):
     layers_cov_sel.visible = bool(search_input.value)
 
     main_info_holder = pn.Column()
-    cov_info_holder = pn.Column()
+    cov_info_holder = pn.Column(visible=has_cov)
     pep_table_holder = pn.Column()
     main_bar_holder = pn.Column()
-    cov_bar_holder = pn.Column()
+    cov_bar_holder = pn.Column(visible=has_cov)
+
+    detail_panel = pn.Row(
+        pn.Column(
+            main_info_holder,
+            pn.Spacer(height=20),
+            pn.Row(cov_info_holder, pn.Spacer(width=20, visible=has_cov), pep_table_holder, sizing_mode="fixed", width=800),
+            pn.Spacer(height=45),
+            main_bar_holder,
+            pn.Spacer(height=20),
+            cov_bar_holder,
+            sizing_mode="fixed",
+            width=840,
+        ),
+        margin=(0, 0, 0, 0),
+        sizing_mode="fixed",
+        styles={"margin-left": "auto"},
+    )
 
     bokeh_doc = pn.state.curdoc
 
@@ -591,7 +662,7 @@ def overview_tab_phospho(state: SessionState):
         parent_prot = str(vcol("PARENT_PROTEIN").iloc[idx]) if vcol("PARENT_PROTEIN") is not None else "n/a"
 
         # Precursors (site, mean spectral counts)
-        pep_num_prec = int(np.nanmean(views["spectral_counts"].loc[:, site_id]))
+        pep_num_prec = int(np.nanmax(views["spectral_counts"].loc[:, site_id]))
 
         uid_for_link = _first_token(parent_prot) or ""
         string_link = _cached_string_link(uid_for_link)
@@ -601,14 +672,15 @@ def overview_tab_phospho(state: SessionState):
                            font_size="12pt", styles={"flex": "1"})
         raw_lfc_ind = Number(name="Raw log₂ FC", value=lfc_raw, format="{value:.3f}", default_color="red",
                              font_size="12pt", styles={"flex": "1"})
-        q_ind = Number(name="FT-adj. q-value", value=q_adj, format="{value:.3e}", default_color="purple",
-                       font_size="12pt", styles={"flex": "1"})
-        lfc_ind = Number(name="FT-adj. log₂ FC", value=lfc_adj, format="{value:.3f}", default_color="purple",
-                         font_size="12pt", styles={"flex": "1"})
-        covp_ind = Number(name="Covariate part", value=cov_piece, format="{value:.3f}", default_color="gray",
-                          font_size="12pt", styles={"flex": "1"})
         loc_ind = Number(name="Max(Loc. Score)", value=loc_score, format="{value:.3f}", default_color="gray",
                          font_size="12pt", styles={"flex": "1"})
+        if has_cov:
+            q_ind = Number(name="FT-adj. q-value", value=q_adj, format="{value:.3e}", default_color="purple",
+                           font_size="12pt", styles={"flex": "1"})
+            lfc_ind = Number(name="FT-adj. log₂ FC", value=lfc_adj, format="{value:.3f}", default_color="purple",
+                             font_size="12pt", styles={"flex": "1"})
+            covp_ind = Number(name="Covariate part", value=cov_piece, format="{value:.3f}", default_color="gray",
+                          font_size="12pt", styles={"flex": "1"})
 
         pretty_id = re.sub(r"(\w+)\|(p\d+)", r"\1 | \2", site_id)
         header = pn.Row(
@@ -654,21 +726,46 @@ def overview_tab_phospho(state: SessionState):
             "justify-content": "space-evenly",
         }
 
+        #card = pn.Card(
+        #    header,
+        #    pn.Row(raw_q_ind, raw_lfc_ind, loc_ind, sizing_mode="stretch_width"),
+        #    make_hr(),
+        #    #pn.Row(q_ind, lfc_ind, covp_ind, sizing_mode="stretch_width"),
+        #    #make_hr(),
+        #    footer_links,
+        #    width=800,
+        #    styles=card_style,
+        #    collapsible=False,
+        #    hide_header=True,
+        #)
+        rows = [header,
+                pn.Row(raw_q_ind, raw_lfc_ind, loc_ind, sizing_mode="stretch_width"),
+                make_hr()]
+        # Add FT-adjusted row only if covariate outputs exist
+        if has_cov:
+            rows += [pn.Row(q_ind, lfc_ind, covp_ind, sizing_mode="stretch_width"),
+                     make_hr()]
+#        rows = [header,
+#                pn.Row(q_ind, lfc_ind, covp_ind, sizing_mode="stretch_width"),
+#                make_hr()]
+#        if has_cov:
+#            rows += [pn.Row(q_ind, lfc_ind, covp_ind, sizing_mode="stretch_width"),
+#                     make_hr()]
         card = pn.Card(
             header,
-            pn.Row(raw_q_ind, raw_lfc_ind, loc_ind, sizing_mode="stretch_width"),
-            make_hr(),
-            pn.Row(q_ind, lfc_ind, covp_ind, sizing_mode="stretch_width"),
-            make_hr(),
+            *rows,
             footer_links,
             width=800,
             styles=card_style,
             collapsible=False,
             hide_header=True,
         )
+
         return card
 
     def _render_cov_info():
+        if not has_cov:
+            return pn.Spacer(width=800, height=120)
         site_id = search_input.value
         if not site_id:
             return pn.Spacer(width=800, height=120)
@@ -677,9 +774,11 @@ def overview_tab_phospho(state: SessionState):
         except KeyError:
             return pn.Spacer(width=800, height=120)
 
-        df_ft_q = views["df_ft_q"]
-        df_ft_fc = views["df_ft_fc"]
-        df_cov_part = views["df_cov_part"]
+        df_ft_q = df_ft_qc = df_cov_part = None
+        if has_cov:
+            df_ft_q = views["df_ft_q"]
+            df_ft_fc = views["df_ft_fc"]
+            df_cov_part = views["df_cov_part"]
         vcol = views["vcol"]
 
         contrast = contrast_sel.value
@@ -890,6 +989,9 @@ def overview_tab_phospho(state: SessionState):
             main_bar_holder.loading = False
 
     def _update_cov_bar(_=None):
+        if not has_cov:
+            cov_bar_holder[:] = [pn.Spacer(width=0, height=0)]
+            return
         site = search_input.value
         if not site:
             cov_bar_holder[:] = [pn.Spacer(width=800, height=500, margin=(-30, 0, 0, 0))]
@@ -920,24 +1022,6 @@ def overview_tab_phospho(state: SessionState):
     layers_phos_sel.param.watch(lambda _e: _update_main_bar(), "value")
     layers_cov_sel.param.watch(lambda _e: _update_cov_bar(), "value")
 
-    detail_panel = pn.Row(
-        pn.Column(
-            main_info_holder,
-            pn.Spacer(height=20),
-            pn.Row(cov_info_holder, pn.Spacer(width=20), pep_table_holder, sizing_mode="fixed", width=800),
-            pn.Spacer(height=45),
-            main_bar_holder,
-            pn.Spacer(height=20),
-            cov_bar_holder,
-            sizing_mode="fixed",
-            width=840,
-        ),
-        margin=(0, 0, 0, 0),
-        sizing_mode="fixed",
-        styles={"margin-left": "auto"},
-    )
-
-    #bokeh_doc = pn.state.curdoc
     bokeh_doc.add_next_tick_callback(lambda: (_update_info(), _update_main_bar(), _update_cov_bar(), _update_peptide_table()))
 
     volcano_and_detail = pn.Row(
@@ -959,23 +1043,31 @@ def overview_tab_phospho(state: SessionState):
         pn.Row(
             contrast_sel,
             pn.Spacer(width=10),
+            volcano_src_sel,
+            pn.Spacer(width=10),
             color_by,
             pn.Spacer(width=10),
             make_vr(),
-            pn.Spacer(width=20),
+            pn.Spacer(width=10),
             pn.Column(show_measured, show_imp_cond1, show_imp_cond2, margin=(-5, 0, 0, 0)),
-            pn.Spacer(width=20),
-            min_meas_sel,
-            pn.Spacer(width=20),
+            pn.Spacer(width=10),
+            #min_meas_sel,
+            pn.Column(
+                min_meas_sel,
+                min_prec_sel,
+                margin=(-30,0,0,0),
+            ),
+
+            pn.Spacer(width=10),
             make_vr(),
             pn.Spacer(width=20),
             pn.Column(search_field_sel),
             pn.Spacer(width=10),
             pn.Column(search_input_group),
             pn.Column(pn.Row(clear_all, margin=(13, 0, 0, 0)), status_pane),
-            pn.Spacer(width=20),
+            pn.Spacer(width=10),
             make_vr(),
-            pn.Spacer(width=20),
+            pn.Spacer(width=10),
             search_input,
             pn.Row(clear_search, margin=(15, 0, 0, 0)),
             pn.Spacer(width=0),
