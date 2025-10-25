@@ -143,14 +143,16 @@ def _parse_semver(v: str):
 
 
 def _check_pf_meta(adata):
-    """Return (ok: bool, message: str, meta: dict)."""
     meta = adata.uns.get("proteoflux", {}) or {}
     pfv = meta.get("pf_version")
     created = meta.get("created_at", "unknown time")
+
     if not pfv:
         return (False, "No ProteoFlux version found in uns['proteoflux'].", meta)
+
     if _parse_semver(pfv) < _parse_semver(MIN_PF_VERSION):
-        return (False, f" File written by ProteoFlux {pfv} (< {MIN_PF_VERSION}). Proceeding; some views may be limited.", meta)
+        return (False, f"File written by ProteoFlux {pfv} (< {MIN_PF_VERSION}). Please re-export with a newer ProteoFlux.", meta)
+
     return (True, f"ProteoFlux {pfv} • {created}", meta)
 
 
@@ -240,6 +242,12 @@ def build_app():
     content    = pn.Column(sizing_mode="stretch_width")  # replaced reactively below
 
     def _load(adata, fname):
+        ok, msg, _ = _check_pf_meta(adata)
+        if not ok:
+            # stop here — don't build tabs
+            status.object = f"**Incompatible file** · {msg} · Required ≥ {MIN_PF_VERSION}"
+            return
+
         state = SessionState.initialize(adata)
         tabs = _lazy_tabs(state)
         content.clear()
