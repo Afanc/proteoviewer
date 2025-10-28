@@ -707,18 +707,9 @@ def plot_cluster_heatmap_plotly(
         trace["xaxis"] = "x2"
         dendro_col.add_trace(trace)
 
-    fig = dendro_col  # start from the col‐dendrogram figure
+    fig = dendro_col
 
-    # 4) Extract the leaf order by label
-    col_leaves = fig.layout["xaxis"]["ticktext"]
-    row_leaves = dendro_row.layout["yaxis"]["ticktext"]
-    col_order = [df.columns.get_loc(lbl) for lbl in col_leaves]
-    row_order = [df.index.get_loc(lbl)   for lbl in row_leaves]
-
-    # 5) Reorder the DataFrame
-    df = df.iloc[row_order, :].iloc[:, col_order]
-
-    # 6) Add the heatmap of the raw (or z-scored) values
+    # Add the heatmap of the raw (or z-scored) values
     min_val, max_val = np.nanmin(df.values), np.nanmax(df.values)
 
     if (min_val < 0) and (max_val > 0):
@@ -728,45 +719,47 @@ def plot_cluster_heatmap_plotly(
         zmid = 0
         rev  = True
     else:
-        # nonnegative (intensities) → natural range, no zero centering
+        # nonnegative (intensities) -> natural range, no zero centering
         zmin, zmax = float(min_val), float(max_val)
         zmid = None
         rev  = False
 
-    #heat = go.Heatmapgl( ??
+    # Build per-cell labels
+    # Use gene names if provided, otherwise fall back to df.index
+    if y_labels is not None:
+        _ylab_map = pd.Series(y_labels, index=df.index)
+        row_disp = [_ylab_map.get(r, r) for r in df.index]
+    else:
+        row_disp = list(df.index)
+    col_disp = list(df.columns)
+    # customdata shape: (n_rows, n_cols, 2) -> [protein_label, sample_label]
+    _cd = np.empty((df.shape[0], df.shape[1], 2), dtype=object)
+    for i, r in enumerate(row_disp):
+        _cd[i, :, 0] = r
+    for j, c in enumerate(col_disp):
+        _cd[:, j, 1] = c
+
+    #heat = go.Heatmapgl(
     heat = go.Heatmap(
         z=df.values,
         x=fig.layout.xaxis["tickvals"],
         y=dendro_row.layout.yaxis["tickvals"],
+        customdata=_cd,
         colorscale=colorscale,
         reversescale=True,
         zmid=zmid,
         zmin=zmin,
         zmax=zmax,
         hoverinfo="text",
-        hovertemplate=
-            "Protein: %{y}<br>"
-            "Sample: %{x}<br>"
-            "Value: %{z:.2f}<extra></extra>",
+        hovertemplate=(
+            "Gene Name: %{customdata[0]}<br>"
+            "Sample: %{customdata[1]}<br>"
+            "Value: %{z:.2f}<extra></extra>"
+        ),
         showscale=True,
         colorbar=dict(title="Value"),
     )
     fig.add_trace(heat)
-
-    # gene names
-    if y_labels is not None:
-        # get the protein IDs in the clustered order
-        row_leaves = dendro_row.layout["yaxis"]["ticktext"]
-        # map each protein ID → gene name
-        ticktexts = [y_labels[df.index.get_loc(pid)] for pid in row_leaves]
-        # overwrite the main y-axis (heatmap) ticks
-        fig.update_layout(
-            yaxis=dict(
-                tickmode="array",
-                tickvals=dendro_row.layout["yaxis"]["tickvals"],
-                ticktext=ticktexts
-            )
-        )
 
     levels  = pd.Categorical(cond_series).categories
     cmap    = get_color_map(levels, px.colors.qualitative.Plotly)
