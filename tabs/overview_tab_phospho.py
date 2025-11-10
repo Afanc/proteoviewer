@@ -209,15 +209,17 @@ def _build_pipeline_summary(adata) -> str:
     input_layout = preproc.get("input_layout", "")
     quant_method = preproc.get("quantification_method", "sum")
 
+    pf_version = adata.uns['proteoflux'].get("pf_version", 0.0)
+
     cont_step = filtering.get("cont", {})
     q_step = filtering.get("qvalue", {})
     pep_step = filtering.get("pep", {})
-    rec_step = filtering.get("rec", {})
+    prec_step = filtering.get("prec", {})
 
     cont_txt, _ = _fmt_step(cont_step, "n/a")
     q_txt, q_thr_txt = _fmt_step(q_step, "n/a")
     pep_txt, pep_thr_txt = _fmt_step(pep_step, "n/a")
-    rec_txt, rec_thr_txt = _fmt_step(rec_step, "n/a")
+    prec_txt, prec_thr_txt = _fmt_step(prec_step, "n/a")
     pep_op = _pep_dir_symbol(pep_step)
 
     contaminants_files = [os.path.basename(p) for p in cont_step.get("files", [])]
@@ -265,10 +267,12 @@ def _build_pipeline_summary(adata) -> str:
             - Contaminants ({', '.join(contaminants_files)}): {cont_txt}
             - q-value ≤ {q_thr_txt}: {q_txt}
             - PEP {pep_op} {pep_thr_txt}: {pep_txt}
-            - Min. run evidence count = {rec_thr_txt}: {rec_txt}
+            - Min. run evidence count = {prec_thr_txt}: {prec_txt}
         - **Normalization**: {norm_methods_str}
         - **Imputation**: {imp_method}
         - **Differential expression**: eBayes via {ebayes_method}
+
+        **Proteoflux Version** {pf_version}
         """
     ).strip()
 

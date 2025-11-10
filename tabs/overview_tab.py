@@ -71,6 +71,9 @@ def overview_tab(state: SessionState):
     num_conditions = len(adata.obs["CONDITION"].unique())
     num_contrasts = int(num_conditions*(num_conditions-1)/2)
     quant_method = preproc_cfg.get("quantification_method", "sum")
+
+    pf_version = adata.uns['proteoflux'].get("pf_version", 0.0)
+
     flt_cfg = adata.uns.get("preprocessing", {}).get("filtering", [])
     n_cont   = flt_cfg.get("cont", {}).get("number_dropped", [])
     n_q   = flt_cfg.get("qvalue", {}).get("number_dropped", [])
@@ -91,13 +94,14 @@ def overview_tab(state: SessionState):
     cont_step = flt_cfg.get("cont", {})
     q_step    = flt_cfg.get("qvalue", {})
     pep_step  = flt_cfg.get("pep", {})
-    rec_step  = flt_cfg.get("rec", {})
+    prec_step  = flt_cfg.get("prec", {})
+    print(flt_cfg)
 
     cont_txt, _          = _fmt_step(cont_step, "cont", "n/a")
     q_txt,    q_thr_txt  = _fmt_step(q_step,    "qvalue", "n/a")
     pep_txt,  pep_thr_txt= _fmt_step(pep_step,  "pep", "n/a")
     pep_op = "≥" if flt_cfg.get("pep").get("direction").startswith("greater") else "≤"
-    rec_txt,  rec_thr_txt= _fmt_step(rec_step,  "rec", "n/a")
+    prec_txt,  prec_thr_txt= _fmt_step(prec_step,  "prec", "n/a")
 
     contaminants_files = [os.path.basename(p) for p in flt_cfg.get('cont', {}).get('files', [])]
 
@@ -153,10 +157,12 @@ def overview_tab(state: SessionState):
             - Contaminants ({', '.join(contaminants_files)}): {cont_txt}
             - q-value ≤ {q_thr_txt}: {q_txt}
             - PEP {pep_op} {pep_thr_txt}: {pep_txt}
-            - Min. run evidence count = {rec_thr_txt}: {rec_txt}
+            - Min. run evidence count = {prec_thr_txt}: {prec_txt}
         - **Normalization**: {norm_methods}
         - **Imputation**: {imp_method}
         - **Differential expression**: eBayes via {ebayes_method}
+
+        **Proteoflux Version** {pf_version}
     """).strip()
 
     # intro_pane:

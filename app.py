@@ -151,7 +151,13 @@ def _check_pf_meta(adata):
         return (False, "No ProteoFlux version found in uns['proteoflux'].", meta)
 
     if _parse_semver(pfv) < _parse_semver(MIN_PF_VERSION):
-        return (False, f"File written by ProteoFlux {pfv} (< {MIN_PF_VERSION}). Please re-export with a newer ProteoFlux.", meta)
+        return (False, f"File written by ProteoFlux {pfv} (Required >= {MIN_PF_VERSION}). Please re-export with a newer ProteoFlux.", meta)
+
+    pilot_study_mode = adata.uns["pilot_study_mode"]
+
+    if pilot_study_mode:
+        return (False, "This experiment has at least 1 Condition with only 1 Replicate - Pilot Study Mode. Nothing to show in Proteoviewer.", meta)
+
 
     return (True, f"ProteoFlux {pfv} • {created}", meta)
 
@@ -245,7 +251,7 @@ def build_app():
         ok, msg, _ = _check_pf_meta(adata)
         if not ok:
             # stop here — don't build tabs
-            status.object = f"**Incompatible file** · {msg} · Required ≥ {MIN_PF_VERSION}"
+            status.object = f"**Incompatible file** · {msg}"
             return
 
         state = SessionState.initialize(adata)
@@ -305,8 +311,8 @@ def build_app():
     if DEV:
         try:
             from anndata import read_h5ad
-            adata = read_h5ad("proteoflux_results.h5ad")
-            _load(adata, "proteoflux_results.h5ad")
+            adata = read_h5ad("proteoflux_results_phospho.h5ad")
+            _load(adata, "proteoflux_results_phospho.h5ad")
             logging.info("DEV autoload successful.")
         except Exception:
             logging.exception("DEV autoload failed; starting with empty UI.")
