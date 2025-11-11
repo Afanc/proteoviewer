@@ -10,6 +10,7 @@ from tabs.overview_tab_phospho import overview_tab_phospho
 from tabs.preprocessing_tab import preprocessing_tab
 from tabs.analysis_tab import analysis_tab
 
+from layout_utils import make_vr, make_hr
 from utils import logger, log_time, logging  # keep as-is; used elsewhere
 
 # Console-only logging (no file handlers)
@@ -173,6 +174,7 @@ def _build_header(area_center, version: str, dev_flag: bool) -> pn.Column:
     # Left side: title on top, then the existing controls/status column underneath
     left_block = pn.Column(
         title,
+        pn.Spacer(height=20),
         area_center,                     # contains [browse row, status row]
         sizing_mode="stretch_width",
     )
