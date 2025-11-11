@@ -45,7 +45,14 @@ def make_section(header: str, row: pn.Row,
     """
     Wraps a header + one Row into a Column “section”.
     """
-    hdr = pn.pane.Markdown(f"##   {header}", styles={"flex": "0.05"})
+    #hdr = pn.pane.Markdown(f"##   {header}", styles={"flex": "0.05"})
+    hdr = pn.pane.Markdown(f"##   {header}")
+    #hdr = pn.pane.Markdown(
+    #    f"##   {header}",
+    #    sizing_mode="stretch_width",
+    #    margin=(6, 0, 0, 0),
+    #    styles={"flex": "0.05", "line-height": "1.1em"}
+    #)
     return pn.Column(
         hdr,
         row,

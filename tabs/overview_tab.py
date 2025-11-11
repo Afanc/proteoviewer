@@ -95,7 +95,6 @@ def overview_tab(state: SessionState):
     q_step    = flt_cfg.get("qvalue", {})
     pep_step  = flt_cfg.get("pep", {})
     prec_step  = flt_cfg.get("prec", {})
-    print(flt_cfg)
 
     cont_txt, _          = _fmt_step(cont_step, "cont", "n/a")
     q_txt,    q_thr_txt  = _fmt_step(q_step,    "qvalue", "n/a")
