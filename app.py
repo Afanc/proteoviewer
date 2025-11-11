@@ -19,6 +19,7 @@ logging.getLogger().setLevel(logging.INFO)
 # Panel extensions
 pn.extension('plotly', 'tabulator', defer_load=True, loading_indicator=True, design="native")
 pn.config.loading_spinner = 'petal'
+pn.state.curdoc.title = "ProteoViewer"
 
 MIN_PF_VERSION = os.environ.get("PF_MIN_PF_VERSION", "1.7.4")
 
@@ -133,6 +134,11 @@ CSS = r"""
   outline: none;
   box-shadow: none;
 }
+
+html, body, .bk-root {
+  overflow-x: hidden !important;
+}
+* { box-sizing: border-box; }
 """
 pn.config.raw_css = (pn.config.raw_css or []) + [CSS]
 
@@ -189,7 +195,7 @@ def _make_about_card(version: str) -> pn.Card:
 def _build_header(area_center, version: str, dev_flag: bool) -> pn.Column:
     """Header with left stack (title, browse, status) and right stack (logo, facility)."""
     pv_logo_path = "resources/pv_banner.png"
-    pv_logo_pane = pn.pane.PNG(pv_logo_path, width=200, sizing_mode="fixed", margin=(0,0,-40,0))
+    pv_logo_pane = pn.pane.PNG(pv_logo_path, width=200, sizing_mode="fixed", margin=(-10,0,-40,0))
 
     ver_label = f"v{version}" + (" · DEV" if dev_flag else "")
     pv_ver = pn.pane.Markdown(
@@ -210,18 +216,17 @@ def _build_header(area_center, version: str, dev_flag: bool) -> pn.Column:
     # Left side: title on top, then the existing controls/status column underneath
     left_block = pn.Row(
                      pv_logo_pane,
-                     pn.Spacer(width=20),
+                     pn.Spacer(width=10),
                      pn.Column(
-                         pn.Spacer(height=35),
+                         pn.Spacer(height=25),
                          info,
                          pn.Spacer(height=5),
                          pv_ver,
                          width=100,
-                         #area_center,
                      ),
                      area_center,
             sizing_mode="stretch_width",
-            height=100,
+            height=80,
     )
 
 
@@ -445,7 +450,7 @@ def build_app():
         pick_btn.on_click(_on_pick_path)
 
         controls = pn.Column(
-            pn.Spacer(height=10),
+            #pn.Spacer(height=10),
             pn.Row(pick_btn, sizing_mode="stretch_width"),
             pn.Row(status, sizing_mode="stretch_width", css_classes=["pv-status"]),
             sizing_mode="stretch_width",
@@ -489,7 +494,7 @@ def build_app():
         file_in.param.watch(_on_file_in, 'value')
 
         controls = pn.Column(
-            pn.Spacer(height=10),
+            #pn.Spacer(height=10),
             pn.Row(file_in, sizing_mode="stretch_width"),
             pn.Row(status, sizing_mode="stretch_width", css_classes=["pv-status"]),
             sizing_mode="stretch_width",
@@ -502,6 +507,7 @@ def build_app():
 
     # Final layout: header (colored) on top, then the tabs/content
     app = pn.Column(header, content, sizing_mode="stretch_width")
+
     return app
 
 
