@@ -182,7 +182,7 @@ def overview_tab(state: SessionState):
         options=["By condition", "By sample"],
         value="By condition",
         button_type="default",
-        sizing_mode="fixed",
+        #sizing_mode="fixed",
         width=170,
         margin=(20, 0, 0, 20),
         styles={"z-index": "10"},
@@ -871,11 +871,11 @@ def overview_tab(state: SessionState):
             bar_holder,
             pn.Spacer(height=20),
             pep_holder,
-            sizing_mode="fixed",
+            #sizing_mode="fixed",
             width=840,
         ),
         margin=(0, 0, 0, 0),
-        sizing_mode="fixed",
+        #sizing_mode="fixed",
         styles={
             "margin-left": "auto",     # ← push this block to the right
         }

@@ -16,6 +16,8 @@ from components.preprocessing_plots import (
     plot_grouped_violin_imputation_by_condition,
     plot_grouped_violin_imputation_by_sample,
     plot_grouped_violin_imputation_metrics_by_condition,
+    plot_grouped_violin_before_after_imputation_metrics_by_condition,
+    plot_left_censoring_histogram,
     _placeholder_plot,
 )
 from components.texts import (
@@ -73,13 +75,34 @@ def preprocessing_tab(state: SessionState):
         width='95vw',
     )
 
+    censor_fig = plotly_section(plot_left_censoring_histogram(adata), height=400, flex="1", margin=(0,0,0,-150))
+    censor_row = make_row(
+        pn.pane.Markdown("##   Left-censoring", styles={"flex": "0.07", "z-index": "10"}),
+        censor_fig,
+        height=420,
+        width='95vw',
+    )
+
     psm_pane = make_section(
         header="Precursor-level",
-        row=filtering_row,
+        row=pn.Column(
+            filtering_row,
+            pn.Spacer(height=20),
+            censor_row,
+            sizing_mode="stretch_width",
+        ),
         background="#E3F2FD",
         width="98vw",
-        height=500
+        height=940,   # was 500; increased to fit the extra row
     )
+
+    #psm_pane = make_section(
+    #    header="Precursor-level",
+    #    row=filtering_row,
+    #    background="#E3F2FD",
+    #    width="98vw",
+    #    height=500
+    #)
 
     # Quantification
     dyn_fig = plotly_section(plot_dynamic_range(adata), height=400)
@@ -407,6 +430,18 @@ def preprocessing_tab(state: SessionState):
                                    flex="1",
                                    margin=(20,0,0,-50))
 
+    fig_cv_ba, fig_rmad_ba = plot_grouped_violin_before_after_imputation_metrics_by_condition(adata)
+    imput_rmad_ba_pane = plotly_section(fig_rmad_ba,
+                                        height=500,
+                                        flex="1",
+                                        margin=(20,0,0,-100))
+
+
+    imput_cv_ba_pane = plotly_section(fig_cv_ba,
+                                      height=500,
+                                      flex="1",
+                                      margin=(20,0,0,-50))
+
     dist_row = make_row(
         pn.pane.Markdown("##   Distributions", styles={"flex": "0.1", "z-index": "10"}),
         imput_dist_cond_pane,
@@ -419,13 +454,30 @@ def preprocessing_tab(state: SessionState):
     )
 
     metrics_row = make_row(
-        pn.pane.Markdown("##   Metrics", styles={"flex": "0.1", "z-index": "10"}),
-        imput_rmad_pane,
-        make_vr(),
-        pn.Spacer(width=60),
-        imput_cv_pane,
+        pn.pane.Markdown("##   Metrics", styles={"flex": "0.05", "z-index": "10"}),
+        pn.Column(
+            pn.Row(
+                imput_rmad_pane,
+                make_vr(),
+                pn.Spacer(width=60),
+                imput_cv_pane,
+                height=540,
+                margin=(0, 0, 0, 0),
+            ),
+            make_hr(),
+            pn.Spacer(width=20),
+            pn.Row(
+                imput_rmad_ba_pane,
+                make_vr(),
+                pn.Spacer(width=60),
+                imput_cv_ba_pane,
+                height=540,
+                margin=(0, 0, 0, 0),
+            ),
+            height=1100,
+        ),
+        height=1100,
         width="92vw",
-        height=540,
     )
 
     imputation_pane = make_section(
@@ -440,7 +492,7 @@ def preprocessing_tab(state: SessionState):
         ),
         background="#FFCC80",
         width="95vw",
-        height=2380,
+        height=2940,
     )
 
     # final protein pane
@@ -456,7 +508,7 @@ def preprocessing_tab(state: SessionState):
         ),
         background="#FFF8F0",
         width="98vw",
-        height=4800,
+        height=5350,
     )
 
     return pn.Column(
