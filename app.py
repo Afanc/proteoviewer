@@ -20,7 +20,7 @@ logging.getLogger().setLevel(logging.INFO)
 pn.extension('plotly', 'tabulator', defer_load=True, loading_indicator=True, design="native")
 pn.config.loading_spinner = 'petal'
 
-MIN_PF_VERSION = os.environ.get("PF_MIN_PF_VERSION", "1.7.0")
+MIN_PF_VERSION = os.environ.get("PF_MIN_PF_VERSION", "1.7.4")
 
 # Single flag: dev (local run). If not dev => server mode.
 DEV = os.getenv("PV_DEV", "0") == "1"
@@ -154,30 +154,89 @@ def _read_version_from_spec(spec_path: str = "proteoviewer.spec") -> str:
         return "0.0.0"
 
 
+def _about_modal_content(version: str) -> pn.viewable.Viewable:
+    """Small modal with credits, companion note, and citation placeholder."""
+    md = pn.pane.Markdown(
+        f"""
+### ProteoViewer {version}
+**Developed at:** Proteomics Core Facility, Biozentrum – University of Basel
+**Author / contact:** Your Name – <you@unibas.ch>
+
+**Companion tool:** *ProteoViewer* is the visualization companion to the **ProteoFlux** analysis pipeline.
+
+**How to cite (placeholder):**
+If you use ProteoViewer/ProteoFlux, please cite:
+*ProteoFlux (2025), Proteomics Core Facility, Biozentrum, University of Basel*
+(DOI pending)
+        """.strip(),
+        sizing_mode="stretch_width"
+    )
+    # A compact card looks neat in the modal
+    return pn.Card(md, title="About ProteoViewer", collapsible=False, styles={"max-width": "720px"})
+
+def _make_about_card(version: str) -> pn.Card:
+    # Collapsed by default; header is the toggle
+    return pn.Card(
+        _about_modal_content(version),   # reuse your existing content
+        title="About",
+        collapsible=True,                # header acts like a button
+        collapsed=True,                  # start closed
+        sizing_mode="fixed",
+        width=720,                       # same width you liked
+        styles={"max-width": "720px"},   # keep it from growing wider
+    )
+
 def _build_header(area_center, version: str, dev_flag: bool) -> pn.Column:
     """Header with left stack (title, browse, status) and right stack (logo, facility)."""
+    pv_logo_path = "resources/pv_banner.png"
+    pv_logo_pane = pn.pane.PNG(pv_logo_path, width=200, sizing_mode="fixed", margin=(0,0,-40,0))
+
     ver_label = f"v{version}" + (" · DEV" if dev_flag else "")
-    title = pn.pane.Markdown(
-        f"<div class='pv-title'>ProteoViewer <span class='pv-badge'>{ver_label}</span></div>"
+    pv_ver = pn.pane.Markdown(
+        f"<span class='pv-badge'>{ver_label}</span>",
+        margin=(0,0,0,-20),
     )
 
-    # Right side: logo above facility — same width, left-aligned inside the block
-    FACILITY_WIDTH = 180
-    logo_path = "resources/Biozentrum_Logo_2011.png"
-    logo_pane = pn.pane.PNG(logo_path, width=FACILITY_WIDTH, sizing_mode="fixed", margin=(0, 0, 6, -15))
-    facility = pn.pane.Markdown(
-        "<div class='pv-facility'>Proteomics Core Facility</div>",
-        width=FACILITY_WIDTH, sizing_mode="fixed",
+    info = pn.widgets.TooltipIcon(
+        value="""
+    Proteomics Core Facility
+    Biozentrum - University of Basel
+    dariush.mollet@unibas.ch
+    [DOI pending]
+        """,
+        margin=(0,0,0,-125),
     )
-    right_block = pn.Column(logo_pane, facility, width=FACILITY_WIDTH, sizing_mode="fixed")
 
     # Left side: title on top, then the existing controls/status column underneath
-    left_block = pn.Column(
-        title,
-        pn.Spacer(height=20),
-        area_center,                     # contains [browse row, status row]
-        sizing_mode="stretch_width",
+    left_block = pn.Row(
+                     pv_logo_pane,
+                     pn.Spacer(width=20),
+                     pn.Column(
+                         pn.Spacer(height=35),
+                         info,
+                         pn.Spacer(height=5),
+                         pv_ver,
+                         width=100,
+                         #area_center,
+                     ),
+                     area_center,
+            sizing_mode="stretch_width",
+            height=100,
     )
+
+
+    # Right side: logo above facility — same width, left-aligned inside the block
+    FACILITY_WIDTH = 140
+    bz_logo_path = "resources/Biozentrum_Logo_2011.png"
+    bz_logo_pane = pn.pane.PNG(bz_logo_path, width=FACILITY_WIDTH, sizing_mode="fixed", margin=(0, 50, 6, -15))
+    facility = pn.pane.Markdown(
+        "<div class='pv-facility'><b>Proteomics Core Facility</b></div>",
+        width=FACILITY_WIDTH, sizing_mode="fixed",
+    )
+    right_top_row = pn.Row(bz_logo_pane,
+                           pn.Spacer(width=100),
+                           sizing_mode="fixed", align="center")
+    right_block = pn.Column(right_top_row, width=FACILITY_WIDTH, sizing_mode="fixed")
 
     # One clean header row: left stack and right stack aligned at the top
     mainbar = pn.Row(
@@ -190,132 +249,6 @@ def _build_header(area_center, version: str, dev_flag: bool) -> pn.Column:
     )
 
     return pn.Column(mainbar, sizing_mode="stretch_width", css_classes=["pv-header"])
-
-def _build_header_almost(area_center, version: str, dev_flag: bool) -> pn.Column:
-    """Header with Biozentrum logo above facility text, both right-aligned."""
-    ver_label = f"v{version}" + (" · DEV" if dev_flag else "")
-    title = pn.pane.Markdown(
-        f"<div class='pv-title'>ProteoViewer <span class='pv-badge'>{ver_label}</span></div>",
-        sizing_mode="stretch_width"
-    )
-
-    # --- Right-side block: logo stacked above facility text ---
-    FACILITY_WIDTH = 260  # pick your preferred width; 340–420 also works nicely
-
-    logo_path = "resources/Biozentrum_Logo_2011.png"
-    logo_pane = pn.pane.PNG(
-        logo_path,
-        width=FACILITY_WIDTH, height=None, sizing_mode="fixed",
-        margin=(0, 0, 6, 0)  # small gap above the text
-    )
-
-    facility = pn.pane.Markdown(
-        "<div class='pv-facility'>Proteomics Core Facility &ndash; Biozentrum &ndash; University of Basel</div>",
-        sizing_mode="fixed", width=FACILITY_WIDTH,
-    )
-
-    right_block = pn.Column(
-        logo_pane, facility,
-        width=FACILITY_WIDTH, sizing_mode="fixed",
-        align="end"   # keep the whole block flush right; contents are left-aligned within
-    )
-
-    # Top: title
-    topbar = pn.Row(title, sizing_mode="stretch_width")
-
-    # Split controls into the two rows (Browse, then Status)
-    try:
-        first_row  = area_center[0] if len(area_center) > 0 else area_center
-        second_row = area_center[1] if len(area_center) > 1 else None
-    except Exception:
-        first_row, second_row = area_center, None
-
-    top_controls = pn.Column(first_row, sizing_mode="stretch_width", css_classes=["pv-subbar"])
-
-    if second_row is not None:
-        # Status row left, logo+facility right
-        status_and_facility = pn.Row(
-            second_row,
-            pn.Spacer(),
-            right_block,
-            sizing_mode="stretch_width",
-            align="center",
-            css_classes=["pv-subbar"],
-        )
-        substack = pn.Column(top_controls, status_and_facility, sizing_mode="stretch_width")
-    else:
-        substack = pn.Column(
-            top_controls,
-            pn.Row(pn.Spacer(), right_block, sizing_mode="stretch_width", css_classes=["pv-subbar"]),
-            sizing_mode="stretch_width",
-        )
-
-    return pn.Column(topbar, substack, sizing_mode="stretch_width", css_classes=["pv-header"])
-
-def _build_header_top(area_center, version: str, dev_flag: bool) -> pn.Column:
-    """Compose the square, calm header."""
-    ver_label = f"v{version}" + (" · DEV" if dev_flag else "")
-    title = pn.pane.Markdown(
-        f"<div class='pv-title'>ProteoViewer <span class='pv-badge'>{ver_label}</span></div>",
-        sizing_mode="stretch_width"
-    )
-    facility = pn.pane.Markdown(
-        "<div class='pv-facility'>Proteomics Core Facility &ndash; Biozentrum &ndash; University of Basel</div>",
-        sizing_mode="fixed", width=420
-    )
-    topbar = pn.Row(title, pn.Spacer(), facility, sizing_mode="stretch_width")
-    subbar = pn.Column(area_center, sizing_mode="stretch_width", css_classes=["pv-subbar"])
-    return pn.Column(topbar, subbar, sizing_mode="stretch_width", css_classes=["pv-header"])
-
-def _build_header_yes(area_center, version: str, dev_flag: bool) -> pn.Column:
-    """Header with facility text on the same row as the status (far right)."""
-    ver_label = f"v{version}" + (" · DEV" if dev_flag else "")
-    title = pn.pane.Markdown(
-        f"<div class='pv-title'>ProteoViewer <span class='pv-badge'>{ver_label}</span></div>",
-        sizing_mode="stretch_width"
-    )
-
-    facility = pn.pane.Markdown(
-        "<div class='pv-facility'>Proteomics Core Facility &ndash; Biozentrum &ndash; University of Basel</div>",
-        sizing_mode="fixed",
-        width=420,
-    )
-
-    # Top line: title only
-    topbar = pn.Row(title, sizing_mode="stretch_width")
-
-    # Split your existing controls column into:
-    # - first: the browse/file input row
-    # - second: the status row (we align facility with this one)
-    try:
-        first_row  = area_center[0] if len(area_center) > 0 else area_center
-        second_row = area_center[1] if len(area_center) > 1 else None
-    except Exception:
-        first_row, second_row = area_center, None
-
-    # Keep the same header background for both rows
-    top_controls = pn.Column(first_row, sizing_mode="stretch_width", css_classes=["pv-subbar"])
-
-    if second_row is not None:
-        # Status row (left) + facility (right) on the SAME line
-        status_and_facility = pn.Row(
-            second_row,
-            pn.Spacer(),
-            facility,
-            sizing_mode="stretch_width",
-            align="center",              # vertically center the baseline
-            css_classes=["pv-subbar"],
-        )
-        substack = pn.Column(top_controls, status_and_facility, sizing_mode="stretch_width")
-    else:
-        # Fallback: keep facility at bottom right if we couldn't split
-        substack = pn.Column(
-            top_controls,
-            pn.Row(pn.Spacer(), facility, sizing_mode="stretch_width", css_classes=["pv-subbar"]),
-            sizing_mode="stretch_width",
-        )
-
-    return pn.Column(topbar, substack, sizing_mode="stretch_width", css_classes=["pv-header"])
 
 def pick_h5ad_path(title="Select .h5ad file") -> str | None:
     """Native system dialog for local dev; no-op on server."""
@@ -512,6 +445,7 @@ def build_app():
         pick_btn.on_click(_on_pick_path)
 
         controls = pn.Column(
+            pn.Spacer(height=10),
             pn.Row(pick_btn, sizing_mode="stretch_width"),
             pn.Row(status, sizing_mode="stretch_width", css_classes=["pv-status"]),
             sizing_mode="stretch_width",
@@ -544,7 +478,7 @@ def build_app():
                 dest_path = os.path.join(dest_dir, fname)
                 with open(dest_path, "wb") as f:
                     f.write(file_in.value)
-                status.object = f"Saved to `{dest_path}`. Loading…"
+                status.object = f"Loading…"
                 adata = read_h5ad(dest_path)
                 _load(adata, fname)
             except Exception as e:
@@ -555,6 +489,7 @@ def build_app():
         file_in.param.watch(_on_file_in, 'value')
 
         controls = pn.Column(
+            pn.Spacer(height=10),
             pn.Row(file_in, sizing_mode="stretch_width"),
             pn.Row(status, sizing_mode="stretch_width", css_classes=["pv-status"]),
             sizing_mode="stretch_width",

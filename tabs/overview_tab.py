@@ -200,7 +200,7 @@ def overview_tab(state: SessionState):
 
     hist_plot_pane = pn.pane.Plotly(hist_ID_dmap,
                        height=500,
-                       margin=(-20, 20, 0, -190),
+                       margin=(0, 20, 0, -190),
                        styles={"flex":"1",
                               }
     )
@@ -1019,7 +1019,7 @@ def overview_tab(state: SessionState):
             pn.Row(clear_search, margin = (17,0,0,0)),
             pn.Spacer(width=0),
             pn.Row(layers_sel, margin = (-17,0,0,0)),
-            sizing_mode="fixed",
+            #sizing_mode="fixed",
             width=300,
             height=80,
         ),

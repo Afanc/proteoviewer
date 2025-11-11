@@ -238,7 +238,7 @@ def plot_stacked_proteins_by_category(
             font=dict(size=12, color="black")
         )
 
-    # 8) Conditions legend (interactive) — put it in the *main* legend
+    # 8) Conditions legend
     for j, cond in enumerate(unique_conds):
         fig.add_trace(go.Scatter(
             x=[None], y=[None],
@@ -265,7 +265,7 @@ def plot_stacked_proteins_by_category(
         template="plotly_white",
         margin=dict(t=150, r=160, l=60, b=60),      # top margin for the horiz row
         legend=dict(
-            x=1.08, y=1.19,
+            x=1.15, y=1.19,
             xanchor="right", yanchor="top",
             bordercolor="black", borderwidth=1,
             orientation="v",

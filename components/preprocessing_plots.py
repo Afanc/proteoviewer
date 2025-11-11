@@ -1335,7 +1335,7 @@ def plot_left_censoring_histogram(adata: AnnData) -> go.Figure:
 
     # vertical cutoff line at log10(threshold)
     if np.isfinite(thr_log):
-        fig.add_vline(x=thr_log, line=dict(color="black", dash="dash"))
+        fig.add_vline(x=thr_log, line=dict(color="red", dash="dash"))
 
     kept    = int(meta.get("kept", 0))
     dropped = int(meta.get("dropped", 0))
