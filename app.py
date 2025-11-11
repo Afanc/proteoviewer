@@ -5,7 +5,11 @@ from PySide6.QtCore import Qt, QUrl, QStandardPaths
 import logging
 import socket
 
+import tempfile
+import uuid
+from pathlib import Path
 import panel as pn
+import time
 
 from session_state import SessionState
 from tabs.overview_tab import overview_tab
@@ -26,6 +30,8 @@ pn.extension('plotly', defer_load=True, loading_indicator=True)
 pn.extension('tabulator', defer_load=True, loading_indicator=True)
 
 MIN_PF_VERSION = os.environ.get("PF_MIN_PF_VERSION", "1.7.0")  # until we package
+UPLOAD_ROOT = Path(os.environ.get("PV_UPLOAD_DIR", "/mnt/DATA/proteoviewer_uploads"))
+UPLOAD_ROOT.mkdir(parents=True, exist_ok=True)
 
 #DEV = True  # change for env variable
 DEV = os.getenv("PV_DEV", "0") == "1"
@@ -242,8 +248,7 @@ def build_app():
     - Content area below gets replaced with the Tabs once a file is loaded.
     """
     # widgets
-    pick_btn   = pn.widgets.Button(name="Browse system files", button_type="primary")
-    exit_btn   = pn.widgets.Button(name="Exit", button_type="danger")
+    upload_in  = pn.widgets.FileInput(accept=".h5ad", multiple=False, width=220)
     status     = pn.pane.Markdown("### Please upload a .h5ad ProteoFlux file.")
     content    = pn.Column(sizing_mode="stretch_width")  # replaced reactively below
 
@@ -260,52 +265,34 @@ def build_app():
         content.append(tabs)
         status.object = f"**Loaded:** {fname}"
 
-    # Native system file dialog (local dev) → loads directly from path (no WS)
-    def _on_pick_path(event):
+    # Minimal local upload (browser -> server temp -> read_h5ad(backed='r'))
+    def _on_upload_change(event):
+        """Write uploaded bytes to a unique temp path, then load backed='r'."""
         from anndata import read_h5ad
+        data = event.new or b""
+        if not data:
+            return
         try:
-            status.object = "Waiting for system file dialog…"
-            path = pick_h5ad_path()
-
-            #import tkinter as tk
-            #from tkinter import filedialog
-
-            #root = tk.Tk()
-            #root.withdraw()
-            #try:
-            #    root.attributes('-topmost', True)  # bring dialog to front (best effort)
-            #except Exception:
-            #    pass
-
-            #path = filedialog.askopenfilename(
-            #    title="Select .h5ad file",
-            #    filetypes=[("AnnData H5AD", "*.h5ad"), ("All files", "*.*")],
-            #)
-            #root.destroy()
-
-            if not path:
-                status.object = "Selection cancelled."
-                return
-
-            status.object = "Loading…"
-            adata = read_h5ad(path)  # disk read, no WebSocket
-            _load(adata, os.path.basename(path))
+            # Per-session-ish unique name, avoid collisions
+            sid = (getattr(pn.state.curdoc, "session_context", None) and pn.state.curdoc.session_context.id) or uuid.uuid4().hex[:8]
+            fname = upload_in.filename or "upload.h5ad"
+            safe = "".join(c if c.isalnum() or c in "._-" else "_" for c in fname)
+            sess_dir = UPLOAD_ROOT / sid
+            sess_dir.mkdir(parents=True, exist_ok=True)
+            tmp_path = sess_dir / f"{int(time.time())}_{safe}"
+            # Write to disk
+            with open(tmp_path, "wb") as f:
+                f.write(data)
+            #status.object = f"Loading `{safe}` (backed='r')…"
+            status.object = f"Loading `{safe}`..."
+            adata = read_h5ad(str(tmp_path))#, backed="r")
+            _load(adata, safe)
         except Exception as e:
             import traceback
-            status.object = f"**Error (system dialog):** {e}"
-            print("[_on_pick_path] EXCEPTION:", e, "\n", traceback.format_exc(), flush=True)
+            status.object = f"**Error (upload):** {e}"
+            print("[upload] EXCEPTION:", e, "\n", traceback.format_exc(), flush=True)
 
-    # Wire events
-    pick_btn.on_click(_on_pick_path)
-
-    # Exit button
-    def _on_exit(event):
-        for w in (pick_btn, exit_btn, status):
-            w.visible = False
-        content[:] = [pn.pane.Markdown("## Thanks for using ProteoViewer!")]
-        pn.state.curdoc.add_next_tick_callback(lambda: os._exit(0))
-
-    exit_btn.on_click(_on_exit)
+    upload_in.param.watch(_on_upload_change, "value")
 
     # Dev mode: load default without clicking
     if DEV:
@@ -316,17 +303,25 @@ def build_app():
             logging.info("DEV autoload successful.")
         except Exception:
             logging.exception("DEV autoload failed; starting with empty UI.")
-    #if DEV:
-    #    from anndata import read_h5ad
-    #    adata = read_h5ad("proteoflux_results.h5ad")
-    #    _load(adata, "proteoflux_results.h5ad")
+
+    # Minimal footer
+    footer = pn.pane.Markdown(
+        "<div style='font-size:12px;opacity:0.8;padding-top:6px'>"
+        "<b>Proteomics Core Facility</b> - Biozentrum, University of Basel"
+        "</div>", sizing_mode="stretch_width"
+    )
 
     controls = pn.Column(
-        pn.Row(pick_btn, exit_btn, sizing_mode="stretch_width"),
+        pn.Row(upload_in, sizing_mode="stretch_width"),
         pn.Row(status, sizing_mode="stretch_width"),
         sizing_mode="stretch_width",
     )
-    app = pn.Column("# ProteoViewer", controls, content, sizing_mode="stretch_width")
+
+    app = pn.Column(
+        "# ProteoViewer",
+        controls,
+        content,
+        sizing_mode="stretch_width")
     return app
 
 
