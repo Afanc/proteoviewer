@@ -270,12 +270,22 @@ def get_protein_info(state, contrast, protein, layer):
     vals = mat[np.logical_or(idx1, idx2), col_idx]
     avg_int = float(np.nanmean(vals))
 
+    # Average iBAQ across samples
+    ibaq_layer = ad.layers.get("ibaq")
+    avg_ibaq = None
+    if ibaq_layer is not None:
+        ibaq_mat = ibaq_layer.toarray() if hasattr(ibaq_layer, "toarray") else np.asarray(ibaq_layer)
+        col_vals = ibaq_mat[:, col_idx]
+        avg_ibaq_val = np.nanmean(col_vals.astype(float))
+        avg_ibaq = float(avg_ibaq_val) if np.isfinite(avg_ibaq_val) else None
+
     protein_info = {
         'uniprot_id': uniprot_id,
         'qval': qval,
         'logfc': logfc,
         'avg_int': avg_int,
         'index': col_idx,
+        'avg_ibaq': avg_ibaq
     }
     return protein_info
 

@@ -200,7 +200,7 @@ def _build_header(area_center, version: str, dev_flag: bool) -> pn.Column:
     ver_label = f"v{version}" + (" · DEV" if dev_flag else "")
     pv_ver = pn.pane.Markdown(
         f"<span class='pv-badge'>{ver_label}</span>",
-        margin=(0,0,0,-20),
+        margin=(0,0,-20,-20),
     )
 
     info = pn.widgets.TooltipIcon(
@@ -224,9 +224,10 @@ def _build_header(area_center, version: str, dev_flag: bool) -> pn.Column:
                          pv_ver,
                          width=100,
                      ),
+                     pn.Spacer(width=30),
                      area_center,
             sizing_mode="stretch_width",
-            height=80,
+            height=40,
     )
 
 
@@ -447,7 +448,7 @@ def build_app():
         pick_btn.on_click(_on_pick_path)
 
         controls = pn.Column(
-            #pn.Spacer(height=10),
+            pn.Spacer(height=10),
             pn.Row(pick_btn, sizing_mode="stretch_width"),
             pn.Row(status, sizing_mode="stretch_width", css_classes=["pv-status"]),
             sizing_mode="stretch_width",
@@ -491,7 +492,7 @@ def build_app():
         file_in.param.watch(_on_file_in, 'value')
 
         controls = pn.Column(
-            #pn.Spacer(height=10),
+            pn.Spacer(height=10),
             pn.Row(file_in, sizing_mode="stretch_width"),
             pn.Row(status, sizing_mode="stretch_width", css_classes=["pv-status"]),
             sizing_mode="stretch_width",

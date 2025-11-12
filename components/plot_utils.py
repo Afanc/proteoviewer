@@ -1088,11 +1088,11 @@ def plot_volcanoes(
     sig_up   = (df_q[contrast] < sign_threshold) & (x > 0)
     sig_down = (df_q[contrast] < sign_threshold) & (x < 0)
 
+    colorscale = None
+    colorbar   = None
     if color_by == "Significance":
         color_vals = np.where(sig_up, "red", np.where(sig_down, "blue", "gray"))
-        colorscale = None
-        colorbar   = None
-    elif color_by == "Avg Expression":
+    elif color_by == "Avg Intensity":
         expr_layer = adata.X
         mat = expr_layer.toarray() if hasattr(expr_layer, "toarray") else expr_layer
         idx1 = adata.obs["CONDITION"] == grp1
@@ -1102,7 +1102,12 @@ def plot_volcanoes(
         avg_expr = pd.Series((mean1 + mean2) / 2, index=adata.var_names)
         color_vals = avg_expr
         colorscale = "thermal"
-        colorbar = dict(title="Mean log expr", len=0.5)
+        colorbar = dict(title="Avg Int", len=0.5)
+    elif color_by == "Avg IBAQ" and "ibaq" in adata.layers:
+        ibaq = adata.layers["ibaq"]
+        avg_ibaq = np.log10(np.nanmean(ibaq+1, axis=0))
+        color_vals = avg_ibaq
+        colorbar = dict(title="Avg log(IBAQ)", len=0.5)
     elif color_by == "Raw LogFC":
         raw = adata.varm["raw_log2fc"]
         df_raw = pd.DataFrame(raw, index=adata.var_names, columns=adata.uns["contrast_names"])

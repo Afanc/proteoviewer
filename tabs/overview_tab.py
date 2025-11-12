@@ -75,13 +75,6 @@ def overview_tab(state: SessionState):
     pf_version = adata.uns['proteoflux'].get("pf_version", 0.0)
 
     flt_cfg = adata.uns.get("preprocessing", {}).get("filtering", [])
-    n_cont   = flt_cfg.get("cont", {}).get("number_dropped", [])
-    n_q   = flt_cfg.get("qvalue", {}).get("number_dropped", [])
-    n_pep   = flt_cfg.get("pep", {}).get("number_dropped", [])
-    n_re   = flt_cfg.get("rec", {}).get("number_dropped", [])
-    thresh_q = flt_cfg.get("qvalue", {}).get("threshold", 0)
-    thresh_pep = flt_cfg.get("pep", {}).get("threshold", 0)
-    thresh_re = flt_cfg.get("rec", {}).get("threshold", 0)
 
     def _fmt_step(step: dict, name: str, default_thr: str) -> tuple[str, str]:
         if not step:
@@ -95,12 +88,14 @@ def overview_tab(state: SessionState):
     q_step    = flt_cfg.get("qvalue", {})
     pep_step  = flt_cfg.get("pep", {})
     prec_step  = flt_cfg.get("prec", {})
+    censor_step= flt_cfg.get("censor", {})
 
     cont_txt, _          = _fmt_step(cont_step, "cont", "n/a")
     q_txt,    q_thr_txt  = _fmt_step(q_step,    "qvalue", "n/a")
     pep_txt,  pep_thr_txt= _fmt_step(pep_step,  "pep", "n/a")
     pep_op = "≥" if flt_cfg.get("pep").get("direction").startswith("greater") else "≤"
     prec_txt,  prec_thr_txt= _fmt_step(prec_step,  "prec", "n/a")
+    censor_txt, censor_thr_txt= _fmt_step(censor_step,  "censor", "n/a")
 
     contaminants_files = [os.path.basename(p) for p in flt_cfg.get('cont', {}).get('files', [])]
 
@@ -157,6 +152,7 @@ def overview_tab(state: SessionState):
             - q-value ≤ {q_thr_txt}: {q_txt}
             - PEP {pep_op} {pep_thr_txt}: {pep_txt}
             - Min. run evidence count = {prec_thr_txt}: {prec_txt}
+            - Left Censoring ≤ {censor_thr_txt}: {censor_txt}
         - **Normalization**: {norm_methods}
         - **Imputation**: {imp_method}
         - **Differential expression**: eBayes via {ebayes_method}
@@ -294,7 +290,7 @@ def overview_tab(state: SessionState):
     show_imp_cond2 = pn.widgets.Checkbox(name=f"", value=True)
 
     # Color selector
-    color_options = ["Significance", "Avg Expression"]
+    color_options = ["Significance", "Avg Intensity", "Avg IBAQ"]
 
     color_by = pn.widgets.Select(
         name="Color by",
@@ -667,10 +663,12 @@ def overview_tab(state: SessionState):
             return default
 
         rec_val  = _safe_var("PRECURSORS_EXP", default=None)
-        ibaq_raw = _safe_var("IBAQ", default=None)
+        #ibaq_raw = _safe_var("IBAQ", default=None)
+        ibaq_avg = protein_info.get("avg_ibaq")
+        ibaq_val = _fmt_ibaq(ibaq_avg) if ibaq_avg is not None else "n/a"
 
         re_count = _fmt_int(rec_val) if rec_val is not None else "n/a"
-        ibaq_val = _fmt_ibaq(ibaq_raw) if ibaq_raw is not None else "n/a"
+        #ibaq_val = _fmt_ibaq(ibaq_raw) if ibaq_raw is not None else "n/a"
 
         Number = pn.indicators.Number
 
@@ -755,8 +753,8 @@ def overview_tab(state: SessionState):
         left_bits = []
         if rec_val is not None:
             left_bits.append(f"Precursors (global): <b>{re_count}</b>")
-        if ibaq_raw is not None:
-            left_bits.append(f"iBAQ: <b>{ibaq_val}</b>")
+        if ibaq_avg is not None:
+            left_bits.append(f"IBAQ (global mean): <b>{ibaq_val}</b>")
         # If neither is available, show a friendly placeholder
         if not left_bits:
             left_bits.append("No extra protein metrics available")
@@ -1034,7 +1032,6 @@ def overview_tab(state: SessionState):
         }
     )
     volcano_pane.height = pn.bind(lambda ids: 1200 if ids else 1060, group_ids_selected)
-
 
     # Tab layout
 

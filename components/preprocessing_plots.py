@@ -1337,12 +1337,12 @@ def plot_left_censoring_histogram(adata: AnnData) -> go.Figure:
     if np.isfinite(thr_log):
         fig.add_vline(x=thr_log, line=dict(color="red", dash="dash"))
 
-    kept    = int(meta.get("kept", 0))
-    dropped = int(meta.get("dropped", 0))
+    kept    = int(meta.get("number_kept", 0))
+    dropped = int(meta.get("number_dropped", 0))
     fmt = lambda n: f"{n:,}".replace(",", "'")
     title_md = (
         f"Left-censoring<br>"
-        f"Cutoff (linear): {thr:g},  kept: {fmt(kept)}, censored: {fmt(dropped)}"
+        f"Cutoff (linear): ≥ {thr:g},  kept: {fmt(kept)}, dropped: {fmt(dropped)}"
     )
 
     # layout: x already in log-units; y on log scale for counts
