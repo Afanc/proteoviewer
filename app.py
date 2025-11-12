@@ -232,16 +232,13 @@ def _build_header(area_center, version: str, dev_flag: bool) -> pn.Column:
 
     # Right side: logo above facility — same width, left-aligned inside the block
     FACILITY_WIDTH = 140
-    bz_logo_path = "resources/Biozentrum_Logo_2011.png"
-    bz_logo_pane = pn.pane.PNG(bz_logo_path, width=FACILITY_WIDTH, sizing_mode="fixed", margin=(0, 50, 6, -15))
-    facility = pn.pane.Markdown(
-        "<div class='pv-facility'><b>Proteomics Core Facility</b></div>",
-        width=FACILITY_WIDTH, sizing_mode="fixed",
-    )
-    right_top_row = pn.Row(bz_logo_pane,
-                           pn.Spacer(width=100),
+    facility_logo_path = "resources/Biozentrum_Logo_2011.png"
+    facility_logo_pane = pn.pane.PNG(facility_logo_path, width=FACILITY_WIDTH, sizing_mode="fixed", margin=(0, 10, 6, -15))
+    right_top_row = pn.Row(facility_logo_pane,
+                           pn.Spacer(width=50),
                            sizing_mode="fixed", align="center")
-    right_block = pn.Column(right_top_row, width=FACILITY_WIDTH, sizing_mode="fixed")
+    right_block = pn.Column(right_top_row,
+                            width=FACILITY_WIDTH, sizing_mode="fixed")
 
     # One clean header row: left stack and right stack aligned at the top
     mainbar = pn.Row(
@@ -408,7 +405,7 @@ def build_app():
     - DEV: native file picker (no /mnt/data copy)
     - SERVER: Panel FileInput; copy to /mnt/data/proteoviewer_uploads/<session>/ then load
     """
-    status   = pn.pane.Markdown("### Please load a .h5ad ProteoFlux file.")
+    status   = pn.pane.Markdown("### Please load a .h5ad ProteoFlux file.", margin=(0,0,0,10))
     content  = pn.Column(pn.Spacer(height=1), sizing_mode="stretch_both", styles={"min-height": "300px"})
 
     # Shared loader
