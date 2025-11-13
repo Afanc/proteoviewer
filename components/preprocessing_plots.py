@@ -1315,22 +1315,32 @@ def plot_left_censoring_histogram(adata: AnnData) -> go.Figure:
     y_left = counts * left_mask
     y_right = counts * right_mask
 
+    # Using this hack until plotly updates with the option to control hover title in unified mode
+    hover_text = [
+        f"Intensity (log10):<b> {x:.1f}</b><br>"
+        f"Intensity (linear):<b> {10**x:.1f}</b>"
+        for x in centers
+    ]
+
     fig = go.Figure()
 
-    # red = censored (≤ cutoff), blue = kept (> cutoff); bars don’t overlap
+    # red = censored (≤ cutoff), blue = kept (> cutoff)
     fig.add_trace(go.Bar(
         x=centers, y=y_left, width=bin_width,
         name="Censored",
         opacity=0.6,
         marker=dict(color="red", line=dict(color="black", width=1)),
-        hoverinfo="skip", showlegend=True
+        showlegend=True,
+        hoverinfo='skip',
     ))
     fig.add_trace(go.Bar(
         x=centers, y=y_right, width=bin_width,
         name="Kept",
         opacity=0.6,
         marker=dict(color="blue", line=dict(color="black", width=1)),
-        hoverinfo="skip", showlegend=True
+        hovertext=hover_text,
+        hoverinfo="text",
+        showlegend=True
     ))
 
     # vertical cutoff line at log10(threshold)
@@ -1363,9 +1373,9 @@ def plot_left_censoring_histogram(adata: AnnData) -> go.Figure:
         ),
         #margin=dict(l=60, r=20, t=80, b=40),
     )
-    fig.update_xaxes(range=[lo, hi], showline=False)
-    #fig.update_yaxes(type="log", dtick=1, exponentformat="power", showexponent="all",
-    #                 showline=False)
+    fig.update_xaxes(range=[lo, hi], showline=False, tickformat='.1f')
+    fig.update_layout(hovermode="x unified")
+
     return fig
 
 @log_time("Plotting Before/After Imputation metrics by Condition")

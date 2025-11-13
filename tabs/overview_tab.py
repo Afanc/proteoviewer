@@ -310,8 +310,19 @@ def overview_tab(state: SessionState):
     contrast_sel.param.watch(_update_toggle_labels, "value")
 
     # Non-imputed datapoints per condition filter (same as phospho)
-    num_rep = int(adata.obs["REPLICATE"].max())
-    min_meas_options = {f"≥{i}": i for i in range(1, num_rep + 1)}
+    def _max_reps_for_contrast(contrast: str) -> int:
+        grp1, grp2 = contrast.split("_vs_")
+        n1 = int((adata.obs["CONDITION"] == grp1).sum())
+        n2 = int((adata.obs["CONDITION"] == grp2).sum())
+        return max(n1, n2)
+
+    def _mk_min_meas_options(max_reps: int) -> dict[str, int]:
+        # labels "≥1", "≥2", ... mapped to int values
+        return {f"≥{i}": i for i in range(1, max_reps + 1)}
+
+    # initialize from the first contrast
+    _init_max = _max_reps_for_contrast(contrast_sel.value)
+    min_meas_options = _mk_min_meas_options(_init_max)
 
     min_meas_sel = pn.widgets.Select(
         name="Min / condition",
@@ -321,7 +332,21 @@ def overview_tab(state: SessionState):
     )
 
     def _min_meas_value(label: str) -> int:
-        return min_meas_options[label]
+        # look up the *current* mapping (it will be rebuilt on contrast change)
+        return min_meas_options.get(label, 1)
+
+    # when the contrast changes, rebuild options (and clamp current value if needed)
+    def _on_contrast_change(event):
+        nonlocal min_meas_options
+        max_reps = _max_reps_for_contrast(event.new)
+        min_meas_options = _mk_min_meas_options(max_reps)
+        # keep the same label if still valid, otherwise fall back to the largest allowed
+        current = min_meas_sel.value or "≥1"
+        min_meas_sel.options = list(min_meas_options.keys())
+        if current not in min_meas_options:
+            min_meas_sel.value = f"≥{min(max_reps, int(current.lstrip('≥') or 1))}"
+
+    contrast_sel.param.watch(_on_contrast_change, "value")
 
     # Min numb. precursors options
     min_prec_options = {f"≥{i}": i for i in range(1, 6)}

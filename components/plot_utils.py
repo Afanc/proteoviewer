@@ -869,7 +869,7 @@ def plot_binary_cluster_heatmap_plotly(
     )
 
     fig.update_traces(showscale=False)
-    #fig.update_layout(coloraxis_showscale=False)
+    fig.update_layout(coloraxis_showscale=False)
 
     # 5) inject colored tick labels on x-axis
     short = [_abbr(s) for s in sample_order]
@@ -906,21 +906,10 @@ def plot_binary_cluster_heatmap_plotly(
             hoverinfo="skip",
         ))
 
-    # hide any non‐legend traces (i.e. the heatmap trace)
-    for tr in fig.data:
-        if tr.type == 'heatmap':
-            tr.showlegend = False
-
     # 8) finalize layout
     fig.update_layout(
         title=dict(text=title, x=0.5),
         margin=dict(l=50, r=200, t=50, b=100),
-        legend=dict(
-            title=cond_key,
-            orientation="v",
-            x=1.02, y=1,
-            xanchor="left", yanchor="top"
-        ),
         xaxis_showgrid=False,
         yaxis_showgrid=False,
         hovermode="closest",
