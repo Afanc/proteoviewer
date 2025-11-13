@@ -19,7 +19,12 @@ logging.getLogger().setLevel(logging.INFO)
 # Panel extensions
 pn.extension('plotly', 'tabulator', defer_load=True, loading_indicator=True, design="native")
 pn.config.loading_spinner = 'petal'
-pn.state.curdoc.title = "ProteoViewer"
+
+# with guard for the exe
+doc = pn.state.curdoc
+if doc is not None:
+    doc.title = "ProteoViewer"
+
 
 MIN_PF_VERSION = os.environ.get("PF_MIN_PF_VERSION", "1.7.4")
 
