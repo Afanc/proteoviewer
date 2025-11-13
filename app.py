@@ -205,6 +205,7 @@ def _build_header(area_center, version: str, dev_flag: bool) -> pn.Column:
 
     info = pn.widgets.TooltipIcon(
         value="""
+    Developed at the
     Proteomics Core Facility
     Biozentrum - University of Basel
     dariush.mollet@unibas.ch

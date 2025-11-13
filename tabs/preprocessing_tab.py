@@ -419,16 +419,16 @@ def preprocessing_tab(state: SessionState):
                                           flex="1",
                                           margin=(20,0,0,-50))
 
-    rmad_cond_fig, cv_cond_fig = plot_grouped_violin_imputation_metrics_by_condition(adata)
-    imput_rmad_pane = plotly_section(rmad_cond_fig,
-                                     height=500,
-                                     flex="1",
-                                     margin=(20,0,0,-100))
+    #rmad_cond_fig, cv_cond_fig = plot_grouped_violin_imputation_metrics_by_condition(adata)
+    #imput_rmad_pane = plotly_section(rmad_cond_fig,
+    #                                 height=500,
+    #                                 flex="1",
+    #                                 margin=(20,0,0,-100))
 
-    imput_cv_pane = plotly_section(cv_cond_fig,
-                                   height=500,
-                                   flex="1",
-                                   margin=(20,0,0,-50))
+    #imput_cv_pane = plotly_section(cv_cond_fig,
+    #                               height=500,
+    #                               flex="1",
+    #                               margin=(20,0,0,-50))
 
     fig_cv_ba, fig_rmad_ba = plot_grouped_violin_before_after_imputation_metrics_by_condition(adata)
     imput_rmad_ba_pane = plotly_section(fig_rmad_ba,
@@ -457,16 +457,6 @@ def preprocessing_tab(state: SessionState):
         pn.pane.Markdown("##   Metrics", styles={"flex": "0.05", "z-index": "10"}),
         pn.Column(
             pn.Row(
-                imput_rmad_pane,
-                make_vr(),
-                pn.Spacer(width=60),
-                imput_cv_pane,
-                height=540,
-                margin=(0, 0, 0, 0),
-            ),
-            make_hr(),
-            pn.Spacer(width=20),
-            pn.Row(
                 imput_rmad_ba_pane,
                 make_vr(),
                 pn.Spacer(width=60),
@@ -474,9 +464,9 @@ def preprocessing_tab(state: SessionState):
                 height=540,
                 margin=(0, 0, 0, 0),
             ),
-            height=1100,
+            height=540,
         ),
-        height=1100,
+        height=540,
         width="92vw",
     )
 
@@ -492,7 +482,7 @@ def preprocessing_tab(state: SessionState):
         ),
         background="#FFCC80",
         width="95vw",
-        height=2940,
+        height=2380,
     )
 
     # final protein pane
@@ -508,7 +498,7 @@ def preprocessing_tab(state: SessionState):
         ),
         background="#FFF8F0",
         width="98vw",
-        height=5350,
+        height=4780,
     )
 
     return pn.Column(
