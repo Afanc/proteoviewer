@@ -8,7 +8,16 @@ import plotly.graph_objects as go
 import plotly.express as px
 from scipy.stats import gaussian_kde
 from plotly.subplots import make_subplots
-from components.plot_utils import plot_histogram_plotly, add_violin_traces, compute_metric_by_condition, get_color_map, plot_bar_plotly, plot_binary_cluster_heatmap_plotly, color_ticks_by_condition, _abbr
+from components.plot_utils import (
+    plot_histogram_plotly,
+    add_violin_traces,
+    compute_metric_by_condition,
+    get_color_map,
+    plot_bar_plotly,
+    plot_binary_cluster_heatmap_plotly,
+    color_ticks_by_condition,
+    _abbr,
+)
 from regression_normalization import compute_reference_values, compute_MA, fit_regression
 from utils import logger, log_time
 
@@ -255,7 +264,7 @@ def plot_filter_histograms(adata: AnnData) -> Dict[str, go.Figure]:
 
     figs["qvalue"]             = _one("qvalue", "Q-value")
     figs["pep"]                = _one("pep", "PEP")
-    figs["run_evidence_count"] = _one("rec", "Run Evidence Count")
+    figs["precursors"] = _one("prec", "Precursors")
     return figs
 
 def plot_filter_histograms_old(adata: AnnData) -> Dict[str, go.Figure]:
@@ -1267,4 +1276,201 @@ def plot_line_density_by_sample(
     fig.update_yaxes(row=1, col=2, side="right")
 
     return fig
+
+@log_time("Plotting left-censoring histogram")
+def plot_left_censoring_histogram(adata: AnnData) -> go.Figure:
+    meta = (
+        adata.uns.get("preprocessing", {})
+             .get("filtering", {})
+             .get("censor", None)
+    )
+    if not meta or meta.get("threshold", None) is None:
+        return _placeholder_plot("Left-censoring", "No censoring threshold recorded")
+
+    thr = float(meta["threshold"])
+    vals = np.asarray(meta.get("raw_values", []), dtype=float)
+    vals = vals[np.isfinite(vals)]
+
+    # keep strictly positive values for log10; zeros can't be logged
+    vals = vals[vals > 0]
+    if vals.size == 0:
+        return _placeholder_plot("Left-censoring", "No positive values available")
+
+    # true log10 transform (so values <1 map to negative logs)
+    x_log = np.log10(vals)
+    thr_log = np.log10(thr) if thr > 0 else -np.inf
+
+    # histogram once, then split bins by center ≤ thr_log vs > thr_log
+    nbins = 250
+    vmin, vmax = float(x_log.min()), float(x_log.max())
+    if vmin == vmax:
+        vmax = vmin + 1.0
+    edges = np.linspace(vmin, vmax, nbins + 1)
+    counts, edges = np.histogram(x_log, bins=edges)
+    centers = 0.5 * (edges[:-1] + edges[1:])
+    bin_width = (edges[1] - edges[0])
+
+    left_mask = centers <= thr_log
+    right_mask = ~left_mask
+    y_left = counts * left_mask
+    y_right = counts * right_mask
+
+    # Using this hack until plotly updates with the option to control hover title in unified mode
+    hover_text = [
+        f"Intensity (log10):<b> {x:.1f}</b><br>"
+        f"Intensity (linear):<b> {10**x:.1f}</b>"
+        for x in centers
+    ]
+
+    fig = go.Figure()
+
+    # red = censored (≤ cutoff), blue = kept (> cutoff)
+    fig.add_trace(go.Bar(
+        x=centers, y=y_left, width=bin_width,
+        name="Censored",
+        opacity=0.6,
+        marker=dict(color="red", line=dict(color="black", width=1)),
+        showlegend=True,
+        hoverinfo='skip',
+    ))
+    fig.add_trace(go.Bar(
+        x=centers, y=y_right, width=bin_width,
+        name="Kept",
+        opacity=0.6,
+        marker=dict(color="blue", line=dict(color="black", width=1)),
+        hovertext=hover_text,
+        hoverinfo="text",
+        showlegend=True
+    ))
+
+    # vertical cutoff line at log10(threshold)
+    if np.isfinite(thr_log):
+        fig.add_vline(x=thr_log, line=dict(color="red", dash="dash"))
+
+    kept    = int(meta.get("number_kept", 0))
+    dropped = int(meta.get("number_dropped", 0))
+    fmt = lambda n: f"{n:,}".replace(",", "'")
+    title_md = (
+        f"Left-censoring<br>"
+        f"Cutoff (linear): ≥ {thr:g},  kept: {fmt(kept)}, dropped: {fmt(dropped)}"
+    )
+
+    # layout: x already in log-units; y on log scale for counts
+    # pad x by at least [-1, +1] beyond the observed log range
+    lo = min(-1.5, vmin)
+    hi = vmax + 0.5
+
+    fig.update_layout(
+        title=dict(text=title_md, x=0.5),
+        barmode="overlay",  # bars do not overlap because we split bins
+        template="plotly_white",
+        width=900, height=400,
+        xaxis_title="log10(Intensity)",
+        yaxis_title="Count",
+        legend=dict(
+            orientation="v", x=0.995, xanchor="right", y=1.10, yanchor="top",
+            #bordercolor="black", borderwidth=1
+        ),
+        #margin=dict(l=60, r=20, t=80, b=40),
+    )
+    fig.update_xaxes(range=[lo, hi], showline=False, tickformat='.1f')
+    fig.update_layout(hovermode="x unified")
+
+    return fig
+
+@log_time("Plotting Before/After Imputation metrics by Condition")
+def plot_grouped_violin_before_after_imputation_metrics_by_condition(
+    adata: AnnData,
+    metrics=('CV', 'rMAD'),
+    colors=('blue', 'red'),
+    width=900,
+    height=600,
+) -> tuple[go.Figure, go.Figure]:
+    """
+    For each metric, draw grouped violins per condition for:
+      - Before imputation  (uses adata.layers['normalized'])
+      - After imputation   (uses adata.X)
+    The 'After' numbers will match the Overview tab (which also uses adata.X).
+    """
+
+    def _one(metric: str) -> go.Figure:
+        # Build two small AnnData views that `compute_metric_by_condition` understands
+        before_ad = AnnData(
+            X = adata.layers['normalized'],
+            obs = adata.obs.copy(),
+            var = adata.var.copy()
+        )
+        after_ad  = AnnData(
+            X = adata.X.toarray() if hasattr(adata.X, "toarray") else adata.X,
+            obs = adata.obs.copy(),
+            var = adata.var.copy()
+        )
+
+        dm_before = compute_metric_by_condition(before_ad, metric=metric)
+        dm_after  = compute_metric_by_condition(after_ad,  metric=metric)
+
+        # Keep x-ordering identical: "Total" first, then the rest in insertion order
+        conditions = list(dm_before.keys())
+        idx_map    = {c: i for i, c in enumerate(conditions)}
+        offset     = 0.20
+
+        fig = go.Figure()
+        for label, dct, color, shift in (
+            ("Before", dm_before, colors[0], -offset),
+            ("After",  dm_after,  colors[1], +offset),
+        ):
+            xs, ys = [], []
+            for cond in conditions:
+                arr = np.asarray(dct.get(cond, []), dtype=float)
+                arr = arr[np.isfinite(arr)]
+                if arr.size == 0:
+                    continue
+                xs.extend([idx_map[cond] + shift] * arr.size)
+                ys.extend(arr.tolist())
+
+            if ys:
+                fig.add_trace(go.Violin(
+                    x=xs, y=ys,
+                    name=label, legendgroup=label,
+                    line_color=color,
+                    box_visible=True, box_line_color="black", box_line_width=1,
+                    meanline_visible=True,
+                    opacity=0.6,
+                    points=False,
+                    width=offset * 1.8,
+                    spanmode="hard",
+                    scalemode="width",
+                    showlegend=True,
+                ))
+
+        # vertical separators at category centers
+        for i in idx_map.values():
+            fig.add_vline(x=i, line=dict(color='gray', dash='dot', width=1), layer='above')
+
+        fig.update_layout(
+            template='plotly_white',
+            violinmode='overlay',
+            title=dict(text=f"{metric} Distribution by Condition", x=0.5),
+            width=width, height=height,
+            xaxis=dict(
+                title='Condition',
+                tickmode='array',
+                tickvals=list(idx_map.values()),
+                ticktext=conditions,
+                showline=True, mirror=True, linecolor='black'
+            ),
+            yaxis=dict(title=metric, showgrid=True, showline=True, mirror=True, linecolor='black'),
+            showlegend=True,
+            #legend=dict(orientation="v",
+            #            x=1.02,
+            #            xanchor="left",
+            #            y=0.5,
+            #            yanchor="middle",
+            #            ),
+        )
+        return fig
+
+    fig_cv   = _one('CV')
+    fig_rmad = _one('rMAD')
+    return fig_cv, fig_rmad
 

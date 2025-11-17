@@ -1,4 +1,5 @@
 import re
+from anndata import AnnData
 import numpy as np
 import pandas as pd
 from typing import Tuple, List, Optional, Set
@@ -8,6 +9,28 @@ from plotly.subplots import make_subplots
 from components.plot_utils import plot_stacked_proteins_by_category, plot_violins, compute_metric_by_condition, get_color_map, plot_cluster_heatmap_plotly, plot_volcanoes
 
 from utils import logger, log_time
+
+def _shorten_labels(labels, head=6, tail=4, sep="…"):
+    """
+    Shorten strings like 'VERY_LONG_SAMPLE_NAME' -> 'VERY_L…ME'.
+    Keeps ordering and hover info intact (we only change tick text).
+    """
+    def _short(s: str) -> str:
+        s = str(s)
+        if len(s) <= head + tail + 1:
+            return s
+        return f"{s[:head]}{sep}{s[-tail:]}"
+    # Make labels unique if shortening collides
+    out = [_short(s) for s in labels]
+    if len(set(out)) < len(out):
+        seen = {}
+        for i, s in enumerate(out):
+            if s in seen:
+                seen[s] += 1
+                out[i] = f"{s}_{seen[s]}"  # minimal disambiguation
+            else:
+                seen[s] = 0
+    return out
 
 @log_time("Plotting barplot proteins per sample")
 def plot_barplot_proteins_per_sample(
@@ -80,11 +103,14 @@ def plot_violin_cv_rmad_per_condition(
 def plot_volcanoes_wrapper(
     state,
     sign_threshold: float = 0.05,
+    data_type: str = "default",
     width: int = 900,
     height: int = 900,
     show_measured: bool = True,
     show_imp_cond1:  bool = True,
     show_imp_cond2:  bool = True,
+    min_nonimp_per_cond: int=0,
+    min_precursors: int=1,
     highlight: str = None,
     highlight_group: str = None,
     color_by: str = None,
@@ -94,11 +120,14 @@ def plot_volcanoes_wrapper(
     fig =  plot_volcanoes(
         state=state,               # if `im` is your SessionState
         contrast=contrast,
+        data_type=data_type,
         sign_threshold=sign_threshold,
         height=height,
         show_measured=show_measured,
         show_imp_cond1=show_imp_cond1,
         show_imp_cond2=show_imp_cond2,
+        min_nonimp_per_cond=min_nonimp_per_cond,
+        min_precursors=min_precursors,
         highlight=highlight,
         highlight_group=highlight_group,
         color_by=color_by,
@@ -241,12 +270,22 @@ def get_protein_info(state, contrast, protein, layer):
     vals = mat[np.logical_or(idx1, idx2), col_idx]
     avg_int = float(np.nanmean(vals))
 
+    # Average iBAQ across samples
+    ibaq_layer = ad.layers.get("ibaq")
+    avg_ibaq = None
+    if ibaq_layer is not None:
+        ibaq_mat = ibaq_layer.toarray() if hasattr(ibaq_layer, "toarray") else np.asarray(ibaq_layer)
+        col_vals = ibaq_mat[:, col_idx]
+        avg_ibaq_val = np.nanmean(col_vals.astype(float))
+        avg_ibaq = float(avg_ibaq_val) if np.isfinite(avg_ibaq_val) else None
+
     protein_info = {
         'uniprot_id': uniprot_id,
         'qval': qval,
         'logfc': logfc,
         'avg_int': avg_int,
         'index': col_idx,
+        'avg_ibaq': avg_ibaq
     }
     return protein_info
 
@@ -436,6 +475,19 @@ def plot_peptide_trends_centered(adata, uniprot_id: str, contrast: str) -> go.Fi
         yaxis_title="Intensity / mean",
         margin=dict(l=60, r=40, t=40, b=50),
         legend_title_text="Peptide",
+        shapes=[
+            dict(
+                type="line",
+                xref="paper", yref="y",
+                x0=0, x1=1,
+                y0=1, y1=1,
+                line=dict(
+                    color="black",
+                    width=1,
+                    dash="dot"
+                ),
+            ),
+        ],
     )
     return fig
 
@@ -558,3 +610,226 @@ def plot_group_violin_for_volcano(
     )
     fig.update_layout(annotations=annos)
     return fig
+
+@log_time("Plotting Phosphosite Barplot")
+def plot_intensity_by_site(state, contrast, site_id: str, layer_choice: str) -> go.Figure:
+    ad = state.adata
+    # layer mapping (phospho)
+    if layer_choice == "Raw":
+        proc = ad.layers.get("raw", ad.X)
+        raw_for_mask = proc
+        y_label = "Intensity"
+    elif layer_choice == "Log-only":
+        proc = ad.layers.get("lognorm", ad.X)
+        raw_for_mask = ad.layers.get("raw", None)
+        y_label = "Log Intensity"
+    else:  # "Final"
+        proc = ad.X
+        raw_for_mask = ad.layers.get("raw", None)
+        y_label = "Log Intensity"
+
+    # column index by var_names (phosphosite ids)
+    try:
+        col = list(map(str, ad.var_names)).index(str(site_id))
+    except ValueError:
+        return px.bar(pd.DataFrame({"x": [], "y": []}))
+
+    y_vals = proc[:, col].A1 if hasattr(proc, "A1") else proc[:, col]
+    if raw_for_mask is not None:
+        raw_vals = raw_for_mask[:, col].A1 if hasattr(raw_for_mask, "A1") else raw_for_mask[:, col]
+        imputed_mask = np.isnan(raw_vals)
+    else:
+        imputed_mask = np.zeros_like(y_vals, dtype=bool)
+
+    df = pd.DataFrame({
+        "sample": ad.obs_names,
+        "condition": ad.obs["CONDITION"],
+        "intensity": y_vals,
+        "imputed": imputed_mask,
+    })
+    grp1, grp2 = contrast.split("_vs_")
+    df = df[df["condition"].isin([grp1, grp2])]
+    names1 = ad.obs_names[ad.obs["CONDITION"] == grp1].tolist()
+    names2 = ad.obs_names[ad.obs["CONDITION"] == grp2].tolist()
+    order = sorted(names1) + sorted(names2)
+    colors = get_color_map(sorted(ad.obs["CONDITION"].unique()), px.colors.qualitative.Plotly)
+
+    fig = px.bar(
+        df, x="sample", y="intensity", color="condition",
+        pattern_shape="imputed",
+        pattern_shape_map={False: "", True: "/"},
+        labels={"intensity": y_label, "sample": "Sample"},
+        color_discrete_map=colors,
+    )
+    fig.update_xaxes(categoryorder="array", categoryarray=order)
+
+    fig.update_xaxes(
+        tickvals=order,                      # full sample ids (the categories)
+        ticktext=_shorten_labels(order),     # what we display on the axis
+    )
+
+    fig.update_traces(marker_pattern_fillmode="overlay", marker_pattern_size=6, marker_pattern_solidity=0.3)
+    # hide autoshow legends on traces, add clean legend entries
+    for tr in fig.data: tr.showlegend = False
+    for cond in [grp1, grp2]:
+        fig.add_trace(go.Bar(x=[None], y=[None], name=cond, marker_color=colors[cond], showlegend=True))
+    if imputed_mask.any():
+        fig.add_trace(go.Bar(
+            x=[None], y=[None], name="Imputed",
+            marker_color="white", marker_pattern_shape="/",
+            marker_pattern_fillmode="overlay", marker_pattern_size=6, marker_pattern_solidity=0.3,
+            showlegend=True
+        ))
+    fig.update_layout(
+        margin={"t": 40, "b": 40, "l": 60, "r": 60},
+        title=dict(text="Phospho Intensity", x=0.5),
+        legend_title_text="Conditions",
+        legend_itemclick=False, legend_itemdoubleclick=False,
+    )
+    return fig
+
+@log_time("Plotting Covariate Barplot")
+def plot_covariate_by_site(state, contrast: str, site_id: str, layer_choice: str) -> go.Figure:
+    ad = state.adata
+
+    # Non-phospho runs or no covariate: return empty bar to keep layout stable
+    #if "covariate" not in ad.layers:
+    #    print("oops")
+    #    return px.bar(pd.DataFrame({"x": [], "y": []}))
+
+    # Use layers_map if present, else fall back to the layers that actually exist.
+
+    cov_map = {
+        "Raw":        "raw_covariate",
+        "Log-only":   "lognorm_covariate",
+        "Normalized": "normalizade_covariate",
+        "Processed":  "processed_covariate",
+        "Centered":   "centered_covariate",               # shown only if present
+        "Residuals":  "residuals_covariate",              # legacy alias
+    }
+    layer_key = cov_map.get(layer_choice, "covariate")
+    # choose label based on raw vs log scale
+
+    y_label = "Intensity" if layer_key == (cov_map.get("Raw") or "__none__") else "Log Intensity"
+
+    # pick column (= feature/site) safely
+    try:
+        col = list(map(str, ad.var_names)).index(str(site_id))
+    except ValueError:
+        return px.bar(pd.DataFrame({"x": [], "y": []}))
+
+    # pull selected layer; handle dense/sparse
+    proc = ad.layers.get(layer_key, ad.layers["residuals_covariate"])
+    y_vals = proc[:, col]
+
+    # imputation pattern: derive from global 'raw' if covariate-raw not stored
+    raw_for_mask_layer = cov_map.get("Raw")
+    rawL = ad.layers.get(raw_for_mask_layer) if raw_for_mask_layer else None
+    if rawL is None:
+        rawL = ad.layers.get("raw")  # fallback: global raw
+    if rawL is not None:
+        raw_arr = rawL.toarray() if hasattr(rawL, "toarray") else rawL
+        imputed_mask = np.isnan(raw_arr[:, col])
+    else:
+        imputed_mask = np.isnan(y_vals)
+
+    # condition column shim
+    cond_col = "CONDITION" if "CONDITION" in ad.obs.columns else ("Condition" if "Condition" in ad.obs.columns else None)
+    if cond_col is None:
+        return px.bar(pd.DataFrame({"x": [], "y": []}))
+    cond = ad.obs[cond_col]
+
+    # restrict to the two groups of the contrast
+    try:
+        grp1, grp2 = str(contrast).split("_vs_")
+    except Exception:
+        # if contrast name is unexpected, just show all
+        grp1 = grp2 = None
+
+    df = pd.DataFrame({
+        "sample": ad.obs_names,
+        "condition": cond.values,
+        "intensity": y_vals,
+        "imputed": imputed_mask,
+    })
+
+    if grp1 and grp2:
+        df = df[df["condition"].isin([grp1, grp2])]
+        # order samples by condition, preserving index order within group
+        left  = [s for s in ad.obs_names if ad.obs.loc[s, cond_col] == grp1]
+        right = [s for s in ad.obs_names if ad.obs.loc[s, cond_col] == grp2]
+        order = left + right
+    else:
+        order = list(ad.obs_names)
+
+    # colors
+    cond_levels = sorted(pd.unique(df["condition"]))
+    colors = get_color_map(sorted(ad.obs["CONDITION"].unique()), px.colors.qualitative.Plotly)
+
+    # plot
+    fig = px.bar(
+        df, x="sample", y="intensity", color="condition",
+        pattern_shape="imputed",
+        pattern_shape_map={False: "", True: "/"},
+        labels={"intensity": y_label, "sample": "Sample"},
+        color_discrete_map=colors,
+    )
+    fig.update_xaxes(categoryorder="array", categoryarray=order)
+    fig.update_xaxes(
+        tickvals=order,                      # full sample ids (the categories)
+        ticktext=_shorten_labels(order),     # what we display on the axis
+    )
+
+    fig.update_traces(marker_pattern_fillmode="overlay", marker_pattern_size=6, marker_pattern_solidity=0.3)
+
+    # clean legend (one entry per condition, plus 'Imputed' if applicable)
+    for tr in fig.data:
+        tr.showlegend = False
+    for c in cond_levels:
+        fig.add_trace(go.Bar(x=[None], y=[None], name=c, marker_color=colors[c], showlegend=True))
+    if bool(np.any(df["imputed"].values)):
+        fig.add_trace(go.Bar(
+            x=[None], y=[None], name="Imputed",
+            marker_color="white", marker_pattern_shape="/",
+            marker_pattern_fillmode="overlay", marker_pattern_size=6, marker_pattern_solidity=0.3,
+            showlegend=True
+        ))
+
+    fig.update_layout(
+        margin={"t": 40, "b": 40, "l": 60, "r": 60},
+        title=dict(text="Flowthrough Intensity", x=0.5),
+        legend_title_text="Conditions",
+        legend_itemclick=False, legend_itemdoubleclick=False,
+    )
+    return fig
+
+def _get_site_stats(adata: AnnData, contrast: str, site_id: str, which: str = "adjusted") -> dict:
+    """
+    Pull phospho / covariate stats that were persisted by the exporter.
+    - which: 'adjusted' (default), 'raw', 'covariate'
+    Returns {logfc, qval, pval}; missing → np.nan.
+    """
+    import numpy as np
+    site = str(site_id)
+    lim = adata.uns.get("limma", {})
+    if which == "covariate":
+        block = lim.get("covariate", {})
+        l2fc = block.get("log2fc", {}).get(contrast, {})
+        qval = block.get("q_ebayes", {}).get(contrast, {})
+        pval = block.get("p_ebayes", {}).get(contrast, {})
+    elif which == "raw":
+        block = lim.get("phospho", {})
+        l2fc = block.get("raw_log2fc", {}).get(contrast, {})
+        qval = block.get("raw_q_ebayes", {}).get(contrast, {})
+        pval = block.get("raw_p_ebayes", {}).get(contrast, {})
+    else:  # adjusted
+        block = lim.get("phospho", {})
+        l2fc = block.get("log2fc", {}).get(contrast, {})
+        qval = block.get("q_ebayes", {}).get(contrast, {})
+        pval = block.get("p_ebayes", {}).get(contrast, {})
+    return dict(
+        logfc=float(l2fc.get(site, np.nan)),
+        qval=float(qval.get(site, np.nan)),
+        pval=float(pval.get(site, np.nan)),
+    )
+

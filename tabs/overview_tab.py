@@ -21,7 +21,7 @@ from components.texts import (
     log_transform_text
 )
 from components.string_links import get_string_link
-from layout_utils import plotly_section, make_vr, make_hr, make_section, make_row, FRAME_STYLES
+from layout_utils import plotly_section, make_vr, make_hr, make_section, make_row, FRAME_STYLES, FRAME_STYLES_TALL, FRAME_STYLES_SHORT
 from utils import logger, log_time
 import textwrap
 
@@ -71,14 +71,10 @@ def overview_tab(state: SessionState):
     num_conditions = len(adata.obs["CONDITION"].unique())
     num_contrasts = int(num_conditions*(num_conditions-1)/2)
     quant_method = preproc_cfg.get("quantification_method", "sum")
+
+    pf_version = adata.uns['proteoflux'].get("pf_version", 0.0)
+
     flt_cfg = adata.uns.get("preprocessing", {}).get("filtering", [])
-    n_cont   = flt_cfg.get("cont", {}).get("number_dropped", [])
-    n_q   = flt_cfg.get("qvalue", {}).get("number_dropped", [])
-    n_pep   = flt_cfg.get("pep", {}).get("number_dropped", [])
-    n_re   = flt_cfg.get("rec", {}).get("number_dropped", [])
-    thresh_q = flt_cfg.get("qvalue", {}).get("threshold", 0)
-    thresh_pep = flt_cfg.get("pep", {}).get("threshold", 0)
-    thresh_re = flt_cfg.get("rec", {}).get("threshold", 0)
 
     def _fmt_step(step: dict, name: str, default_thr: str) -> tuple[str, str]:
         if not step:
@@ -91,13 +87,15 @@ def overview_tab(state: SessionState):
     cont_step = flt_cfg.get("cont", {})
     q_step    = flt_cfg.get("qvalue", {})
     pep_step  = flt_cfg.get("pep", {})
-    rec_step  = flt_cfg.get("rec", {})
+    prec_step  = flt_cfg.get("prec", {})
+    censor_step= flt_cfg.get("censor", {})
 
     cont_txt, _          = _fmt_step(cont_step, "cont", "n/a")
     q_txt,    q_thr_txt  = _fmt_step(q_step,    "qvalue", "n/a")
     pep_txt,  pep_thr_txt= _fmt_step(pep_step,  "pep", "n/a")
     pep_op = "≥" if flt_cfg.get("pep").get("direction").startswith("greater") else "≤"
-    rec_txt,  rec_thr_txt= _fmt_step(rec_step,  "rec", "n/a")
+    prec_txt,  prec_thr_txt= _fmt_step(prec_step,  "prec", "n/a")
+    censor_txt, censor_thr_txt= _fmt_step(censor_step,  "censor", "n/a")
 
     contaminants_files = [os.path.basename(p) for p in flt_cfg.get('cont', {}).get('files', [])]
 
@@ -153,10 +151,13 @@ def overview_tab(state: SessionState):
             - Contaminants ({', '.join(contaminants_files)}): {cont_txt}
             - q-value ≤ {q_thr_txt}: {q_txt}
             - PEP {pep_op} {pep_thr_txt}: {pep_txt}
-            - Min. run evidence count = {rec_thr_txt}: {rec_txt}
+            - Min. run evidence count = {prec_thr_txt}: {prec_txt}
+            - Left Censoring ≤ {censor_thr_txt}: {censor_txt}
         - **Normalization**: {norm_methods}
         - **Imputation**: {imp_method}
         - **Differential expression**: eBayes via {ebayes_method}
+
+        **Proteoflux Version** {pf_version}
     """).strip()
 
     # intro_pane:
@@ -177,7 +178,7 @@ def overview_tab(state: SessionState):
         options=["By condition", "By sample"],
         value="By condition",
         button_type="default",
-        sizing_mode="fixed",
+        #sizing_mode="fixed",
         width=170,
         margin=(20, 0, 0, 20),
         styles={"z-index": "10"},
@@ -195,7 +196,7 @@ def overview_tab(state: SessionState):
 
     hist_plot_pane = pn.pane.Plotly(hist_ID_dmap,
                        height=500,
-                       margin=(-20, 20, 0, -190),
+                       margin=(0, 20, 0, -190),
                        styles={"flex":"1",
                               }
     )
@@ -289,13 +290,13 @@ def overview_tab(state: SessionState):
     show_imp_cond2 = pn.widgets.Checkbox(name=f"", value=True)
 
     # Color selector
-    color_options = ["Significance", "Avg Expression"]
+    color_options = ["Significance", "Avg Intensity", "Avg IBAQ"]
 
     color_by = pn.widgets.Select(
         name="Color by",
         options=color_options,
         value=color_options[0],
-        width=200,
+        width=150,
     )
     # 3) Function to update toggle labels whenever contrast changes
     def _update_toggle_labels(event=None):
@@ -307,6 +308,57 @@ def overview_tab(state: SessionState):
     _update_toggle_labels()
 
     contrast_sel.param.watch(_update_toggle_labels, "value")
+
+    # Non-imputed datapoints per condition filter (same as phospho)
+    def _max_reps_for_contrast(contrast: str) -> int:
+        grp1, grp2 = contrast.split("_vs_")
+        n1 = int((adata.obs["CONDITION"] == grp1).sum())
+        n2 = int((adata.obs["CONDITION"] == grp2).sum())
+        return max(n1, n2)
+
+    def _mk_min_meas_options(max_reps: int) -> dict[str, int]:
+        # labels "≥1", "≥2", ... mapped to int values
+        return {f"≥{i}": i for i in range(1, max_reps + 1)}
+
+    # initialize from the first contrast
+    _init_max = _max_reps_for_contrast(contrast_sel.value)
+    min_meas_options = _mk_min_meas_options(_init_max)
+
+    min_meas_sel = pn.widgets.Select(
+        name="Min / condition",
+        options=list(min_meas_options.keys()),
+        value="≥1",
+        width=80,
+    )
+
+    def _min_meas_value(label: str) -> int:
+        # look up the *current* mapping (it will be rebuilt on contrast change)
+        return min_meas_options.get(label, 1)
+
+    # when the contrast changes, rebuild options (and clamp current value if needed)
+    def _on_contrast_change(event):
+        nonlocal min_meas_options
+        max_reps = _max_reps_for_contrast(event.new)
+        min_meas_options = _mk_min_meas_options(max_reps)
+        # keep the same label if still valid, otherwise fall back to the largest allowed
+        current = min_meas_sel.value or "≥1"
+        min_meas_sel.options = list(min_meas_options.keys())
+        if current not in min_meas_options:
+            min_meas_sel.value = f"≥{min(max_reps, int(current.lstrip('≥') or 1))}"
+
+    contrast_sel.param.watch(_on_contrast_change, "value")
+
+    # Min numb. precursors options
+    min_prec_options = {f"≥{i}": i for i in range(1, 6)}
+    min_prec_sel = pn.widgets.Select(
+        name="Precursors",
+        options=list(min_prec_options.keys()),
+        value="≥1",
+        width=80,
+    )
+
+    def _min_prec_value(label: str) -> int:
+        return min_prec_options[label]
 
     # search widget
     def _ensure_gene(token: str) -> str | None:
@@ -401,19 +453,6 @@ def overview_tab(state: SessionState):
         fi.param.watch(_on_change, "value")
         return fi
 
-#    def _new_file_input():
-#        fi = pn.widgets.FileInput(accept=".txt,.csv,.tsv", multiple=False, width=200)
-#        def _on_change(event):
-#            b = event.new or b""
-#            try:
-#                txt = b.decode("utf-8", errors="ignore")
-#            except Exception:
-#                txt = ""
-#            _file_text.value = txt
-#            cohort_filename.value = fi.filename or ""
-#        fi.param.watch(_on_change, "value")
-#        return fi
-
     file_upload = _new_file_input()
     file_holder.objects = [file_upload]
 
@@ -498,6 +537,8 @@ def overview_tab(state: SessionState):
         show_measured=show_measured,
         show_imp_cond1=show_imp_cond1,
         show_imp_cond2=show_imp_cond2,
+        min_nonimp_per_cond=pn.bind(_min_meas_value, min_meas_sel),
+        min_precursors=pn.bind(_min_prec_value, min_prec_sel),
         highlight=search_input,
         highlight_group=group_ids_selected,
         sign_threshold=0.05,
@@ -531,7 +572,6 @@ def overview_tab(state: SessionState):
     )
     volcano_plot.param.watch(_on_volcano_click, "click_data")
 
-    volcano_pane_height = 1060
     # Cohort Violin View
     def _cohort_violin(ids, contrast, sm, s1, s2):
         if not ids:
@@ -546,7 +586,6 @@ def overview_tab(state: SessionState):
             width=1200,
             height=100,
         )
-        volcano_pane_height = 1200
         return pn.pane.Plotly(
             fig,
             height=150,
@@ -636,10 +675,12 @@ def overview_tab(state: SessionState):
             return default
 
         rec_val  = _safe_var("PRECURSORS_EXP", default=None)
-        ibaq_raw = _safe_var("IBAQ", default=None)
+        #ibaq_raw = _safe_var("IBAQ", default=None)
+        ibaq_avg = protein_info.get("avg_ibaq")
+        ibaq_val = _fmt_ibaq(ibaq_avg) if ibaq_avg is not None else "n/a"
 
         re_count = _fmt_int(rec_val) if rec_val is not None else "n/a"
-        ibaq_val = _fmt_ibaq(ibaq_raw) if ibaq_raw is not None else "n/a"
+        #ibaq_val = _fmt_ibaq(ibaq_raw) if ibaq_raw is not None else "n/a"
 
         Number = pn.indicators.Number
 
@@ -724,8 +765,8 @@ def overview_tab(state: SessionState):
         left_bits = []
         if rec_val is not None:
             left_bits.append(f"Precursors (global): <b>{re_count}</b>")
-        if ibaq_raw is not None:
-            left_bits.append(f"iBAQ: <b>{ibaq_val}</b>")
+        if ibaq_avg is not None:
+            left_bits.append(f"IBAQ (global mean): <b>{ibaq_val}</b>")
         # If neither is available, show a friendly placeholder
         if not left_bits:
             left_bits.append("No extra protein metrics available")
@@ -840,13 +881,11 @@ def overview_tab(state: SessionState):
             bar_holder,
             pn.Spacer(height=20),
             pep_holder,
-            sizing_mode="fixed",
             width=840,
         ),
         margin=(0, 0, 0, 0),
-        sizing_mode="fixed",
         styles={
-            "margin-left": "auto",     # ← push this block to the right
+            "margin-left": "auto",
         }
     )
 
@@ -927,10 +966,10 @@ def overview_tab(state: SessionState):
         pn.Column(                 # left container that can stretch
             volcano_plot,
             cohort_violin_view,
-            sizing_mode="stretch_both",
+            sizing_mode="stretch_width",
             styles={
-                "flex": "1",               # ← soak up remaining horizontal space
-                "min-width": "600px",      # ← keep a sane minimum for the plot
+                "flex": "1",
+                #"min-width": "600px",      # ← keep a sane minimum for the plot
             },
         ),
         pn.Spacer(width=30),
@@ -948,12 +987,20 @@ def overview_tab(state: SessionState):
             contrast_sel,
             pn.Spacer(width=20),
             color_by,
-            pn.Spacer(width=30),
+            pn.Spacer(width=20),
+            make_vr(),
+            pn.Spacer(width=20),
             pn.Column(
                 show_measured,
                 show_imp_cond1,
                 show_imp_cond2,
                 margin=(-5,0,0,0),
+            ),
+            pn.Spacer(width=10),
+            pn.Column(
+                min_meas_sel,
+                min_prec_sel,
+                margin=(-30,0,0,0),
             ),
             pn.Spacer(width=20),
             make_vr(),
@@ -980,12 +1027,10 @@ def overview_tab(state: SessionState):
             pn.Row(clear_search, margin = (17,0,0,0)),
             pn.Spacer(width=0),
             pn.Row(layers_sel, margin = (-17,0,0,0)),
-            sizing_mode="fixed",
             width=300,
             height=80,
         ),
         volcano_and_detail,
-        height=1060,
         margin=(0, 0, 0, 20),
         sizing_mode="stretch_width",
         styles={
@@ -994,11 +1039,10 @@ def overview_tab(state: SessionState):
             'width': '98vw',
         }
     )
+
     volcano_pane.height = pn.bind(lambda ids: 1200 if ids else 1060, group_ids_selected)
 
-
     # Tab layout
-
     layout = pn.Column(
         pn.Spacer(height=10),
         intro_pane,
@@ -1009,8 +1053,17 @@ def overview_tab(state: SessionState):
         pn.Spacer(height=30),
         volcano_pane,
         pn.Spacer(height=30),
-        sizing_mode="stretch_both",
-        styles=FRAME_STYLES,
+        sizing_mode="stretch_width",
+        styles=FRAME_STYLES_TALL,
     )
+
+    def _frame_styles(ids, protein):
+        has_ids = bool(ids)
+        has_protein = bool((protein or "").strip())
+        if has_ids or has_protein:
+            return FRAME_STYLES_TALL
+        return FRAME_STYLES_SHORT
+
+    layout.styles = pn.bind(_frame_styles, group_ids_selected, search_input)
 
     return layout

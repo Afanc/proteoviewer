@@ -1,6 +1,6 @@
 # -*- mode: python -*-
 block_cipher = None
-VERSION = "1.5.2" #until we package that thing
+VERSION = "1.7.4" #until we package that thing
 
 from PyInstaller.utils.hooks import copy_metadata
 
@@ -14,17 +14,27 @@ a = Analysis(
     hiddenimports=[
         'panel.io.server',
         'hatchling',
-        'PIL._tkinter_finder',
+        #'PIL._tkinter_finder',
         'sklearn._cyutility',
         'fastcluster',
         'binascii',
         'skmisc',
-        'tkinter',
-        'tkinter.filedialog',
+        #'tkinter',
+        #'tkinter.filedialog',
+        #'asyncio.base_events',
+        #'asyncio.events',
+        #'asyncio.format_helpers',
+        #'asyncio.futures',
+        #'asyncio.protocols',
+        #'asyncio.tasks',
+        #'asyncio.transports',
+        #'asyncio.selector_events',
+        #'asyncio.windows_events',
+        #'asyncio.windows_utils',
     ],
     hookspath=[],
     #runtime_hooks=[],
-    runtime_hooks=['rthook_logging.py'],   # <-- add this line
+    runtime_hooks=['rthook_logging.py'],
     excludes=[],
     cipher=block_cipher,
 )

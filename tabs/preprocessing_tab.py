@@ -16,6 +16,8 @@ from components.preprocessing_plots import (
     plot_grouped_violin_imputation_by_condition,
     plot_grouped_violin_imputation_by_sample,
     plot_grouped_violin_imputation_metrics_by_condition,
+    plot_grouped_violin_before_after_imputation_metrics_by_condition,
+    plot_left_censoring_histogram,
     _placeholder_plot,
 )
 from components.texts import (
@@ -45,7 +47,7 @@ def preprocessing_tab(state: SessionState):
         hists = plot_filter_histograms(adata)
         q_fig = hists.get('qvalue')
         p_fig = hists.get('pep')
-        r_fig = hists.get('run_evidence_count')
+        prec_fig = hists.get('precursors')
     except Exception as e:
         # Make it crystal clear in logs but keep the UI alive
         logger.warning(f"plot_filter_histograms failed ({e}); showing placeholders.")
@@ -56,7 +58,7 @@ def preprocessing_tab(state: SessionState):
                        height=400, flex="0.32", margin=(0,0,0,-100))
     p = plotly_section(p_fig if p_fig is not None else _placeholder_plot("Probab. filtering"),
                        height=400, flex='0.32')
-    r = plotly_section(r_fig if r_fig is not None else _placeholder_plot("Run-evidence filtering"),
+    prec = plotly_section(prec_fig if prec_fig is not None else _placeholder_plot("Precursors filtering"),
                        height=400, flex='0.32')
     #hists = plot_filter_histograms(adata)
 
@@ -68,18 +70,39 @@ def preprocessing_tab(state: SessionState):
         pn.pane.Markdown("##   Filtering", styles={"flex": "0.05", "z-index": "10"}),
         q, pn.Spacer(width=10), make_vr(), pn.Spacer(width=20),
         p, pn.Spacer(width=10), make_vr(), pn.Spacer(width=20),
-        r,
+        prec,
+        height=420,
+        width='95vw',
+    )
+
+    censor_fig = plotly_section(plot_left_censoring_histogram(adata), height=400, flex="1", margin=(0,0,0,-150))
+    censor_row = make_row(
+        pn.pane.Markdown("##   Left-censoring", styles={"flex": "0.07", "z-index": "10"}),
+        censor_fig,
         height=420,
         width='95vw',
     )
 
     psm_pane = make_section(
         header="Precursor-level",
-        row=filtering_row,
+        row=pn.Column(
+            filtering_row,
+            pn.Spacer(height=20),
+            censor_row,
+            sizing_mode="stretch_width",
+        ),
         background="#E3F2FD",
         width="98vw",
-        height=500
+        height=940,   # was 500; increased to fit the extra row
     )
+
+    #psm_pane = make_section(
+    #    header="Precursor-level",
+    #    row=filtering_row,
+    #    background="#E3F2FD",
+    #    width="98vw",
+    #    height=500
+    #)
 
     # Quantification
     dyn_fig = plotly_section(plot_dynamic_range(adata), height=400)
@@ -396,16 +419,28 @@ def preprocessing_tab(state: SessionState):
                                           flex="1",
                                           margin=(20,0,0,-50))
 
-    rmad_cond_fig, cv_cond_fig = plot_grouped_violin_imputation_metrics_by_condition(adata)
-    imput_rmad_pane = plotly_section(rmad_cond_fig,
-                                     height=500,
-                                     flex="1",
-                                     margin=(20,0,0,-100))
+    #rmad_cond_fig, cv_cond_fig = plot_grouped_violin_imputation_metrics_by_condition(adata)
+    #imput_rmad_pane = plotly_section(rmad_cond_fig,
+    #                                 height=500,
+    #                                 flex="1",
+    #                                 margin=(20,0,0,-100))
 
-    imput_cv_pane = plotly_section(cv_cond_fig,
-                                   height=500,
-                                   flex="1",
-                                   margin=(20,0,0,-50))
+    #imput_cv_pane = plotly_section(cv_cond_fig,
+    #                               height=500,
+    #                               flex="1",
+    #                               margin=(20,0,0,-50))
+
+    fig_cv_ba, fig_rmad_ba = plot_grouped_violin_before_after_imputation_metrics_by_condition(adata)
+    imput_rmad_ba_pane = plotly_section(fig_rmad_ba,
+                                        height=500,
+                                        flex="1",
+                                        margin=(20,0,0,-100))
+
+
+    imput_cv_ba_pane = plotly_section(fig_cv_ba,
+                                      height=500,
+                                      flex="1",
+                                      margin=(20,0,0,-50))
 
     dist_row = make_row(
         pn.pane.Markdown("##   Distributions", styles={"flex": "0.1", "z-index": "10"}),
@@ -419,13 +454,20 @@ def preprocessing_tab(state: SessionState):
     )
 
     metrics_row = make_row(
-        pn.pane.Markdown("##   Metrics", styles={"flex": "0.1", "z-index": "10"}),
-        imput_rmad_pane,
-        make_vr(),
-        pn.Spacer(width=60),
-        imput_cv_pane,
-        width="92vw",
+        pn.pane.Markdown("##   Metrics", styles={"flex": "0.05", "z-index": "10"}),
+        pn.Column(
+            pn.Row(
+                imput_rmad_ba_pane,
+                make_vr(),
+                pn.Spacer(width=60),
+                imput_cv_ba_pane,
+                height=540,
+                margin=(0, 0, 0, 0),
+            ),
+            height=540,
+        ),
         height=540,
+        width="92vw",
     )
 
     imputation_pane = make_section(
@@ -456,7 +498,7 @@ def preprocessing_tab(state: SessionState):
         ),
         background="#FFF8F0",
         width="98vw",
-        height=4800,
+        height=4780,
     )
 
     return pn.Column(

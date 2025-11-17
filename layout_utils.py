@@ -16,7 +16,26 @@ DEFAULT_SIZING = "stretch_width"
 FRAME_STYLES = {
     "max-height": "calc(100vh - 160px)",  # tweak the 160px to your header/controls height
     "overflow": "auto",
+    "overscroll-behavior": "contain",
     "padding-bottom": "10px",
+    "overflow-x": "hidden",
+    "max-width": "100vw",
+}
+FRAME_STYLES_BASE = {
+    "max-height": "calc(100vh - 160px)",  # tweak the 160px to your header/controls height
+    "overflow": "auto",
+    "padding-bottom": "10px",
+    "overflow-x": "hidden",
+    "max-width": "100vw",
+}
+FRAME_STYLES_TALL = {
+    **FRAME_STYLES_BASE,
+    "max-height": "calc(100vh - 160px)",   # cohort / protein active
+}
+
+FRAME_STYLES_SHORT = {
+    **FRAME_STYLES_BASE,
+    "max-height": "calc(100vh - 48px)",   # tweak this for "no cohort" state
 }
 
 def make_row(*components,
@@ -45,7 +64,7 @@ def make_section(header: str, row: pn.Row,
     """
     Wraps a header + one Row into a Column “section”.
     """
-    hdr = pn.pane.Markdown(f"##   {header}", styles={"flex": "0.05"})
+    hdr = pn.pane.Markdown(f"##   {header}")
     return pn.Column(
         hdr,
         row,

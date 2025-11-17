@@ -238,7 +238,7 @@ def plot_stacked_proteins_by_category(
             font=dict(size=12, color="black")
         )
 
-    # 8) Conditions legend (interactive) — put it in the *main* legend
+    # 8) Conditions legend
     for j, cond in enumerate(unique_conds):
         fig.add_trace(go.Scatter(
             x=[None], y=[None],
@@ -265,7 +265,7 @@ def plot_stacked_proteins_by_category(
         template="plotly_white",
         margin=dict(t=150, r=160, l=60, b=60),      # top margin for the horiz row
         legend=dict(
-            x=1.08, y=1.19,
+            x=1.15, y=1.19,
             xanchor="right", yanchor="top",
             bordercolor="black", borderwidth=1,
             orientation="v",
@@ -707,18 +707,9 @@ def plot_cluster_heatmap_plotly(
         trace["xaxis"] = "x2"
         dendro_col.add_trace(trace)
 
-    fig = dendro_col  # start from the col‐dendrogram figure
+    fig = dendro_col
 
-    # 4) Extract the leaf order by label
-    col_leaves = fig.layout["xaxis"]["ticktext"]
-    row_leaves = dendro_row.layout["yaxis"]["ticktext"]
-    col_order = [df.columns.get_loc(lbl) for lbl in col_leaves]
-    row_order = [df.index.get_loc(lbl)   for lbl in row_leaves]
-
-    # 5) Reorder the DataFrame
-    df = df.iloc[row_order, :].iloc[:, col_order]
-
-    # 6) Add the heatmap of the raw (or z-scored) values
+    # Add the heatmap of the raw (or z-scored) values
     min_val, max_val = np.nanmin(df.values), np.nanmax(df.values)
 
     if (min_val < 0) and (max_val > 0):
@@ -728,45 +719,47 @@ def plot_cluster_heatmap_plotly(
         zmid = 0
         rev  = True
     else:
-        # nonnegative (intensities) → natural range, no zero centering
+        # nonnegative (intensities) -> natural range, no zero centering
         zmin, zmax = float(min_val), float(max_val)
         zmid = None
         rev  = False
 
-    #heat = go.Heatmapgl( ??
+    # Build per-cell labels
+    # Use gene names if provided, otherwise fall back to df.index
+    if y_labels is not None:
+        _ylab_map = pd.Series(y_labels, index=df.index)
+        row_disp = [_ylab_map.get(r, r) for r in df.index]
+    else:
+        row_disp = list(df.index)
+    col_disp = list(df.columns)
+    # customdata shape: (n_rows, n_cols, 2) -> [protein_label, sample_label]
+    _cd = np.empty((df.shape[0], df.shape[1], 2), dtype=object)
+    for i, r in enumerate(row_disp):
+        _cd[i, :, 0] = r
+    for j, c in enumerate(col_disp):
+        _cd[:, j, 1] = c
+
+    #heat = go.Heatmapgl(
     heat = go.Heatmap(
         z=df.values,
         x=fig.layout.xaxis["tickvals"],
         y=dendro_row.layout.yaxis["tickvals"],
+        customdata=_cd,
         colorscale=colorscale,
         reversescale=True,
         zmid=zmid,
         zmin=zmin,
         zmax=zmax,
         hoverinfo="text",
-        hovertemplate=
-            "Protein: %{y}<br>"
-            "Sample: %{x}<br>"
-            "Value: %{z:.2f}<extra></extra>",
+        hovertemplate=(
+            "Gene Name: %{customdata[0]}<br>"
+            "Sample: %{customdata[1]}<br>"
+            "Value: %{z:.2f}<extra></extra>"
+        ),
         showscale=True,
         colorbar=dict(title="Value"),
     )
     fig.add_trace(heat)
-
-    # gene names
-    if y_labels is not None:
-        # get the protein IDs in the clustered order
-        row_leaves = dendro_row.layout["yaxis"]["ticktext"]
-        # map each protein ID → gene name
-        ticktexts = [y_labels[df.index.get_loc(pid)] for pid in row_leaves]
-        # overwrite the main y-axis (heatmap) ticks
-        fig.update_layout(
-            yaxis=dict(
-                tickmode="array",
-                tickvals=dendro_row.layout["yaxis"]["tickvals"],
-                ticktext=ticktexts
-            )
-        )
 
     levels  = pd.Categorical(cond_series).categories
     cmap    = get_color_map(levels, px.colors.qualitative.Plotly)
@@ -834,7 +827,7 @@ def plot_cluster_heatmap_plotly(
 @log_time("Plotting Missing Values Heatmap (Plotly)")
 def plot_binary_cluster_heatmap_plotly(
     adata: AnnData,
-    cond_key: str = "CONDITION",
+    cond_key: str = "Condition",
     layer: str = "normalized",
     title: str = "Clustered Missing Values Heatmap",
     width: int = 800,
@@ -913,21 +906,10 @@ def plot_binary_cluster_heatmap_plotly(
             hoverinfo="skip",
         ))
 
-    # hide any non‐legend traces (i.e. the heatmap trace)
-    for tr in fig.data:
-        if tr.type == 'heatmap':
-            tr.showlegend = False
-
     # 8) finalize layout
     fig.update_layout(
         title=dict(text=title, x=0.5),
         margin=dict(l=50, r=200, t=50, b=100),
-        legend=dict(
-            title=cond_key,
-            orientation="v",
-            x=1.02, y=1,
-            xanchor="left", yanchor="top"
-        ),
         xaxis_showgrid=False,
         yaxis_showgrid=False,
         hovermode="closest",
@@ -940,109 +922,166 @@ def plot_binary_cluster_heatmap_plotly(
 def plot_volcanoes(
     state,
     contrast: str,
+    data_type: str = "default",
     sign_threshold: float = 0.05,
     width: int = 900,
     height: int = 900,
     show_measured: bool = True,
     show_imp_cond1: bool = True,
     show_imp_cond2: bool = True,
+    min_nonimp_per_cond: int = 0,
+    min_precursors: int = 1,
     highlight: str = None,
     highlight_group: Optional[Sequence[str]] = None,
-    color_by: str = "SNR",
+    color_by: str = "Significance",
 ) -> go.Figure:
     """
-    Volcano with *styling-only* changes for highlight logic:
-      - none: everyone at 1.0
-      - single highlight only: others at 0.1 (arrow shown)
-      - cohort only: non-cohort at 0.3 (keep halo)
-      - both: single at 1.0, cohort (minus that single) at 0.3, non-cohort at 0.1
-    Everything else matches `plot_volcanoes`.
+    Volcano plot with phospho-aware hover + highlighting.
+
+    - Hover shows: Site (if available) + Gene + log2FC + -log10(q).
+    - Click behavior is preserved: we keep 'text' = gene so the Overview tab
+      still writes the gene back into the search box.
+    - Highlighting accepts gene, UniProt, or site labels.
     """
     adata = state.adata
-    genes = np.array(adata.var["GENE_NAMES"])
+
+    has_cov = bool(adata.uns["has_covariate"])
+
+    # ---- labels & ids (robust to phospho) ----
+    genes   = np.array(adata.var.get("GENE_NAMES", pd.Series(index=adata.var_names, dtype=str)).astype(str))
     protids = np.array(adata.var_names, dtype=str)
 
-    # --- identify single highlight ---
-    if highlight and highlight in genes:
-        is_high = (genes == highlight)
-        high_idx = int(np.where(is_high)[0][0])
-    elif highlight and highlight in protids:
-        is_high = (protids == highlight)
-        high_idx = int(np.where(is_high)[0][0])
+    proteomics_mode = True if adata.uns["analysis"]["analysis_type"] == "DIA" else False
+    if proteomics_mode:
+        sites = genes
     else:
-        is_high = np.zeros(len(genes), dtype=bool)
-        high_idx = None
+        sites = adata.var_names.astype(str).to_numpy()
 
-    # --- identify cohort membership (by gene or protein id) ---
+    # ---- single highlight (accept gene, UniProt, or site) ----
+    def _match_one(token: str) -> np.ndarray:
+        if not token:
+            return np.zeros(len(genes), dtype=bool)
+        t = str(token)
+        return (genes == t) | (protids == t) | (sites == t)
+
+    is_high = _match_one(highlight)
+    high_idx = int(np.flatnonzero(is_high)[0]) if is_high.any() else None
+
+    # ---- cohort highlight (accepts a list of gene/UniProt/site) ----
     if highlight_group:
         group = set(map(str, highlight_group))
-        in_group = np.array([(g in group) or (p in group) for g, p in zip(genes, protids)], dtype=bool)
+        in_group = np.array(
+            [(g in group) or (p in group) or (s in group) for g, p, s in zip(genes, protids, sites)],
+            dtype=bool
+        )
     else:
-        in_group = np.zeros_like(protids, dtype=bool)
+        in_group = np.zeros(len(genes), dtype=bool)
 
-    # --- opacity rules (style-only change) ---
-    # default: everyone fully visible
+    # ---- opacity & size style (unchanged logic, just uses new masks) ----
     base_opacity = np.ones(len(genes), dtype=float)
-
-    any_group = bool(in_group.any())
-    any_single = bool(is_high.any())
+    any_single   = bool(is_high.any())
+    any_group    = bool(in_group.any())
 
     if any_single and not any_group:
-        # single only → others at 0.1
         base_opacity = np.where(is_high, 1.0, 0.08)
     elif any_group and not any_single:
-        # cohort only → non-cohort at 0.3
-        base_opacity = np.where(in_group, 1.0, 0.08)
+        base_opacity = np.where(in_group, 1.0, 0.05)
     elif any_group and any_single:
-        # both → single at 1.0; cohort (minus single) at 0.3; everyone else 0.1
         tmp = np.where(in_group, 0.2, 0.05)
         base_opacity = np.where(is_high, 1.0, tmp)
-    # else: none → leave as ones
 
-    # --- size rules (style-only change) ---
-    # default marker size
     base_size = np.full(len(genes), 6.0, dtype=float)
-    # +10% for single highlight
     if any_single:
-        #base_size = np.where(is_high, base_size * 1.10, base_size)
         base_size = np.where(is_high, base_size * 1.05, base_size)
-    # +10% for cohort membership (additive via multiplication; both ≈ +21%)
     if any_group:
         base_size = np.where(in_group, base_size * 1.05, base_size)
 
-    #base_size = np.round(base_size).astype(float)
+    # ---- data prep (same stats pipeline) ----
+    if data_type == "default" or has_cov == False:
+        df_fc = pd.DataFrame(
+            adata.varm["log2fc"], index=adata.var_names, columns=adata.uns["contrast_names"]
+        )
+        df_q  = pd.DataFrame(
+            adata.varm["q_ebayes"], index=adata.var_names, columns=adata.uns["contrast_names"]
+        )
+    elif data_type == "phospho":
+        df_fc = pd.DataFrame(
+            adata.varm["raw_log2fc"], index=adata.var_names, columns=adata.uns["contrast_names"]
+        )
+        df_q  = pd.DataFrame(
+            adata.varm["raw_q_ebayes"], index=adata.var_names, columns=adata.uns["contrast_names"]
+        )
+    elif data_type == "flowthrough":
+        # flowthrough volcano: use FT-adjusted stats (experiment-wide covariate)
+        df_fc = pd.DataFrame(
+            adata.varm["ft_log2fc"], index=adata.var_names, columns=adata.uns["contrast_names"]
+        )
+        df_q  = pd.DataFrame(
+            adata.varm["ft_q_ebayes"], index=adata.var_names, columns=adata.uns["contrast_names"]
+        )
 
-    # --- data prep (unchanged) ---
-    df_fc = pd.DataFrame(
-        adata.varm["log2fc"],
-        index=adata.var_names,
-        columns=adata.uns["contrast_names"]
-    )
-    df_q  = pd.DataFrame(
-        adata.varm["q_ebayes"],
-        index=adata.var_names,
-        columns=adata.uns["contrast_names"]
-    )
+
     x = df_fc[contrast]
     y = -np.log10(df_q[contrast])
 
     miss = pd.DataFrame(adata.uns["missingness"])
     grp1, grp2 = contrast.split("_vs_")
-    a = miss[grp1].values >= 1.0
-    b = miss[grp2].values >= 1.0
+    # number of replicates in each condition (can differ)
+    n1 = int((adata.obs["CONDITION"] == grp1).sum())
+    n2 = int((adata.obs["CONDITION"] == grp2).sum())
+
+    # fully missing in condition if count == number of replicates
+    a = miss[grp1].to_numpy() >= n1   # fully missing in grp1
+    b = miss[grp2].to_numpy() >= n2   # fully missing in grp2
     measured_mask = (~a & ~b)
     imp1_mask     = (a & ~b)
     imp2_mask     = (b & ~a)
 
+    # --- NEW: filter by experiment-wide min precursors ---
+    # Uses PG.NrOfPrecursorsIdentified (experiment-wide) harmonized as PRECURSORS_EXP.
+    # Any feature with PRECURSORS_EXP < min_precursors is hidden from all groups.
+    if data_type == "phospho":
+        arr = np.nanmax(np.asarray(adata.layers["spectral_counts"], dtype=float), axis=0)
+        prec = pd.Series(arr, index=adata.var_names, name="PRECURSORS_EXP")
+    else:
+        prec = adata.var.get("PRECURSORS_EXP")
+
+    prec = pd.to_numeric(prec, errors="coerce").fillna(0)
+    keep = (prec.values >= int(min_precursors))
+    measured_mask &= keep
+    imp1_mask     &= keep
+    imp2_mask     &= keep
+
+    # --- NEW: per-condition non-imputed counts (from raw intensities) ---
+    # We treat "measurement" as a non-NaN value in the raw layer.
+    # For fully imputed points, group toggles still control visibility regardless of this threshold.
+    mat_raw = adata.layers.get("raw", adata.X)
+    mat = mat_raw.toarray() if hasattr(mat_raw, "toarray") else mat_raw  # (samples × features)
+    idx1 = (adata.obs["CONDITION"] == grp1).to_numpy()
+    idx2 = (adata.obs["CONDITION"] == grp2).to_numpy()
+    # counts per feature (axis=0 over samples)
+    n1 = np.sum(~np.isnan(mat[idx1, :]), axis=0).astype(int)
+    n2 = np.sum(~np.isnan(mat[idx2, :]), axis=0).astype(int)
+    thr = int(min_nonimp_per_cond or 0)
+    # Apply threshold:
+    #  - For "Observed in both": require both sides to meet the threshold
+    #  - For "Imputed in grp1": require >=thr on grp2 (the measured side)
+    #  - For "Imputed in grp2": require >=thr on grp1 (the measured side)
+    meets_both = (n1 >= thr) & (n2 >= thr)
+    meets_2    = (n2 >= thr)
+    meets_1    = (n1 >= thr)
+    measured_mask &= meets_both
+    imp1_mask     &= meets_2
+    imp2_mask     &= meets_1
+
     sig_up   = (df_q[contrast] < sign_threshold) & (x > 0)
     sig_down = (df_q[contrast] < sign_threshold) & (x < 0)
 
+    colorscale = None
+    colorbar   = None
     if color_by == "Significance":
-        color_vals = np.where(sig_up, "red",
-                      np.where(sig_down, "blue", "gray"))
-        colorscale = None
-        colorbar   = None
-    elif color_by == "Avg Expression":
+        color_vals = np.where(sig_up, "red", np.where(sig_down, "blue", "gray"))
+    elif color_by == "Avg Intensity":
         expr_layer = adata.X
         mat = expr_layer.toarray() if hasattr(expr_layer, "toarray") else expr_layer
         idx1 = adata.obs["CONDITION"] == grp1
@@ -1052,38 +1091,104 @@ def plot_volcanoes(
         avg_expr = pd.Series((mean1 + mean2) / 2, index=adata.var_names)
         color_vals = avg_expr
         colorscale = "thermal"
-        colorbar = dict(title="Mean log expr", len=0.5)
+        colorbar = dict(title="Avg Int", len=0.5)
+    elif color_by == "Avg IBAQ" and "ibaq" in adata.layers:
+        ibaq = adata.layers["ibaq"]
+        avg_ibaq = np.log10(np.nanmean(ibaq+1, axis=0))
+        color_vals = avg_ibaq
+        colorbar = dict(title="Avg log(IBAQ)", len=0.5)
+    elif color_by == "Raw LogFC":
+        raw = adata.varm["raw_log2fc"]
+        df_raw = pd.DataFrame(raw, index=adata.var_names, columns=adata.uns["contrast_names"])
+
+        # Align to plotting order
+        color_vals = df_raw[contrast].reindex(protids).to_numpy()
+
+        colorscale = "thermal"
+        colorbar = dict(title="Raw log₂ FC", len=0.5)
+    elif color_by == "Adj. LogFC":
+        raw = adata.varm["log2fc"]
+        df_raw = pd.DataFrame(raw, index=adata.var_names, columns=adata.uns["contrast_names"])
+
+        # Align to plotting order
+        color_vals = df_raw[contrast].reindex(protids).to_numpy()
+
+        colorscale = "thermal"
+        colorbar = dict(title="Adj. log₂ FC", len=0.5)
+
+    elif color_by == "FT LogFC":
+        raw = adata.varm["ft_log2fc"]
+        df_raw = pd.DataFrame(raw, index=adata.var_names, columns=adata.uns["contrast_names"])
+
+        # Align to plotting order
+        color_vals = df_raw[contrast].reindex(protids).to_numpy()
+
+        colorscale = "thermal"
+        colorbar = dict(title="FT log₂ FC", len=0.5)
+
     else:
         raise ValueError(f"Unknown color_by mode: {color_by!r}")
 
-    HIGHLIGHT_GROUP_COLOR = "#6c5ce7"
-
     fig = go.Figure()
 
+    use_coloraxis = (color_by != "Significance")
+    if use_coloraxis:
+        v = np.asarray(color_vals, dtype=float)
+        v = v[np.isfinite(v)]
+        if v.size == 0:
+            vmin, vmax, cmid = 0.0, 1.0, None
+        elif "LogFC" in color_by:  # center FC scales on 0
+            vmax = float(np.nanmax(np.abs(v)))
+            vmin, vmax, cmid = -vmax, vmax, 0.0
+        else:
+            vmin, vmax, cmid = float(np.nanmin(v)), float(np.nanmax(v)), None
+
+        # Define coloraxis in layout BEFORE traces so the colorbar space is reserved immediately
+        fig.update_layout(
+            coloraxis=dict(
+                colorscale=colorscale,
+                colorbar=(colorbar or dict(title=color_by, len=0.5)),
+                cmin=vmin, cmax=vmax, cmid=cmid,
+                showscale=True,
+            ),
+            coloraxis_showscale=True,
+        )
+
     def add_group_trace(mask, name, symbol):
+        # NOTE: keep 'text' = gene for click → search to stay identical
         trace_kwargs = dict(
-            x=x[mask], y=y[mask],
+            x=x[mask],
+            y=y[mask],
             mode="markers",
             marker=dict(
                 symbol=symbol,
-                #size=6,
                 size=base_size[mask],
                 opacity=base_opacity[mask],
-                line=dict(width=0),   # prevent hairline stroke/fringe
+                line=dict(width=0),
             ),
             name=name,
-            text=adata.var["GENE_NAMES"][mask],
-            hovertemplate="Gene: %{text}<br>log2FC: %{x:.2f}<br>-log10(q): %{y:.2f}<extra></extra>"
+            text=(genes[mask] if proteomics_mode else sites[mask]),
+            customdata=(None if proteomics_mode else np.c_[sites[mask], genes[mask], protids[mask]]),
+            hovertemplate=(
+                ("Gene: %{text}<br>"
+                 "log2FC: %{x:.2f}<br>"
+                 "-log10(q): %{y:.2f}<extra></extra>")
+                if proteomics_mode else
+                ("Phosphosite: %{customdata[0]}<br>"
+                 "Gene: %{customdata[1]}<br>"
+                 "log2FC: %{x:.2f}<br>"
+                 "-log10(q): %{y:.2f}<extra></extra>")
+            ),
         )
-        add_colorbar = False
-        if color_by != "Significance" and name == "Observed in both":
-            add_colorbar = True
-        if color_by != "significance":
+        #add_colorbar = (color_by != "Significance" and name == "Observed in both")
+        add_colorbar = (color_by != "Significance")
+        if color_by != "Significance":
             trace_kwargs["marker"].update(
                 color=color_vals[mask],
                 colorscale=colorscale,
-                showscale = True if add_colorbar else False,
-                colorbar=colorbar if add_colorbar else None,
+                coloraxis="coloraxis",
+                #showscale=True if add_colorbar else False,
+                #colorbar=colorbar if add_colorbar else None,
             )
         else:
             trace_kwargs["marker"]["color"] = color_vals[mask]
@@ -1119,6 +1224,8 @@ def plot_volcanoes(
     if show_imp_cond2: visible_mask |= imp2_mask
 
     arrow_ann = None
+    #print(visible_mask[high_idx])
+    #print(show_measured, show_imp_cond1, show_imp_cond2)
     if (high_idx is not None) and visible_mask[high_idx]:
         sign = 1 if x.iloc[high_idx] >= 0 else -1
         xh = float(x.iloc[high_idx]); yh = float(y.iloc[high_idx])
@@ -1126,29 +1233,26 @@ def plot_volcanoes(
             x=xh+sign*0.05, y=yh+0.05,
             ax=xh+sign*0.5, ay=yh+0.5,
             xref="x", yref="y", axref="x", ayref="y",
-            text=genes[high_idx],
+            text=str(genes[high_idx]),  # keep gene tag for consistency
         )
 
-    # annotations
     up   = int(((x > 0) & (df_q[contrast] < sign_threshold) & np.isin(x, all_x)).sum())
     down = int(((x < 0) & (df_q[contrast] < sign_threshold) & np.isin(x, all_x)).sum())
     rest = int(len(all_x) - up - down)
 
     annos = [
-        dict(x=0.02, y=0.98, xref="paper", yref="paper", opacity=0.7,
-             text=f"<b>{down}</b>", bgcolor="blue", font=dict(color="white"), showarrow=False),
+        dict(x=0.02,  y=0.98, xref="paper", yref="paper", opacity=0.7,
+             text=f"<b>{down}</b>", bgcolor="blue",  font=dict(color="white"), showarrow=False),
         dict(x=0.500, y=0.98, xref="paper", yref="paper",
              text=f"<b>{rest}</b>", bgcolor="lightgrey", font=dict(color="black"), showarrow=False),
-        dict(x=0.98, y=0.98, xref="paper", yref="paper", opacity = 0.7,
-             text=f"<b>{up}</b>", bgcolor="red", font=dict(color="white"), showarrow=False),
+        dict(x=0.98,  y=0.98, xref="paper", yref="paper", opacity=0.7,
+             text=f"<b>{up}</b>", bgcolor="red",   font=dict(color="white"), showarrow=False),
     ]
-
-    all_annotations = annos + [arrow_ann] if arrow_ann else annos
+    if arrow_ann: annos.append(arrow_ann)
 
     fig.update_layout(
         margin=dict(l=60, r=120, t=60, b=60, autoexpand=False),
-        annotations=all_annotations,
-        #annotations=[arrow_ann] if arrow_ann else [],
+        annotations=annos,
         title=dict(text=f"{contrast}", x=0.5),
         showlegend=False,
         shapes=[
@@ -1156,8 +1260,9 @@ def plot_volcanoes(
             dict(type="line", x0=0, x1=0, y0=ymin-pad_y, y1=ymax+pad_y, line=dict(color="black", dash="dash")),
         ],
         xaxis=dict(title="log2 Fold Change", autorange=True),
-        yaxis=dict(title="-log10(q-value)", autorange=True),
+        yaxis=dict(title="-log10(q-value)",  autorange=True),
         height=height,
+        #width=width,
     )
     return fig
 

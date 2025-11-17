@@ -150,13 +150,21 @@ def plot_h_clustering_heatmap(adata, mode: Literal["Deviations","Intensities"]="
     df_z = pd.DataFrame(mat.T, index=adata.var_names, columns=adata.obs_names)
 
     # 2) Prepare labels & colors
+
+    feat_order   = adata.uns.get(f"{tag}_feature_order")
+    sample_order = adata.uns.get(f"{tag}_sample_order")
+    if feat_order is not None:
+        df_z = df_z.reindex(index=feat_order)
+    if sample_order is not None:
+        df_z = df_z.reindex(columns=sample_order)
+
+    # 2) Prepare labels & colors (after reindexing!)
     if "GENE_NAMES" in adata.var.columns:
         y_labels = adata.var["GENE_NAMES"].reindex(df_z.index).tolist()
     else:
         y_labels = df_z.index.tolist()
 
     cond_ser = adata.obs["CONDITION"].reindex(df_z.columns)
-
     # 3) Grab your precomputed linkages
     sample_link_name = f"{tag}_sample_linkage"
     feature_link_name = f"{tag}_feature_linkage"
