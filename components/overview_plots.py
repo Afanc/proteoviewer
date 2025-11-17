@@ -475,6 +475,19 @@ def plot_peptide_trends_centered(adata, uniprot_id: str, contrast: str) -> go.Fi
         yaxis_title="Intensity / mean",
         margin=dict(l=60, r=40, t=40, b=50),
         legend_title_text="Peptide",
+        shapes=[
+            dict(
+                type="line",
+                xref="paper", yref="y",
+                x0=0, x1=1,
+                y0=1, y1=1,
+                line=dict(
+                    color="black",
+                    width=1,
+                    dash="dot"
+                ),
+            ),
+        ],
     )
     return fig
 
