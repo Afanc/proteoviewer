@@ -140,8 +140,16 @@ CSS = r"""
   box-shadow: none;
 }
 
-html, body, .bk-root {
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
   overflow-x: hidden !important;
+  overflow-y: hidden;
+}
+
+.bk-root {
+  height: 100%;
 }
 * { box-sizing: border-box; }
 """
@@ -354,11 +362,12 @@ def _lazy_tabs(state):
             ("Overview",      lambda: overview_tab_phospho(state)),
         ]
 
-    tabs = pn.Tabs(dynamic=False, sizing_mode="stretch_both")
+    tabs = pn.Tabs(dynamic=True, sizing_mode="stretch_width")
     holders, builders, built = [], [], []
 
     for label, builder in specs:
-        holder = pn.Column(sizing_mode="stretch_both", styles={"min-height": "240px"})
+        holder = pn.Column(sizing_mode="stretch_width",
+                           styles={"min-height": "240px"})
         holders.append(holder)
         builders.append(builder)
         built.append(False)
@@ -413,7 +422,9 @@ def build_app():
     - SERVER: Panel FileInput; copy to /mnt/data/proteoviewer_uploads/<session>/ then load
     """
     status   = pn.pane.Markdown("### Please load a .h5ad ProteoFlux file.", margin=(0,0,0,10))
-    content  = pn.Column(pn.Spacer(height=1), sizing_mode="stretch_both", styles={"min-height": "300px"})
+    content  = pn.Column(pn.Spacer(height=1),
+                         sizing_mode="stretch_width",
+                         styles={"min-height": "300px"})
 
     # Shared loader
     def _load(adata, fname):

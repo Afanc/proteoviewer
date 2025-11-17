@@ -21,7 +21,7 @@ from components.texts import (
     log_transform_text
 )
 from components.string_links import get_string_link
-from layout_utils import plotly_section, make_vr, make_hr, make_section, make_row, FRAME_STYLES
+from layout_utils import plotly_section, make_vr, make_hr, make_section, make_row, FRAME_STYLES, FRAME_STYLES_TALL, FRAME_STYLES_SHORT
 from utils import logger, log_time
 import textwrap
 
@@ -453,19 +453,6 @@ def overview_tab(state: SessionState):
         fi.param.watch(_on_change, "value")
         return fi
 
-#    def _new_file_input():
-#        fi = pn.widgets.FileInput(accept=".txt,.csv,.tsv", multiple=False, width=200)
-#        def _on_change(event):
-#            b = event.new or b""
-#            try:
-#                txt = b.decode("utf-8", errors="ignore")
-#            except Exception:
-#                txt = ""
-#            _file_text.value = txt
-#            cohort_filename.value = fi.filename or ""
-#        fi.param.watch(_on_change, "value")
-#        return fi
-
     file_upload = _new_file_input()
     file_holder.objects = [file_upload]
 
@@ -894,13 +881,11 @@ def overview_tab(state: SessionState):
             bar_holder,
             pn.Spacer(height=20),
             pep_holder,
-            #sizing_mode="fixed",
             width=840,
         ),
         margin=(0, 0, 0, 0),
-        #sizing_mode="fixed",
         styles={
-            "margin-left": "auto",     # ← push this block to the right
+            "margin-left": "auto",
         }
     )
 
@@ -981,10 +966,10 @@ def overview_tab(state: SessionState):
         pn.Column(                 # left container that can stretch
             volcano_plot,
             cohort_violin_view,
-            sizing_mode="stretch_both",
+            sizing_mode="stretch_width",
             styles={
-                "flex": "1",               # ← soak up remaining horizontal space
-                "min-width": "600px",      # ← keep a sane minimum for the plot
+                "flex": "1",
+                #"min-width": "600px",      # ← keep a sane minimum for the plot
             },
         ),
         pn.Spacer(width=30),
@@ -1042,12 +1027,10 @@ def overview_tab(state: SessionState):
             pn.Row(clear_search, margin = (17,0,0,0)),
             pn.Spacer(width=0),
             pn.Row(layers_sel, margin = (-17,0,0,0)),
-            #sizing_mode="fixed",
             width=300,
             height=80,
         ),
         volcano_and_detail,
-        height=1060,
         margin=(0, 0, 0, 20),
         sizing_mode="stretch_width",
         styles={
@@ -1056,10 +1039,10 @@ def overview_tab(state: SessionState):
             'width': '98vw',
         }
     )
+
     volcano_pane.height = pn.bind(lambda ids: 1200 if ids else 1060, group_ids_selected)
 
     # Tab layout
-
     layout = pn.Column(
         pn.Spacer(height=10),
         intro_pane,
@@ -1070,8 +1053,17 @@ def overview_tab(state: SessionState):
         pn.Spacer(height=30),
         volcano_pane,
         pn.Spacer(height=30),
-        sizing_mode="stretch_both",
-        styles=FRAME_STYLES,
+        sizing_mode="stretch_width",
+        styles=FRAME_STYLES_TALL,
     )
+
+    def _frame_styles(ids, protein):
+        has_ids = bool(ids)
+        has_protein = bool((protein or "").strip())
+        if has_ids or has_protein:
+            return FRAME_STYLES_TALL
+        return FRAME_STYLES_SHORT
+
+    layout.styles = pn.bind(_frame_styles, group_ids_selected, search_input)
 
     return layout
