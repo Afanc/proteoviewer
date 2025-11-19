@@ -526,10 +526,11 @@ def build_app():
     return app
 
 if __name__ == "__main__":
+    target = build_app
     if DEV:
         # Local dev: random free port, autoreload, window popup
         pn.serve(
-            app,
+            target,
             title="ProteoViewer",
             address="localhost",
             port=get_free_port(),
@@ -541,7 +542,7 @@ if __name__ == "__main__":
     else:
         # Server mode: fixed port, big buffers, proper origins, no GUI
         pn.serve(
-            app,
+            target,
             title="ProteoViewer",
             address="0.0.0.0",
             port=5007,
@@ -554,4 +555,3 @@ if __name__ == "__main__":
                 "proteoviewer.biozentrum.unibas.ch",
             ],
         )
-
