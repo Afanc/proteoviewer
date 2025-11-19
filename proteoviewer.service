@@ -14,8 +14,9 @@ ExecStart=/opt/miniforge3/envs/proteoviewer/bin/panel serve app.py \
           --address 0.0.0.0 \
           --port 5007 \
           --allow-websocket-origin="131.152.17.97:5007" \
-          --websocket-max-message-size=4000000000 \
           --allow-websocket-origin="proteoviewer.biozentrum.unibas.ch" \
+          --websocket-max-message-size=4000000000 \
+          --http-server-kwargs='{"max_buffer_size": 4000000000}' \
           --num-procs 8
 WorkingDirectory=/home/pcfuser/Proteoviewer
 Environment="PATH=/opt/miniforge3/envs/proteoviewer/bin:/opt/miniforge3/bin:/usr/bin"
