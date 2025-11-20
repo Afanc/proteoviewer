@@ -426,28 +426,6 @@ def build_app():
                          sizing_mode="stretch_width",
                          styles={"min-height": "300px"})
 
-    # Tiny spinner that tracks Panel's global busy state
-    busy_spinner = pn.indicators.LoadingSpinner(
-        value=False,
-        width=18,
-        height=18,
-        margin=(10,0,0,0),
-        name="",
-    )
-
-    @pn.depends(pn.state.param.busy, watch=True)
-    def _sync_busy_spinner(busy: bool):
-        # whenever any callback is running, pn.state.busy == True
-        busy_spinner.value = busy
-
-    # Row with spinner + status text
-    status_row = pn.Row(
-        status,
-        pn.Spacer(width=15),
-        busy_spinner,
-        sizing_mode="stretch_width",
-        css_classes=["pv-status"],
-    )
     # Shared loader
     def _load(adata, fname):
         ok, msg, _ = _check_pf_meta(adata)
@@ -489,7 +467,7 @@ def build_app():
         controls = pn.Column(
             pn.Spacer(height=10),
             pn.Row(pick_btn, sizing_mode="stretch_width"),
-            pn.Row(status_row, sizing_mode="stretch_width", css_classes=["pv-status"]),
+            pn.Row(status, sizing_mode="stretch_width", css_classes=["pv-status"]),
             sizing_mode="stretch_width",
         )
 
@@ -533,7 +511,7 @@ def build_app():
         controls = pn.Column(
             pn.Spacer(height=10),
             pn.Row(file_in, sizing_mode="stretch_width"),
-            pn.Row(status_row, sizing_mode="stretch_width", css_classes=["pv-status"]),
+            pn.Row(status, sizing_mode="stretch_width", css_classes=["pv-status"]),
             sizing_mode="stretch_width",
         )
 
@@ -573,11 +551,11 @@ if __name__ == "__main__":
             port=5007,
             autoreload=False,
             show=False,
-            websocket_max_message_size=2000 * 1024 * 1024,
-            http_server_kwargs={"max_buffer_size": 2000 * 1024 * 1024},
+            websocket_max_message_size=2_000 * 1024 * 1024,
+            http_server_kwargs={"max_buffer_size": 2_000 * 1024 * 1024},
             allow_websocket_origin=[
                 "131.152.17.97:5007",
                 "proteoviewer.biozentrum.unibas.ch",
             ],
-            n_procs=8,
+            num_procs=8,
         )
