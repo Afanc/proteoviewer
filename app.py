@@ -579,4 +579,5 @@ if __name__ == "__main__":
                 "131.152.17.97:5007",
                 "proteoviewer.biozentrum.unibas.ch",
             ],
+            n_procs=8,
         )
