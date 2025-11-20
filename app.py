@@ -443,7 +443,7 @@ def build_app():
     # Row with spinner + status text
     status_row = pn.Row(
         status,
-        pn.Spacer(width=6),
+        pn.Spacer(width=15),
         busy_spinner,
         sizing_mode="stretch_width",
         css_classes=["pv-status"],
@@ -546,6 +546,9 @@ def build_app():
     app = pn.Column(header, content, sizing_mode="stretch_width")
 
     return app
+
+if __name__ != "__main__":
+    build_app().servable()
 
 if __name__ == "__main__":
     target = build_app
