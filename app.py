@@ -360,6 +360,7 @@ def _lazy_tabs(state):
     if state.adata.uns['analysis'].get('analysis_type'.lower(), "DIA") == "phospho":
         specs = [
             ("Overview",      lambda: overview_tab_phospho(state)),
+            ("Preprocessing-PO", lambda: preprocessing_tab(state)),
         ]
 
     tabs = pn.Tabs(dynamic=True, sizing_mode="stretch_width")
@@ -474,7 +475,7 @@ def build_app():
         # Optional autoload in dev (unchanged)
         try:
             from anndata import read_h5ad
-            adata = read_h5ad("proteoflux_results.h5ad")
+            adata = read_h5ad("proteoflux_results_phospho.h5ad")
             _load(adata, "proteoflux_results.h5ad")
             logging.info("DEV autoload successful.")
         except Exception:
