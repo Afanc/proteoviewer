@@ -1024,22 +1024,27 @@ def plot_volcanoes(
     x = df_fc[contrast]
     y = -np.log10(df_q[contrast])
 
+    # --------------------------------------------
+    # Missingness-based initial classification
+    # --------------------------------------------
     miss = pd.DataFrame(adata.uns["missingness"])
     grp1, grp2 = contrast.split("_vs_")
-    # number of replicates in each condition (can differ)
-    n1 = int((adata.obs["CONDITION"] == grp1).sum())
-    n2 = int((adata.obs["CONDITION"] == grp2).sum())
 
-    # fully missing in condition if count == number of replicates
-    a = miss[grp1].to_numpy() >= n1   # fully missing in grp1
-    b = miss[grp2].to_numpy() >= n2   # fully missing in grp2
+    # number of replicates (for "fully missing" in legacy missingness)
+    rep1 = int((adata.obs["CONDITION"] == grp1).sum())
+    rep2 = int((adata.obs["CONDITION"] == grp2).sum())
+
+    a = miss[grp1].to_numpy() >= rep1   # fully missing in grp1
+    b = miss[grp2].to_numpy() >= rep2   # fully missing in grp2
+
+    # initial classification
     measured_mask = (~a & ~b)
-    imp1_mask     = (a & ~b)
-    imp2_mask     = (b & ~a)
+    imp1_mask     = (a & ~b)   # missing grp1 only
+    imp2_mask     = (b & ~a)   # missing grp2 only
 
-    # --- NEW: filter by experiment-wide min precursors ---
-    # Uses PG.NrOfPrecursorsIdentified (experiment-wide) harmonized as PRECURSORS_EXP.
-    # Any feature with PRECURSORS_EXP < min_precursors is hidden from all groups.
+    # --------------------------------------------
+    # Precursor filter
+    # --------------------------------------------
     if data_type == "phospho":
         arr = np.nanmax(np.asarray(adata.layers["spectral_counts"], dtype=float), axis=0)
         prec = pd.Series(arr, index=adata.var_names, name="PRECURSORS_EXP")
@@ -1048,21 +1053,45 @@ def plot_volcanoes(
 
     prec = pd.to_numeric(prec, errors="coerce").fillna(0)
     keep = (prec.values >= int(min_precursors))
+
     measured_mask &= keep
     imp1_mask     &= keep
     imp2_mask     &= keep
 
-    # --- NEW: per-condition non-imputed counts (from raw intensities) ---
-    # We treat "measurement" as a non-NaN value in the raw layer.
-    # For fully imputed points, group toggles still control visibility regardless of this threshold.
+    # --------------------------------------------
+    # Per-condition raw non-imputed counts
+    # --------------------------------------------
     mat_raw = adata.layers.get("raw", adata.X)
-    mat = mat_raw.toarray() if hasattr(mat_raw, "toarray") else mat_raw  # (samples × features)
+    mat = mat_raw.toarray() if hasattr(mat_raw, "toarray") else mat_raw
+
     idx1 = (adata.obs["CONDITION"] == grp1).to_numpy()
     idx2 = (adata.obs["CONDITION"] == grp2).to_numpy()
-    # counts per feature (axis=0 over samples)
+
     n1 = np.sum(~np.isnan(mat[idx1, :]), axis=0).astype(int)
     n2 = np.sum(~np.isnan(mat[idx2, :]), axis=0).astype(int)
     thr = int(min_nonimp_per_cond or 0)
+
+    # --------------------------------------------
+    # Fix: if raw says "zero non-imputed", treat as fully missing
+    # --------------------------------------------
+    full_missing1 = (n1 == 0)
+    full_missing2 = (n2 == 0)
+
+    a = a | full_missing1
+    b = b | full_missing2
+
+    # Recompute classification based on updated full-missing information
+    measured_mask = (~a & ~b)
+    imp1_mask     = (a & ~b)
+    imp2_mask     = (b & ~a)
+
+    # --------------------------------------------
+    # Apply min_nonimp_per_cond threshold *only to the measured side*
+    # --------------------------------------------
+    measured_mask &= ((n1 >= thr) & (n2 >= thr))
+    imp1_mask     &= (n2 >= thr)   # measured side = grp2
+    imp2_mask     &= (n1 >= thr)   # measured side = grp1
+
     # Apply threshold:
     #  - For "Observed in both": require both sides to meet the threshold
     #  - For "Imputed in grp1": require >=thr on grp2 (the measured side)

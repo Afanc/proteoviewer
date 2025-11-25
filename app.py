@@ -360,6 +360,7 @@ def _lazy_tabs(state):
     if state.adata.uns['analysis'].get('analysis_type'.lower(), "DIA") == "phospho":
         specs = [
             ("Overview",      lambda: overview_tab_phospho(state)),
+            ("Preprocessing-PO", lambda: preprocessing_tab(state)),
         ]
 
     tabs = pn.Tabs(dynamic=True, sizing_mode="stretch_width")
@@ -474,7 +475,7 @@ def build_app():
         # Optional autoload in dev (unchanged)
         try:
             from anndata import read_h5ad
-            adata = read_h5ad("proteoflux_results.h5ad")
+            adata = read_h5ad("proteoflux_results_phospho.h5ad")
             _load(adata, "proteoflux_results.h5ad")
             logging.info("DEV autoload successful.")
         except Exception:
@@ -525,19 +526,37 @@ def build_app():
 
     return app
 
+if __name__ != "__main__":
+    build_app().servable()
 
-if os.environ.get("PV_PROGRAMMATIC", "0") != "1":
-    # Normal 'panel serve app.py' or 'python app.py' usage
-    app = build_app()
-    app.servable()
-    if __name__ == "__main__":
+if __name__ == "__main__":
+    target = build_app
+    if DEV:
+        # Local dev: random free port, autoreload, window popup
         pn.serve(
-            app,
+            target,
             title="ProteoViewer",
-            port=(get_free_port() if DEV else 5007),
-            autoreload=DEV,
-            show=DEV,
-            websocket_max_message_size=2000*1024*1024,
-            http_server_kwargs={"max_buffer_size": 2000*1024*1024},
+            address="localhost",
+            port=get_free_port(),
+            autoreload=True,
+            show=True,
+            websocket_max_message_size=2000 * 1024 * 1024,
+            http_server_kwargs={"max_buffer_size": 2000 * 1024 * 1024},
         )
-
+    else:
+        # Server mode: fixed port, big buffers, proper origins, no GUI
+        pn.serve(
+            target,
+            title="ProteoViewer",
+            address="0.0.0.0",
+            port=5007,
+            autoreload=False,
+            show=False,
+            websocket_max_message_size=2_000 * 1024 * 1024,
+            http_server_kwargs={"max_buffer_size": 2_000 * 1024 * 1024},
+            allow_websocket_origin=[
+                "131.152.17.97:5007",
+                "proteoviewer.biozentrum.unibas.ch",
+            ],
+            num_procs=8,
+        )
