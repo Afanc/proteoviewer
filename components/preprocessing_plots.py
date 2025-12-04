@@ -108,6 +108,82 @@ def get_intensity_long_df(
     # 4) concatenate and drop any NA
     return pd.concat([df_before, df_after], ignore_index=True).dropna()
 
+@log_time("Plotting precursor/peptide depth distributions")
+def plot_prec_pep_distributions(
+    adata: AnnData,
+) -> tuple[Optional[go.Figure], Optional[go.Figure]]:
+    """
+    Two small histograms:
+      - number of precursors per peptide
+      - number of peptides per protein
+
+    This *only* uses pre-computed arrays if they are present in
+    `adata.uns["preprocessing"]` and otherwise falls back to placeholders,
+    so it's fully backward compatible.
+    """
+    preproc = adata.uns.get("preprocessing", {}).get("distributions", {})
+
+    prec_per_pep = preproc.get("num_precursors_per_peptide")
+    pep_per_prot = preproc.get("num_peptides_per_protein")
+    prec_per_prot = preproc.get("num_precursors_per_protein")
+
+    def _make_hist(
+        vals: Optional,
+        title: str,
+        xlab: str,
+        nbins: int,
+    ) -> Optional[go.Figure]:
+        if vals is None:
+            return None
+        arr = np.asarray(vals)
+        arr = arr[np.isfinite(arr)]
+        if arr.size == 0:
+            return None
+
+        fig = go.Figure(go.Histogram(
+            x=arr,
+            nbinsx=nbins,
+            marker_line_color="black",
+            marker_line_width=1,
+            hoverinfo="none",
+            showlegend=False,
+        ))
+        fig.update_layout(
+            title=dict(text=title, x=0.5),
+            xaxis_title=xlab,
+            yaxis_title="Count",
+            template="plotly_white",
+            width=600,
+            height=400,
+            xaxis_tickformat=',d',
+        )
+        fig.update_yaxes(
+            type="log",
+            dtick=1,
+            exponentformat="power",
+            showexponent="all",
+        )
+        if max(arr) < 10:
+            fig.update_xaxes(range=[0, 8])
+        return fig
+
+    fig_prec_per_pep = _make_hist(
+        prec_per_pep,
+        "Precursors per peptide",
+        "Precursors",
+        nbins=6,
+    )
+
+    # For phospho you may or may not have this; if absent we just return None.
+    fig_pep_per_prot = _make_hist(
+        pep_per_prot,
+        "Peptides per protein",
+        "Peptides",
+        nbins=50,
+    )
+
+    return fig_prec_per_pep, fig_pep_per_prot
+
 @log_time("Plotting violins before/after norm")
 def plot_violin_by_group_go(
     df_long:       pd.DataFrame,

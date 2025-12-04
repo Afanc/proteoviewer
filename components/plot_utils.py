@@ -63,6 +63,58 @@ def color_ticks_by_condition(fig, samples, cond_series, cmap):
                      ticktext=[f"<span style='color:{c}'>{s}</span>" for s, c in zip(short, colors)])
     return fig
 
+def get_volcano_classification_masks(adata, contrast: str, min_nonimp_per_cond: int, min_consistent_peptides: int):
+    """
+    Returns (measured_mask, imp1_mask, imp2_mask) applying all volcano post-test filters.
+    Matches exactly the logic in plot_volcanoes().
+    """
+    grp1, grp2 = contrast.split("_vs_")
+    miss = pd.DataFrame(adata.uns["missingness"])
+
+    rep1 = (adata.obs["CONDITION"] == grp1).sum()
+    rep2 = (adata.obs["CONDITION"] == grp2).sum()
+
+    a = miss[grp1].to_numpy() >= rep1
+    b = miss[grp2].to_numpy() >= rep2
+
+    mat = adata.layers.get("raw", adata.X)
+    mat = mat.toarray() if hasattr(mat, "toarray") else mat
+
+    idx1 = (adata.obs["CONDITION"] == grp1).to_numpy()
+    idx2 = (adata.obs["CONDITION"] == grp2).to_numpy()
+
+    n1 = np.sum(~np.isnan(mat[idx1, :]), axis=0).astype(int)
+    n2 = np.sum(~np.isnan(mat[idx2, :]), axis=0).astype(int)
+
+    full_missing1 = (n1 == 0)
+    full_missing2 = (n2 == 0)
+
+    a |= full_missing1
+    b |= full_missing2
+
+    measured = (~a & ~b)
+    imp1     = (a & ~b)
+    imp2     = (b & ~a)
+
+    measured &= (n1 >= min_nonimp_per_cond) & (n2 >= min_nonimp_per_cond)
+    imp1     &= (n2 >= min_nonimp_per_cond)
+    imp2     &= (n1 >= min_nonimp_per_cond)
+
+    prec_keep = np.ones(len(adata.var_names), dtype=bool)
+    c1_key = f"CONSISTENT_PEPTIDE_{grp1}"
+    c2_key = f"CONSISTENT_PEPTIDE_{grp2}"
+    if (c1_key in adata.var.columns) and (c2_key in adata.var.columns):
+        c1 = pd.to_numeric(adata.var[c1_key], errors="coerce").fillna(0).to_numpy()
+        c2 = pd.to_numeric(adata.var[c2_key], errors="coerce").fillna(0).to_numpy()
+        max_cons = np.maximum(c1, c2)
+        prec_keep = max_cons >= min_consistent_peptides
+
+    measured &= prec_keep
+    imp1     &= prec_keep
+    imp2     &= prec_keep
+
+    return measured, imp1, imp2
+
 def categorize_proteins_by_run_count(df: pd.DataFrame) -> pd.Series:
     """
     Given a DataFrame of shape (samples × proteins), returns a Series
@@ -1031,32 +1083,40 @@ def plot_volcanoes(
     grp1, grp2 = contrast.split("_vs_")
 
     # number of replicates (for "fully missing" in legacy missingness)
-    rep1 = int((adata.obs["CONDITION"] == grp1).sum())
-    rep2 = int((adata.obs["CONDITION"] == grp2).sum())
+    cond = adata.obs["CONDITION"].astype(str).to_numpy()
+    idx1 = (cond == grp1)
+    idx2 = (cond == grp2)
+
+    rep1 = int(idx1.sum())
+    rep2 = int(idx2.sum())
 
     a = miss[grp1].to_numpy() >= rep1   # fully missing in grp1
     b = miss[grp2].to_numpy() >= rep2   # fully missing in grp2
 
-    # initial classification
     measured_mask = (~a & ~b)
     imp1_mask     = (a & ~b)   # missing grp1 only
     imp2_mask     = (b & ~a)   # missing grp2 only
 
     # --------------------------------------------
-    # Precursor filter
-    # --------------------------------------------
-    if data_type == "phospho":
-        arr = np.nanmax(np.asarray(adata.layers["spectral_counts"], dtype=float), axis=0)
-        prec = pd.Series(arr, index=adata.var_names, name="PRECURSORS_EXP")
-    else:
-        prec = adata.var.get("PRECURSORS_EXP")
+    # Consistent peptide filter (per protein, per condition)
+    # We expect per-condition counts in adata.var:
+    #   CONSISTENT_PEPTIDE_<COND>
+    # For a given contrast grp1_vs_grp2, we keep proteins where
+    #   max(cons_pep_grp1, cons_pep_grp2) >= min_precursors
+    # i.e. at least one of the two conditions has that many consistent peptides.
+    prec_keep = np.ones(len(adata.var_names), dtype=bool)
+    cons_prefix = "CONSISTENT_PEPTIDE_"
+    var_cols = list(adata.var.columns)
 
-    prec = pd.to_numeric(prec, errors="coerce").fillna(0)
-    keep = (prec.values >= int(min_precursors))
-
-    measured_mask &= keep
-    imp1_mask     &= keep
-    imp2_mask     &= keep
+    col1 = f"{cons_prefix}{grp1}"
+    col2 = f"{cons_prefix}{grp2}"
+    if (col1 in var_cols) and (col2 in var_cols):
+        c1 = pd.to_numeric(adata.var[col1], errors="coerce").to_numpy()
+        c2 = pd.to_numeric(adata.var[col2], errors="coerce").to_numpy()
+        c1 = np.nan_to_num(c1, nan=0.0)
+        c2 = np.nan_to_num(c2, nan=0.0)
+        max_cons = np.maximum(c1, c2)
+        prec_keep = max_cons >= int(min_precursors)
 
     # --------------------------------------------
     # Per-condition raw non-imputed counts
@@ -1102,6 +1162,15 @@ def plot_volcanoes(
     measured_mask &= meets_both
     imp1_mask     &= meets_2
     imp2_mask     &= meets_1
+
+    #measured_mask &= prec_keep
+    #imp1_mask     &= prec_keep
+    #imp2_mask     &= prec_keep
+
+    # initial classification
+    measured_mask, imp1_mask, imp2_mask = get_volcano_classification_masks(
+        adata, contrast, min_nonimp_per_cond, min_precursors
+    )
 
     sig_up   = (df_q[contrast] < sign_threshold) & (x > 0)
     sig_down = (df_q[contrast] < sign_threshold) & (x < 0)
@@ -1253,8 +1322,6 @@ def plot_volcanoes(
     if show_imp_cond2: visible_mask |= imp2_mask
 
     arrow_ann = None
-    #print(visible_mask[high_idx])
-    #print(show_measured, show_imp_cond1, show_imp_cond2)
     if (high_idx is not None) and visible_mask[high_idx]:
         sign = 1 if x.iloc[high_idx] >= 0 else -1
         xh = float(x.iloc[high_idx]); yh = float(y.iloc[high_idx])
@@ -1268,14 +1335,22 @@ def plot_volcanoes(
     up   = int(((x > 0) & (df_q[contrast] < sign_threshold) & np.isin(x, all_x)).sum())
     down = int(((x < 0) & (df_q[contrast] < sign_threshold) & np.isin(x, all_x)).sum())
     rest = int(len(all_x) - up - down)
+    #down_ratio = 100*down/len(all_x)
+    #down_ratio_fmt = f"{down_ratio:.2f}%"
+    #up_ratio   = 100*up/len(all_x)
+    #up_ratio_fmt = f"{up_ratio:.2f}%"
 
     annos = [
         dict(x=0.02,  y=0.98, xref="paper", yref="paper", opacity=0.7,
-             text=f"<b>{down}</b>", bgcolor="blue",  font=dict(color="white"), showarrow=False),
+             #text=f"<b>{down}</b><br><span style='font-size:0.9em'>({down_ratio_fmt})</span>",
+             text=f"<b>{down}</b>",
+             bgcolor="blue",  font=dict(color="white"), showarrow=False),
         dict(x=0.500, y=0.98, xref="paper", yref="paper",
              text=f"<b>{rest}</b>", bgcolor="lightgrey", font=dict(color="black"), showarrow=False),
         dict(x=0.98,  y=0.98, xref="paper", yref="paper", opacity=0.7,
-             text=f"<b>{up}</b>", bgcolor="red",   font=dict(color="white"), showarrow=False),
+             #text=f"<b>{up}</b><br><span style='font-size:0.9em'>({up_ratio_fmt})</span>",
+             text=f"<b>{up}</b>",
+             bgcolor="red",   font=dict(color="white"), showarrow=False),
     ]
     if arrow_ann: annos.append(arrow_ann)
 
