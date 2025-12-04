@@ -18,6 +18,7 @@ from components.preprocessing_plots import (
     plot_grouped_violin_imputation_metrics_by_condition,
     plot_grouped_violin_before_after_imputation_metrics_by_condition,
     plot_left_censoring_histogram,
+    plot_prec_pep_distributions,
     _placeholder_plot,
 )
 from components.texts import (
@@ -62,10 +63,6 @@ def preprocessing_tab(state: SessionState):
                        height=400, flex='0.32')
     #hists = plot_filter_histograms(adata)
 
-    #q = plotly_section(hists['qvalue'], height=400, flex="0.32", margin=(0,0,0,-100))
-    #p = plotly_section(hists['pep'], height=400, flex='0.32')
-    #r = plotly_section(hists['run_evidence_count'], height=400, flex='0.32')
-
     filtering_row = make_row(
         pn.pane.Markdown("##   Filtering", styles={"flex": "0.05", "z-index": "10"}),
         q, pn.Spacer(width=10), make_vr(), pn.Spacer(width=20),
@@ -96,15 +93,32 @@ def preprocessing_tab(state: SessionState):
         height=940,   # was 500; increased to fit the extra row
     )
 
-    #psm_pane = make_section(
-    #    header="Precursor-level",
-    #    row=filtering_row,
-    #    background="#E3F2FD",
-    #    width="98vw",
-    #    height=500
-    #)
-
     # Quantification
+    prec_pep_fig, pep_prot_fig = plot_prec_pep_distributions(adata)
+
+    prec_pep_pane = plotly_section(
+        prec_pep_fig if prec_pep_fig is not None else _placeholder_plot("Precursors per peptide"),
+        height=400,
+        flex="0.5",
+        margin=(0,0,0,-100),
+    )
+
+    pep_prot_pane = plotly_section(
+        pep_prot_fig if pep_prot_fig is not None else _placeholder_plot("Peptides per protein"),
+        height=400,
+        flex="0.5",
+    )
+
+    depth_row = make_row(
+        pn.pane.Markdown("##   ID Depth", styles={"flex": "0.05", "z-index": "10"}),
+        prec_pep_pane,
+        pn.Spacer(width=10),
+        make_vr(),
+        pn.Spacer(width=10),
+        pep_prot_pane,
+        height=420,
+        width='95vw',
+    )
     dyn_fig = plotly_section(plot_dynamic_range(adata), height=400)
 
     dyn_fig_row = make_row(
@@ -113,13 +127,18 @@ def preprocessing_tab(state: SessionState):
         height=420,
         width='95vw',
     )
+    quant_content = pn.Column(
+        depth_row,
+        pn.Spacer(height=30),
+        dyn_fig_row,
+    )
 
     quant_pane = make_section(
         header ="Quantification",
-        row=dyn_fig_row,
+        row=quant_content,
         background="#E8F5E9",
         width="98vw",
-        height=500
+        height=940
     )
 
     # pre/post log trasform

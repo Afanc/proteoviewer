@@ -70,7 +70,11 @@ def overview_tab(state: SessionState):
     num_samples = len(adata.obs.index.unique())
     num_conditions = len(adata.obs["CONDITION"].unique())
     num_contrasts = int(num_conditions*(num_conditions-1)/2)
-    quant_method = preproc_cfg.get("quantification_method", "sum")
+
+    quant_method = preproc_cfg.get("quantification", {}).get("method", "sum")
+    if quant_method == "directlfq":
+        min_nonan = preproc_cfg.get("quantification").get("directlfq_min_nonan", 1)
+        quant_method += f", min nonan={min_nonan}"
 
     pf_version = adata.uns['proteoflux'].get("pf_version", 0.0)
 
@@ -146,13 +150,13 @@ def overview_tab(state: SessionState):
         **Input Layout**: {input_layout}
 
         **Pipeline steps**
-        - **Quantification**: {quant_method}
         - **Filtering**:
             - Contaminants ({', '.join(contaminants_files)}): {cont_txt}
             - q-value ≤ {q_thr_txt}: {q_txt}
             - PEP {pep_op} {pep_thr_txt}: {pep_txt}
             - Min. run evidence count = {prec_thr_txt}: {prec_txt}
             - Left Censoring ≤ {censor_thr_txt}: {censor_txt}
+        - **Quantification**: {quant_method}
         - **Normalization**: {norm_methods}
         - **Imputation**: {imp_method}
         - **Differential expression**: eBayes via {ebayes_method}
@@ -349,11 +353,11 @@ def overview_tab(state: SessionState):
     contrast_sel.param.watch(_on_contrast_change, "value")
 
     # Min numb. precursors options
-    min_prec_options = {f"≥{i}": i for i in range(1, 6)}
+    min_prec_options = {f"≥{i}": i for i in range(0, 6)}
     min_prec_sel = pn.widgets.Select(
-        name="Precursors",
+        name="Consistent pep",
         options=list(min_prec_options.keys()),
-        value="≥1",
+        value="≥0",
         width=80,
     )
 
@@ -573,12 +577,14 @@ def overview_tab(state: SessionState):
     volcano_plot.param.watch(_on_volcano_click, "click_data")
 
     # Cohort Violin View
-    def _cohort_violin(ids, contrast, sm, s1, s2):
+    def _cohort_violin(ids, contrast, sm, s1, s2, min_nonimp_per_cond, min_consistent_peptides):
         if not ids:
             return pn.Spacer(height=0)  # collapses cleanly when no cohort
         fig = plot_group_violin_for_volcano(
             state=state,
             contrast=contrast,
+            min_nonimp_per_cond=min_nonimp_per_cond,
+            min_consistent_peptides=min_consistent_peptides,
             highlight_group=ids,
             show_measured=sm,
             show_imp_cond1=s1,
@@ -606,16 +612,18 @@ def overview_tab(state: SessionState):
         show_measured,         # sm
         show_imp_cond1,        # s1
         show_imp_cond2,        # s2
+        min_nonimp_per_cond=pn.bind(_min_meas_value, min_meas_sel),
+        min_consistent_peptides=pn.bind(_min_prec_value, min_prec_sel),
     )
 
     # bind a detail‐plot function to the same contrast & search_input
-    layers = ["Final", "Log-only", "Raw"]
+    layers = ["Final", "Log-only", "Raw", "Spectral Counts"]
 
     layers_sel = pn.widgets.Select(
         name="Protein Data View",
         options=layers,
         value=layers[0],
-        width=100,
+        width=130,
         margin=(20, 0, 0, 20),
     )
 

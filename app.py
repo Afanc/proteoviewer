@@ -26,7 +26,7 @@ if doc is not None:
     doc.title = "ProteoViewer"
 
 
-MIN_PF_VERSION = os.environ.get("PF_MIN_PF_VERSION", "1.7.4")
+MIN_PF_VERSION = os.environ.get("PF_MIN_PF_VERSION", "1.7.7")
 
 # Single flag: dev (local run). If not dev => server mode.
 DEV = os.getenv("PV_DEV", "0") == "1"
@@ -200,15 +200,15 @@ def _make_about_card(version: str) -> pn.Card:
         title="About",
         collapsible=True,                # header acts like a button
         collapsed=True,                  # start closed
-        sizing_mode="fixed",
-        width=720,                       # same width you liked
+        #sizing_mode="fixed",
+        #width=720,                       # same width you liked
         styles={"max-width": "720px"},   # keep it from growing wider
     )
 
 def _build_header(area_center, version: str, dev_flag: bool) -> pn.Column:
     """Header with left stack (title, browse, status) and right stack (logo, facility)."""
     pv_logo_path = "resources/pv_banner.png"
-    pv_logo_pane = pn.pane.PNG(pv_logo_path, width=200, sizing_mode="fixed", margin=(-10,0,-40,0))
+    pv_logo_pane = pn.pane.PNG(pv_logo_path, width=200, height=90, sizing_mode="fixed", margin=(-10,0,-40,0))
 
     ver_label = f"v{version}" + (" · DEV" if dev_flag else "")
     pv_ver = pn.pane.Markdown(
@@ -248,12 +248,12 @@ def _build_header(area_center, version: str, dev_flag: bool) -> pn.Column:
     # Right side: logo above facility — same width, left-aligned inside the block
     FACILITY_WIDTH = 140
     facility_logo_path = "resources/Biozentrum_Logo_2011.png"
-    facility_logo_pane = pn.pane.PNG(facility_logo_path, width=FACILITY_WIDTH, sizing_mode="fixed", margin=(0, 10, 6, -15))
+    facility_logo_pane = pn.pane.PNG(facility_logo_path, width=FACILITY_WIDTH, height=90, sizing_mode="fixed", margin=(0, 10, 6, -15))
     right_top_row = pn.Row(facility_logo_pane,
                            pn.Spacer(width=50),
-                           sizing_mode="fixed", align="center")
+                           sizing_mode="fixed", height=90, align="center")
     right_block = pn.Column(right_top_row,
-                            width=FACILITY_WIDTH, sizing_mode="fixed")
+                            width=FACILITY_WIDTH, sizing_mode="fixed", height=90)
 
     # One clean header row: left stack and right stack aligned at the top
     mainbar = pn.Row(
@@ -475,7 +475,7 @@ def build_app():
         # Optional autoload in dev (unchanged)
         try:
             from anndata import read_h5ad
-            adata = read_h5ad("proteoflux_results_phospho.h5ad")
+            adata = read_h5ad("proteoflux_results.h5ad")
             _load(adata, "proteoflux_results.h5ad")
             logging.info("DEV autoload successful.")
         except Exception:
