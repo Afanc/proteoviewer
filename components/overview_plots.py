@@ -6,7 +6,7 @@ from typing import Tuple, List, Optional, Set
 import plotly.graph_objects as go
 import plotly.express as px
 from plotly.subplots import make_subplots
-from components.plot_utils import plot_stacked_proteins_by_category, plot_violins, compute_metric_by_condition, get_color_map, plot_cluster_heatmap_plotly, plot_volcanoes
+from components.plot_utils import plot_stacked_proteins_by_category, plot_violins, compute_metric_by_condition, get_color_map, plot_cluster_heatmap_plotly, plot_volcanoes, get_volcano_classification_masks
 
 from utils import logger, log_time
 
@@ -142,11 +142,17 @@ def plot_intensity_by_protein(state, contrast, protein, layer):
     # pick your normalized layer (fallback to .X)
     proc_data = ad.X
     intensity_scale = "Log Intensity"
+    is_spectral = False
+
     if layer.value == "Raw":
         proc_data = ad.layers.get('raw')
         intensity_scale = "Intensity"
     elif layer.value == "Log (pre-norm)":
         proc_data = ad.layers.get('lognorm')
+    elif layer.value == "Spectral Counts":
+        proc_data = ad.layers.get('spectral_counts')
+        intensity_scale = "Spectral Counts"
+        is_spectral = True
 
     # find column index by GENE_NAMES
     try:
@@ -165,7 +171,7 @@ def plot_intensity_by_protein(state, contrast, protein, layer):
         "sample": ad.obs_names,
         "condition": ad.obs["CONDITION"],
         "intensity": y_vals,
-        "imputed": imputed_mask
+        "imputed": (np.zeros_like(y_vals, dtype=bool) if is_spectral else imputed_mask),
     })
 
     # filter by contrast
@@ -213,16 +219,17 @@ def plot_intensity_by_protein(state, contrast, protein, layer):
         ))
 
     # add a custom legend entry for imputed pattern
-    fig.add_trace(go.Bar(
-        x=[None], y=[None],
-        name="Imputed",
-        marker_color="white",
-        marker_pattern_shape="/",
-        marker_pattern_fillmode="overlay",
-        marker_pattern_size=6,
-        marker_pattern_solidity=0.3,
-        showlegend=True
-    ))
+    if not is_spectral:
+        fig.add_trace(go.Bar(
+            x=[None], y=[None],
+            name="Imputed",
+            marker_color="white",
+            marker_pattern_shape="/",
+            marker_pattern_fillmode="overlay",
+            marker_pattern_size=6,
+            marker_pattern_solidity=0.3,
+            showlegend=True
+        ))
 
     fig.update_layout(
         margin={"t":40,"b":40,"l":60,"r":60},
@@ -495,6 +502,8 @@ def plot_peptide_trends_centered(adata, uniprot_id: str, contrast: str) -> go.Fi
 def plot_group_violin_for_volcano(
     state,
     contrast: str,
+    min_nonimp_per_cond: int,
+    min_consistent_peptides: int,
     highlight_group: list[str] | set[str],
     show_measured: bool,
     show_imp_cond1: bool,
@@ -503,52 +512,49 @@ def plot_group_violin_for_volcano(
     height: int = 300,
     x_range: tuple[float, float] | None = None,
 ) -> go.Figure:
-    """
-    Horizontal violins of log2FC for cohort vs non-cohort, using the same
-    visible subset as the volcano (Observed/Imputed toggles).
-    """
     ad = state.adata
-    # log2FC & q-value
+
     df_fc = pd.DataFrame(ad.varm["log2fc"], index=ad.var_names, columns=ad.uns["contrast_names"])
-    df_q  = pd.DataFrame(ad.varm["q_ebayes"], index=ad.var_names, columns=ad.uns["contrast_names"])
-    x = df_fc[contrast]  # log2FC
-
-    # Visible subset masks (mirror volcano)
-    miss = pd.DataFrame(ad.uns["missingness"])
     grp1, grp2 = contrast.split("_vs_")
-    a = miss[grp1].values >= 1.0
-    b = miss[grp2].values >= 1.0
-    measured_mask = (~a & ~b)
-    imp1_mask     = (a & ~b)
-    imp2_mask     = (b & ~a)
 
-    visible = np.zeros_like(measured_mask, dtype=bool)
-    if show_measured:  visible |= measured_mask
-    if show_imp_cond1: visible |= imp1_mask
-    if show_imp_cond2: visible |= imp2_mask
+    # Get classification masks from shared helper
+    measured, imp1, imp2 = get_volcano_classification_masks(
+        ad,
+        contrast=contrast,
+        min_nonimp_per_cond=min_nonimp_per_cond,
+        min_consistent_peptides=min_consistent_peptides,
+    )
+    visible = np.zeros_like(measured, dtype=bool)
+    if show_measured:  visible |= measured
+    if show_imp_cond1: visible |= imp1
+    if show_imp_cond2: visible |= imp2
 
-    # Cohort membership by UniProt or Gene
+    # Now align x (log2FCs)
+    x = df_fc.loc[ad.var_names, contrast]
+
+    # Determine cohort membership by UniProt or Gene Name
     ids = np.array(ad.var_names, dtype=str)
     genes = np.array(ad.var["GENE_NAMES"].astype(str))
     group = set(map(str, (highlight_group or [])))
     in_group = np.array([(pid in group) or (g in group) for pid, g in zip(ids, genes)], dtype=bool)
 
-    # Two distributions (only visible points)
+    # Filter values
     cohort_vals = x[visible & in_group].to_numpy(dtype=float)
     rest_vals   = x[visible & ~in_group].to_numpy(dtype=float)
 
-    # Build a clean, tiny figure if no cohort
+    # Empty plot if both sides are empty
     if cohort_vals.size == 0 and rest_vals.size == 0:
         fig = go.Figure()
         fig.update_layout(width=width, height=height, template="plotly_white",
                           margin=dict(l=60, r=40, t=10, b=40))
         return fig
 
-    # Shared x-range like volcano
+    # X-axis range
     all_vals = np.concatenate([cohort_vals, rest_vals]) if rest_vals.size else cohort_vals
     xmin, xmax = float(np.nanmin(all_vals)), float(np.nanmax(all_vals))
     pad = max(0.05 * (xmax - xmin), 0.2)
     xmin -= pad; xmax += pad
+    xr = [xmin, xmax] if x_range is None else list(x_range)
 
     # Colors
     labels = ["Cohort", "Non-cohort"]
@@ -556,32 +562,34 @@ def plot_group_violin_for_volcano(
     def _v(arr, name):
         colors = {"Cohort": "#6c5ce7", "Non-cohort": "#2a9d8f"}
         return go.Violin(
-            y=[name]*len(arr),  # horizontal violin (category on y, values on x)
+            y=[name]*len(arr),
             x=arr,
             orientation="h",
             name=name,
             line_color=colors[name],
             line_width=1,
-            width=0.45,                # thinner vertical footprint
+            width=0.45,
             opacity=0.65,
             box_visible=True,
             meanline_visible=True,
             points=False,
-            hoverinfo="skip",          # ← disable hover
+            hoverinfo="skip",
             showlegend=False,
         )
 
+    # Plot
     fig = go.Figure()
     if cohort_vals.size:
         fig.add_trace(_v(cohort_vals, "Cohort"))
     if rest_vals.size:
         fig.add_trace(_v(rest_vals, "Non-cohort"))
 
-    # Median / SD annotations to the right of each violin
-    def _stats(arr):  # robust to nans
+    # Median / SD annotations
+    def _stats(arr):
         med = float(np.nanmedian(arr)) if arr.size else float("nan")
         sd  = float(np.nanstd(arr, ddof=1)) if np.sum(~np.isnan(arr)) > 1 else float("nan")
         return med, sd
+
     annos = []
     for name, arr in (("Cohort", cohort_vals), ("Non-cohort", rest_vals)):
         if arr.size:
@@ -595,7 +603,6 @@ def plot_group_violin_for_volcano(
                 font=dict(size=11, color="black"),
             ))
 
-    xr = [xmin, xmax] if x_range is None else list(x_range)
     fig.update_layout(
         template="plotly_white",
         width=width, height=height,
@@ -607,8 +614,8 @@ def plot_group_violin_for_volcano(
         violingap=0.00,
         violingroupgap=0.0,
         showlegend=False,
+        annotations=annos,
     )
-    fig.update_layout(annotations=annos)
     return fig
 
 @log_time("Plotting Phosphosite Barplot")
