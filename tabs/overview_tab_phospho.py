@@ -25,14 +25,11 @@ from components.overview_plots import (
     resolve_pattern_to_uniprot_ids,
     get_protein_info,  # used for UID helper
 )
+from components.selection_export import SelectionExportSpec, make_volcano_selection_downloader
 from components.plot_utils import plot_pca_2d, plot_umap_2d
 from components.string_links import get_string_link
 from components.texts import intro_preprocessing_text, log_transform_text  # keep parity
-from layout_utils import (
-    FRAME_STYLES,
-    make_hr,
-    make_vr,
-)
+from layout_utils import plotly_section, make_vr, make_hr, make_section, make_row, FRAME_STYLES, FRAME_STYLES_TALL, FRAME_STYLES_SHORT
 from utils import log_time, logger
 
 
@@ -50,8 +47,11 @@ def _fmt_files_list(paths: Iterable[str], max_items: int = 6) -> list[str]:
 
 
 def _pn_only(site_id: str) -> str:
-    m = re.search(r"\|(p\d+)", str(site_id))
+    s = str(site_id)
+    m = re.search(r"\|((?:p|[STY])\d+)", s)
     return m.group(1) if m else ""
+    #m = re.search(r"\|(p\d+)", str(site_id))
+    #return m.group(1) if m else ""
 
 
 def _peptide_from_site(site_id: str) -> str:
@@ -131,28 +131,6 @@ def _make_adata_views(adata):
     df_ft_q     = _df_opt("ft_q_ebayes")
     df_ft_fc    = _df_opt("ft_log2fc")
     df_cov_part = _df_opt("cov_part")
-#def _make_adata_views(adata):
-#    """
-#    Create fast, cached views and lambdas bound to this AnnData snapshot.
-#    All returned callables close over `adata` to avoid re-locating arrays.
-#    """
-#    contrast_names = tuple(adata.uns["contrast_names"])
-#    var_index = adata.var_names
-#
-#    # varm matrices (DataFrame-backed for convenient .loc)
-#    def _df(varm_key: str, fallback=None) -> pd.DataFrame:
-#        arr = adata.varm.get(varm_key, fallback)
-#        if arr is None:
-#            raise KeyError(f"Missing adata.varm['{varm_key}']")
-#        return pd.DataFrame(arr, index=var_index, columns=contrast_names)
-
-#    df_log2fc = _df("log2fc")
-#    df_q = _df("q_ebayes")
-#    df_raw_q = _df("raw_q_ebayes")
-#    df_raw_fc = _df("raw_log2fc", fallback=np.zeros_like(df_log2fc.values))
-#    df_ft_q = _df("ft_q_ebayes")
-#    df_ft_fc = _df("ft_log2fc")
-#    df_cov_part = _df("cov_part", fallback=np.full_like(df_log2fc.values, np.nan))
 
     # layers frequently queried
     spectral_counts = pd.DataFrame(
@@ -318,6 +296,9 @@ def overview_tab_phospho(state: SessionState):
       - Volcanoes + detail panes
     """
     adata = state.adata
+    preproc_cfg = adata.uns["preprocessing"]
+    analysis_type  = preproc_cfg.get("analysis_type", "DIA")
+
     views = _make_adata_views(adata)
     has_cov = bool(adata.uns["has_covariate"])
     contrast_names = list(views["contrast_names"])
@@ -449,26 +430,43 @@ def overview_tab_phospho(state: SessionState):
     _update_toggle_labels()
     contrast_sel.param.watch(_update_toggle_labels, "value")
 
-    num_rep = max(adata.obs["REPLICATE"])
-    min_meas_options = {f"≥{i}": i for i in range(1,num_rep+1)}
+    # Non-imputed datapoints per condition filter (same as phospho)
+    def _max_reps_for_contrast(contrast: str) -> int:
+        grp1, grp2 = contrast.split("_vs_")
+        n1 = int((adata.obs["CONDITION"] == grp1).sum())
+        n2 = int((adata.obs["CONDITION"] == grp2).sum())
+        return max(n1, n2)
+
+    def _mk_min_meas_options(max_reps: int) -> dict[str, int]:
+        # labels "≥1", "≥2", ... mapped to int values
+        return {f"≥{i}": i for i in range(1, max_reps + 1)}
+
+    # initialize from the first contrast
+    _init_max = _max_reps_for_contrast(contrast_sel.value)
+    min_meas_options = _mk_min_meas_options(_init_max)
+
     min_meas_sel = pn.widgets.Select(name="Min / condition",
-                                     options=list(min_meas_options.keys()), value="≥1", width=80)
+                                     options=list(min_meas_options.keys()),
+                                     value=f"≥{_init_max}",
+                                     width=80)
 
     def _min_meas_value(label: str) -> int:
         return min_meas_options[label]
 
     # Min numb. precursors options
-    min_prec_options = {f"≥{i}": i for i in range(1, 6)}
+    max_prec_options = 6 if analysis_type == "DIA" else 4
+    min_prec_options = {f"≥{i}": i for i in range(0, max_prec_options)}
+    min_prec_title = "pep" if analysis_type == "DIA" else "prec"
+
     min_prec_sel = pn.widgets.Select(
-        name="Precursors",
+        name=f"Consistent {min_prec_title}",
         options=list(min_prec_options.keys()),
-        value="≥1",
+        value="≥0",
         width=80,
     )
 
     def _min_prec_value(label: str) -> int:
         return min_prec_options[label]
-
 
     search_input = pn.widgets.AutocompleteInput(
         name="Search Phosphosite",
@@ -478,6 +476,12 @@ def overview_tab_phospho(state: SessionState):
     )
     clear_search = pn.widgets.Button(name="Clear", width=80)
     clear_search.on_click(lambda _e: setattr(search_input, "value", ""))
+
+    # If the user clears the phosphosite selection, we must also clear the export "click" state.
+    # Plotly click_data is sticky and does not reliably emit an "empty" event.
+    def _on_site_cleared(event) -> None:
+        if (event.new or "") == "":
+            _on_volcano_click_data({})
 
     search_field_sel = pn.widgets.Select(
         name="Search Field",
@@ -542,7 +546,7 @@ def overview_tab_phospho(state: SessionState):
         highlight_group=group_ids_dmap,
         sign_threshold=0.05,
         width=None,
-        height=950,
+        height=900,
     )
 
     def _on_volcano_click(event):
@@ -559,7 +563,7 @@ def overview_tab_phospho(state: SessionState):
 
     volcano_plot = pn.pane.Plotly(
         volcano_dmap_wrapped,
-        height=950,
+        height=1150,
         margin=(0, 0, 0, 20),
         sizing_mode="stretch_width",
         config={"responsive": True},
@@ -567,32 +571,30 @@ def overview_tab_phospho(state: SessionState):
     )
     volcano_plot.param.watch(_on_volcano_click, "click_data")
 
-    # ---------- Cohort violin ----------
-    def _cohort_violin(ids, contrast, sm, s1, s2):
-        if not ids:
-            return pn.Spacer(height=0)
-        fig = plot_group_violin_for_volcano(
-            state=state,
-            contrast=contrast,
-            highlight_group=ids,
-            show_measured=sm,
-            show_imp_cond1=s1,
-            show_imp_cond2=s2,
-            width=1200,
-            height=100,
-        )
-        return pn.pane.Plotly(
-            fig,
-            height=150,
-            margin=(-10, 0, 10, 20),
-            sizing_mode="stretch_width",
-            config={"responsive": True},
-            styles={"border-radius": "8px", "box-shadow": "3px 3px 5px #bcbcbc"},
-        )
-
-    cohort_violin_view = pn.bind(
-        _cohort_violin, group_ids_dmap, contrast_sel, show_measured, show_imp_cond1, show_imp_cond2
+    # ---------- selection download (same semantics as non-phospho overview) ----------
+    download_selection, _on_volcano_selected_data, _on_volcano_click_data, _on_cohort_ids = make_volcano_selection_downloader(
+        state=state,
+        contrast_getter=lambda: str(contrast_sel.value),
+        spec=SelectionExportSpec(
+            filename="proteoflux_selection.csv",
+            label="Download selection",
+            uniprot_var_col="PARENT_PROTEIN",
+            id_col_name="PHOSPHOSITE_ID",
+        ),
     )
+    volcano_plot.param.watch(lambda e: _on_volcano_selected_data(e.new), "selected_data")
+    volcano_plot.param.watch(lambda e: _on_volcano_click_data(e.new), "click_data")
+
+    def _push_cohort_ids(_=None) -> None:
+        _on_cohort_ids(list(group_ids_dmap() or []))
+
+    # Cohort changes must update the export state immediately (priority: click > cohort > lasso).
+    search_input_group.param.watch(_push_cohort_ids, "value")
+    search_field_sel.param.watch(_push_cohort_ids, "value")
+    clear_all.on_click(lambda _e: _push_cohort_ids())
+
+    # Clear exporter click state when phosphosite is cleared.
+    search_input.param.watch(_on_site_cleared, "value")
 
     # ---------- Detail panes (cards + bars + peptide table) ----------
     layers_phos = ["Processed", "Log-only", "Raw"]
@@ -616,6 +618,7 @@ def overview_tab_phospho(state: SessionState):
     pep_table_holder = pn.Column()
     main_bar_holder = pn.Column()
     cov_bar_holder = pn.Column(visible=has_cov)
+    prec_trend_holder = pn.Column()
 
     detail_panel = pn.Row(
         pn.Column(
@@ -626,6 +629,8 @@ def overview_tab_phospho(state: SessionState):
             main_bar_holder,
             pn.Spacer(height=20),
             cov_bar_holder,
+            pn.Spacer(height=20),
+            prec_trend_holder,
             sizing_mode="fixed",
             width=840,
         ),
@@ -705,7 +710,10 @@ def overview_tab_phospho(state: SessionState):
         )
 
         footer_left = pn.pane.HTML(
-            f"<span style='font-size: 12px;'>Precursors (site): <b>{pep_num_prec}</b></span>"
+            "<span style='font-size: 12px;'>"
+            f"Precursors (site): <b>{pep_num_prec}</b>"
+            f" &nbsp;|&nbsp; Phospho index: <b>{idx + 1}</b>"
+            "</span>"
         )
         footer_right = pn.pane.HTML(
             (
@@ -733,18 +741,6 @@ def overview_tab_phospho(state: SessionState):
             "justify-content": "space-evenly",
         }
 
-        #card = pn.Card(
-        #    header,
-        #    pn.Row(raw_q_ind, raw_lfc_ind, loc_ind, sizing_mode="stretch_width"),
-        #    make_hr(),
-        #    #pn.Row(q_ind, lfc_ind, covp_ind, sizing_mode="stretch_width"),
-        #    #make_hr(),
-        #    footer_links,
-        #    width=800,
-        #    styles=card_style,
-        #    collapsible=False,
-        #    hide_header=True,
-        #)
         rows = [header,
                 pn.Row(raw_q_ind, raw_lfc_ind, loc_ind, sizing_mode="stretch_width"),
                 make_hr()]
@@ -752,12 +748,7 @@ def overview_tab_phospho(state: SessionState):
         if has_cov:
             rows += [pn.Row(q_ind, lfc_ind, covp_ind, sizing_mode="stretch_width"),
                      make_hr()]
-#        rows = [header,
-#                pn.Row(q_ind, lfc_ind, covp_ind, sizing_mode="stretch_width"),
-#                make_hr()]
-#        if has_cov:
-#            rows += [pn.Row(q_ind, lfc_ind, covp_ind, sizing_mode="stretch_width"),
-#                     make_hr()]
+
         card = pn.Card(
             header,
             *rows,
@@ -876,14 +867,17 @@ def overview_tab_phospho(state: SessionState):
 
         vcol = views["vcol"]
         parent_pep = str(vcol("PARENT_PEPTIDE_ID").iloc[idx])
-        if not parent_pep:
+        parent_prot = str(vcol("PARENT_PROTEIN").iloc[idx])
+        #if not parent_pep:
+        if not parent_prot:
             return pn.Spacer(width=300, height=120)
 
         contrast = contrast_sel.value
         df_raw_fc = views["df_raw_fc"]
         df_raw_q = views["df_raw_q"]
 
-        mask = (adata.var["PARENT_PEPTIDE_ID"].astype(str) == parent_pep)
+        #mask = (adata.var["PARENT_PEPTIDE_ID"].astype(str) == parent_pep)
+        mask = (adata.var["PARENT_PROTEIN"].astype(str) == parent_prot)
         siblings = adata.var_names[mask]
         if len(siblings) == 0:
             return pn.Spacer(width=300, height=120)
@@ -893,7 +887,15 @@ def overview_tab_phospho(state: SessionState):
         df["Log2FC"] = df_raw_fc.loc[siblings, contrast].astype(float).values
         df["Q"] = df_raw_q.loc[siblings, contrast].astype(float).values
         df["site_id"] = df.index
-        df["__pnum__"] = df["Site"].str.extract(r"p(\d+)").astype(int)
+        #df["__pnum__"] = df["Site"].str.extract(r"p(\d+)").astype(int)
+        df["__pnum__"] = pd.to_numeric(df["Site"].str.extract(r"(\d+)")[0], errors="coerce")
+        if df["__pnum__"].isna().any():
+            bad = df.loc[df["__pnum__"].isna(), "site_id"].astype(str).tolist()[:10]
+            raise ValueError(
+                "Phospho site parsing failed for Adjacent Sites table. "
+                f"Expected '|p<INT>' or '|[STY]<INT>'. Examples={bad}"
+            )
+        df["__pnum__"] = df["__pnum__"].astype(int)
         df = df.sort_values("__pnum__", kind="mergesort").copy()
 
         sig = df["Q"] < 0.05
@@ -976,6 +978,19 @@ def overview_tab_phospho(state: SessionState):
     def _render_bar_cov():
         return plot_covariate_by_site(state, contrast_sel.value, str(search_input.value), layers_cov_sel.value)
 
+    def _render_precursor_trends():
+        site_id = str(search_input.value or "")
+        if not site_id:
+            return pn.Spacer(width=800, height=200)
+        fig = plot_peptide_trends_centered(state.adata, site_id, contrast_sel.value)
+        return pn.pane.Plotly(
+            fig,
+            height=180,
+            width=800,
+            margin=(0, 0, 0, 0),
+            styles={"border-radius": "8px", "box-shadow": "3px 3px 5px #bcbcbc"},
+        )
+
     # Update orchestration
     def _update_info(_=None):
         main_info_holder[:] = [_render_main_info()]
@@ -984,7 +999,7 @@ def overview_tab_phospho(state: SessionState):
     def _update_main_bar(_=None):
         site = search_input.value
         if not site:
-            main_bar_holder[:] = [pn.Spacer(width=800, height=500, margin=(-30, 0, 0, 0))]
+            main_bar_holder[:] = [pn.Spacer(width=800, height=170, margin=(-30, 0, 0, 0))]
             return
         main_bar_holder.loading = True
         try:
@@ -1001,7 +1016,7 @@ def overview_tab_phospho(state: SessionState):
             return
         site = search_input.value
         if not site:
-            cov_bar_holder[:] = [pn.Spacer(width=800, height=500, margin=(-30, 0, 0, 0))]
+            cov_bar_holder[:] = [pn.Spacer(width=800, height=100, margin=(-30, 0, 0, 0))]
             return
         cov_bar_holder.loading = True
         try:
@@ -1013,7 +1028,7 @@ def overview_tab_phospho(state: SessionState):
 
     def _update_peptide_table(_=None):
         if not search_input.value:
-            pep_table_holder[:] = [pn.Spacer(width=330, height=120)]
+            pep_table_holder[:] = [pn.Spacer(width=100, height=120)]
             return
         pep_table_holder.loading = True
         try:
@@ -1021,21 +1036,30 @@ def overview_tab_phospho(state: SessionState):
         finally:
             pep_table_holder.loading = False
 
+    def _update_precursor_trends(_=None):
+        if not search_input.value:
+            prec_trend_holder[:] = [pn.Spacer(width=800, height=100)]
+            return
+        prec_trend_holder.loading = True
+        try:
+            prec_trend_holder[:] = [_render_precursor_trends()]
+        finally:
+            prec_trend_holder.loading = False
+
     # Wire events
-    search_input.param.watch(lambda _e: (_update_info(), _update_peptide_table(), _update_main_bar(), _update_cov_bar()),
+    search_input.param.watch(lambda _e: (_update_info(), _update_peptide_table(), _update_main_bar(), _update_cov_bar(), _update_precursor_trends()),
                              "value")
-    contrast_sel.param.watch(lambda _e: (_update_info(), _update_peptide_table(), _update_main_bar(), _update_cov_bar()),
+    contrast_sel.param.watch(lambda _e: (_update_info(), _update_peptide_table(), _update_main_bar(), _update_cov_bar(), _update_precursor_trends()),
                              "value")
     layers_phos_sel.param.watch(lambda _e: _update_main_bar(), "value")
     layers_cov_sel.param.watch(lambda _e: _update_cov_bar(), "value")
 
-    bokeh_doc.add_next_tick_callback(lambda: (_update_info(), _update_main_bar(), _update_cov_bar(), _update_peptide_table()))
+    bokeh_doc.add_next_tick_callback(lambda: (_update_info(), _update_main_bar(), _update_cov_bar(), _update_peptide_table(), _update_precursor_trends()))
 
     volcano_and_detail = pn.Row(
         pn.Column(
             volcano_plot,
-            cohort_violin_view,
-            sizing_mode="stretch_both",
+            sizing_mode="stretch_width",
             styles={"flex": "1", "min-width": "600px"},
         ),
         pn.Spacer(width=30),
@@ -1058,7 +1082,6 @@ def overview_tab_phospho(state: SessionState):
             pn.Spacer(width=10),
             pn.Column(show_measured, show_imp_cond1, show_imp_cond2, margin=(-5, 0, 0, 0)),
             pn.Spacer(width=10),
-            #min_meas_sel,
             pn.Column(
                 min_meas_sel,
                 min_prec_sel,
@@ -1081,17 +1104,18 @@ def overview_tab_phospho(state: SessionState):
             pn.Row(layers_phos_sel, margin=(-17, 0, 0, 0)),
             pn.Spacer(width=10),
             pn.Row(layers_cov_sel, margin=(-17, 0, 0, 0)),
-            sizing_mode="fixed",
+            pn.Spacer(width=10),
+            download_selection,
+            #sizing_mode="fixed",
             width=300,
             height=70,
         ),
         volcano_and_detail,
-        height=1110,
+        height=1310,
         margin=(0, 0, 0, 20),
         sizing_mode="stretch_width",
         styles={"border-radius": "15px", "box-shadow": "3px 3px 5px #bcbcbc", "width": "98vw"},
     )
-    volcano_pane.height = pn.bind(lambda ids: 1250 if ids else 1110, group_ids_dmap)
 
     # ---------- Final layout ----------
     layout = pn.Column(
@@ -1104,8 +1128,9 @@ def overview_tab_phospho(state: SessionState):
         pn.Spacer(height=30),
         volcano_pane,
         pn.Spacer(height=30),
-        sizing_mode="stretch_both",
-        styles=FRAME_STYLES,
+        sizing_mode="stretch_width",
+        styles=FRAME_STYLES_TALL,
     )
+
     return layout
 

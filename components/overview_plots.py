@@ -139,6 +139,14 @@ def plot_volcanoes_wrapper(
 def plot_intensity_by_protein(state, contrast, protein, layer):
     ad = state.adata
 
+    mode = str(ad.uns.get("preprocessing", {}).get("analysis_type", "")).lower()
+    proteomics_mode = (mode in {"dia", "dda", "proteomics"})
+
+    if proteomics_mode:
+        col = list(ad.var["GENE_NAMES"].astype(str)).index(str(protein))
+    else:
+        col = list(map(str, ad.var_names)).index(str(protein))
+
     # pick your normalized layer (fallback to .X)
     proc_data = ad.X
     intensity_scale = "Log Intensity"
@@ -155,10 +163,10 @@ def plot_intensity_by_protein(state, contrast, protein, layer):
         is_spectral = True
 
     # find column index by GENE_NAMES
-    try:
-        col = list(ad.var["GENE_NAMES"]).index(protein)
-    except ValueError:
-        return px.bar(pd.DataFrame({"x":[],"y":[]}))
+    #try:
+    #    col = list(ad.var["GENE_NAMES"]).index(protein)
+    #except ValueError:
+    #    return px.bar(pd.DataFrame({"x":[],"y":[]}))
 
     # extract processed and raw values for this protein
     y_vals = proc_data[:, col].A1 if hasattr(proc_data, "A1") else proc_data[:, col]
@@ -242,9 +250,17 @@ def plot_intensity_by_protein(state, contrast, protein, layer):
 
 def get_protein_info(state, contrast, protein, layer):
     ad   = state.adata
-    names = ad.var["GENE_NAMES"].astype(str)
-    mask  = names == protein
-    uniprot_id = ad.var_names[mask][0]
+    mode = str(ad.uns.get("preprocessing", {}).get("analysis_type", "")).lower()
+    proteomics_mode = (mode in {"dia", "dda", "proteomics"})
+
+    if proteomics_mode:
+        names = ad.var["GENE_NAMES"].astype(str)
+        mask  = names == protein
+        uniprot_id = ad.var_names[mask][0]
+        col_idx = list(names).index(str(protein))
+    else:
+        uniprot_id = str(protein)
+        col_idx = list(map(str, ad.var_names)).index(uniprot_id)
 
     layer_data = ad.X
     if layer.value == "Raw":
@@ -273,7 +289,6 @@ def get_protein_info(state, contrast, protein, layer):
     idx1 = ad.obs["CONDITION"] == grp1
     idx2 = ad.obs["CONDITION"] == grp2
     # compute mean across all samples
-    col_idx = list(ad.var["GENE_NAMES"]).index(protein)
     vals = mat[np.logical_or(idx1, idx2), col_idx]
     avg_int = float(np.nanmean(vals))
 
@@ -396,21 +411,47 @@ def resolve_exact_list_to_uniprot_ids(adata, field: str, items: List[str] | Set[
 
 @log_time("Plotting Peptide Trends (centered)")
 def plot_peptide_trends_centered(adata, uniprot_id: str, contrast: str) -> go.Figure:
-    # 1) pull & slice peptide matrices
-    pep = adata.uns["peptides"]
-    X_all   = np.asarray(pep["centered"], dtype=float)     # (rows x samples)
-    rows    = list(pep["rows"])
-    prot_ix = np.asarray(pep["protein_index"], dtype=str)  # per-row protein id
-    seqs    = np.asarray(pep["peptide_seq"], dtype=str)    # per-row peptide sequence
-    cols    = list(map(str, pep["cols"]))                  # sample names in matrix
+    ## 1) pull & slice matrices
+    analysis_type = str(adata.uns.get("preprocessing", {}).get("analysis_type", "")).lower()
+    proteomics_mode = analysis_type in {"dia", "dda", "proteomics"}
+    src_key = "peptides" if proteomics_mode else "precursors"
+
+    if src_key not in adata.uns:
+        raise KeyError(
+            f"Expected adata.uns['{src_key}'] for analysis_type='{analysis_type}', "
+            f"but it is missing. Available keys: {sorted(list(adata.uns.keys()))}"
+        )
+
+    block = adata.uns[src_key]
+
+    X_all   = np.asarray(block["centered"], dtype=float)     # (rows x samples)
+    rows    = list(block["rows"])
+    prot_ix = np.asarray(block["protein_index"], dtype=str)  # per-row protein id
+    cols    = list(map(str, block["cols"]))                  # sample names in matrix
+
+    if src_key == "precursors":
+        seqs   = np.asarray(block["peptide_seq"], dtype=str)
+        chg    = np.asarray(block["charge"], dtype=str)
+        labels = np.array([f"{s}/+{c}" if not str(c).startswith("+") else f"{s}/{c}" for s, c in zip(seqs, chg)], dtype=object)
+        title  = "Precursor trends"
+        legend_name = "Precursor"
+    else:
+        seqs   = np.asarray(block["peptide_seq"], dtype=str)
+        labels = seqs
+        title  = "Peptide trends"
+        legend_name = "Peptide"
 
     # keep only peptides belonging to this UniProt id (no group handling here)
     keep = (prot_ix == str(uniprot_id))
     X = X_all[keep, :]
     seqs = seqs[keep]
+    labels = labels[keep]
+    if src_key == "precursors":
+        chg = chg[keep]
 
     # 2) align columns to obs order, then filter to the contrast’s samples
     obs_order = list(map(str, adata.obs_names))
+
     if cols != obs_order:
         pos = {c: i for i, c in enumerate(cols)}
         idx = [pos[c] for c in obs_order if c in pos]
@@ -439,7 +480,7 @@ def plot_peptide_trends_centered(adata, uniprot_id: str, contrast: str) -> go.Fi
     # 3) build figure: one line per peptide, marker color by condition
     fig = go.Figure()
     palette = px.colors.qualitative.Prism
-    uniq = sorted(pd.unique(seqs).tolist())
+    uniq = sorted(pd.unique(labels).tolist())
     line_cmap = {s: palette[i % len(palette)] for i, s in enumerate(uniq)}
 
     cond_cmap = get_color_map([grp1, grp2], palette=px.colors.qualitative.Plotly)
@@ -447,7 +488,7 @@ def plot_peptide_trends_centered(adata, uniprot_id: str, contrast: str) -> go.Fi
     def _truncate_name(name, max_len=10):
         return name if len(name) <= max_len else name[:max_len - 1] + "…"
 
-    for y, seq in zip(X, seqs):
+    for y, lab in zip(X, labels):
         if np.isnan(y).all():
             continue
         valid = ~np.isnan(y)
@@ -465,10 +506,10 @@ def plot_peptide_trends_centered(adata, uniprot_id: str, contrast: str) -> go.Fi
             x=sample_labels,
             y=y,
             mode="lines+markers",
-            name=_truncate_name(seq),
-            line=dict(color=line_cmap[seq], width=2, dash="dash"),
-            marker=dict(size=singleton_sizes, color=line_cmap[seq]),
-            customdata=np.c_[np.full_like(y, seq, dtype=object), cond_labels],
+            name=_truncate_name(str(lab)),
+            line=dict(color=line_cmap[lab], width=2, dash="dash"),
+            marker=dict(size=singleton_sizes, color=line_cmap[lab]),
+            customdata=np.c_[np.full_like(y, lab, dtype=object), cond_labels],
             hovertemplate="<b>%{customdata[0]}</b><br>"
                           "Sample: %{x}<br>"
                           "Cond: %{customdata[1]}<br>"
@@ -477,11 +518,12 @@ def plot_peptide_trends_centered(adata, uniprot_id: str, contrast: str) -> go.Fi
         ))
 
     fig.update_layout(
-        title=dict(text="Peptide trends", x=0.5),
+        #title=dict(text="Peptide trends", x=0.5),
+        title=dict(text=title, x=0.5),
         xaxis_title="Sample",
         yaxis_title="Intensity / mean",
         margin=dict(l=60, r=40, t=40, b=50),
-        legend_title_text="Peptide",
+        legend_title_text=legend_name,
         shapes=[
             dict(
                 type="line",
@@ -495,6 +537,12 @@ def plot_peptide_trends_centered(adata, uniprot_id: str, contrast: str) -> go.Fi
                 ),
             ),
         ],
+    )
+
+    fig.update_xaxes(
+        tickmode="array",
+        tickvals=list(sample_labels),
+        ticktext=_shorten_labels(sample_labels),
     )
     return fig
 
@@ -698,11 +746,6 @@ def plot_intensity_by_site(state, contrast, site_id: str, layer_choice: str) -> 
 @log_time("Plotting Covariate Barplot")
 def plot_covariate_by_site(state, contrast: str, site_id: str, layer_choice: str) -> go.Figure:
     ad = state.adata
-
-    # Non-phospho runs or no covariate: return empty bar to keep layout stable
-    #if "covariate" not in ad.layers:
-    #    print("oops")
-    #    return px.bar(pd.DataFrame({"x": [], "y": []}))
 
     # Use layers_map if present, else fall back to the layers that actually exist.
 

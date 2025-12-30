@@ -96,13 +96,15 @@ def get_volcano_classification_masks(adata, contrast: str, min_nonimp_per_cond: 
     imp1     = (a & ~b)
     imp2     = (b & ~a)
 
-    measured &= (n1 >= min_nonimp_per_cond) & (n2 >= min_nonimp_per_cond)
+    measured &= ( (n1 >= min_nonimp_per_cond) | (n2 >= min_nonimp_per_cond) )
     imp1     &= (n2 >= min_nonimp_per_cond)
     imp2     &= (n1 >= min_nonimp_per_cond)
 
+    cons_prefix = "CONSISTENT_PEPTIDE" if adata.uns["preprocessing"].get("analysis_type").lower() == "dia" else "CONSISTENT_PRECURSOR"
+
     prec_keep = np.ones(len(adata.var_names), dtype=bool)
-    c1_key = f"CONSISTENT_PEPTIDE_{grp1}"
-    c2_key = f"CONSISTENT_PEPTIDE_{grp2}"
+    c1_key = f"{cons_prefix}_{grp1}"
+    c2_key = f"{cons_prefix}_{grp2}"
     if (c1_key in adata.var.columns) and (c2_key in adata.var.columns):
         c1 = pd.to_numeric(adata.var[c1_key], errors="coerce").fillna(0).to_numpy()
         c2 = pd.to_numeric(adata.var[c2_key], errors="coerce").fillna(0).to_numpy()
@@ -1009,6 +1011,10 @@ def plot_volcanoes(
     else:
         sites = adata.var_names.astype(str).to_numpy()
 
+    feature_ids = np.array(adata.var_names, dtype=str)   # peptide / precursor / protein ids
+
+    primary_ids = genes if proteomics_mode else feature_ids
+
     # ---- single highlight (accept gene, UniProt, or site) ----
     def _match_one(token: str) -> np.ndarray:
         if not token:
@@ -1072,6 +1078,8 @@ def plot_volcanoes(
             adata.varm["ft_q_ebayes"], index=adata.var_names, columns=adata.uns["contrast_names"]
         )
 
+    # Feature-axis alignment sanity checks (must hold)
+    n_vars = adata.n_vars
 
     x = df_fc[contrast]
     y = -np.log10(df_q[contrast])
@@ -1098,27 +1106,6 @@ def plot_volcanoes(
     imp2_mask     = (b & ~a)   # missing grp2 only
 
     # --------------------------------------------
-    # Consistent peptide filter (per protein, per condition)
-    # We expect per-condition counts in adata.var:
-    #   CONSISTENT_PEPTIDE_<COND>
-    # For a given contrast grp1_vs_grp2, we keep proteins where
-    #   max(cons_pep_grp1, cons_pep_grp2) >= min_precursors
-    # i.e. at least one of the two conditions has that many consistent peptides.
-    prec_keep = np.ones(len(adata.var_names), dtype=bool)
-    cons_prefix = "CONSISTENT_PEPTIDE_"
-    var_cols = list(adata.var.columns)
-
-    col1 = f"{cons_prefix}{grp1}"
-    col2 = f"{cons_prefix}{grp2}"
-    if (col1 in var_cols) and (col2 in var_cols):
-        c1 = pd.to_numeric(adata.var[col1], errors="coerce").to_numpy()
-        c2 = pd.to_numeric(adata.var[col2], errors="coerce").to_numpy()
-        c1 = np.nan_to_num(c1, nan=0.0)
-        c2 = np.nan_to_num(c2, nan=0.0)
-        max_cons = np.maximum(c1, c2)
-        prec_keep = max_cons >= int(min_precursors)
-
-    # --------------------------------------------
     # Per-condition raw non-imputed counts
     # --------------------------------------------
     mat_raw = adata.layers.get("raw", adata.X)
@@ -1130,6 +1117,15 @@ def plot_volcanoes(
     n1 = np.sum(~np.isnan(mat[idx1, :]), axis=0).astype(int)
     n2 = np.sum(~np.isnan(mat[idx2, :]), axis=0).astype(int)
     thr = int(min_nonimp_per_cond or 0)
+
+    # DEBUG: single target peptide/protein id
+    if contrast == "A_vs_B" and "AAPHKEEVK" in adata.var_names:
+        j = list(adata.var_names).index("AAPHKEEVK")
+        s1 = adata.obs_names[idx1].tolist()
+        s2 = adata.obs_names[idx2].tolist()
+        v1 = mat[idx1, j]
+        v2 = mat[idx2, j]
+        miss = pd.DataFrame(adata.uns['missingness'])
 
     # --------------------------------------------
     # Fix: if raw says "zero non-imputed", treat as fully missing
@@ -1162,10 +1158,6 @@ def plot_volcanoes(
     measured_mask &= meets_both
     imp1_mask     &= meets_2
     imp2_mask     &= meets_1
-
-    #measured_mask &= prec_keep
-    #imp1_mask     &= prec_keep
-    #imp2_mask     &= prec_keep
 
     # initial classification
     measured_mask, imp1_mask, imp2_mask = get_volcano_classification_masks(
@@ -1265,18 +1257,26 @@ def plot_volcanoes(
                 line=dict(width=0),
             ),
             name=name,
-            text=(genes[mask] if proteomics_mode else sites[mask]),
-            customdata=(None if proteomics_mode else np.c_[sites[mask], genes[mask], protids[mask]]),
+            #text=(genes[mask] if proteomics_mode else sites[mask]),
+            text=primary_ids[mask],
+            customdata=np.c_[feature_ids[mask], genes[mask]],
             hovertemplate=(
-                ("Gene: %{text}<br>"
-                 "log2FC: %{x:.2f}<br>"
-                 "-log10(q): %{y:.2f}<extra></extra>")
-                if proteomics_mode else
-                ("Phosphosite: %{customdata[0]}<br>"
-                 "Gene: %{customdata[1]}<br>"
-                 "log2FC: %{x:.2f}<br>"
-                 "-log10(q): %{y:.2f}<extra></extra>")
+                "ID: %{customdata[0]}<br>"
+                "Gene: %{customdata[1]}<br>"
+                "log2FC: %{x:.2f}<br>"
+                "-log10(q): %{y:.2f}<extra></extra>"
             ),
+            #customdata=(None if proteomics_mode else np.c_[sites[mask], genes[mask], protids[mask]]),
+            #hovertemplate=(
+            #    ("Gene: %{text}<br>"
+            #     "log2FC: %{x:.2f}<br>"
+            #     "-log10(q): %{y:.2f}<extra></extra>")
+            #    if proteomics_mode else
+            #    ("Phosphosite: %{customdata[0]}<br>"
+            #     "Gene: %{customdata[1]}<br>"
+            #     "log2FC: %{x:.2f}<br>"
+            #     "-log10(q): %{y:.2f}<extra></extra>")
+            #),
         )
         #add_colorbar = (color_by != "Significance" and name == "Observed in both")
         add_colorbar = (color_by != "Significance")

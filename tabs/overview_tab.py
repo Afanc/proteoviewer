@@ -15,6 +15,10 @@ from components.overview_plots import (
     plot_group_violin_for_volcano,
     #_ensure_gene
 )
+from components.selection_export import (
+    make_volcano_selection_downloader,
+    SelectionExportSpec
+)
 from components.plot_utils import plot_pca_2d, plot_umap_2d
 from components.texts import (
     intro_preprocessing_text,
@@ -64,6 +68,7 @@ def overview_tab(state: SessionState):
     normalization  = preproc_cfg.get("normalization", {})
     imputation     = preproc_cfg.get("imputation", {})
     analysis_type  = preproc_cfg.get("analysis_type", "DIA")
+    proteomics_mode = analysis_type in {"dia", "dda", "proteomics"}
     ebayes_method  = analysis_cfg.get("ebayes_method", "limma")
     input_layout  = preproc_cfg.get("input_layout", "")
 
@@ -331,7 +336,7 @@ def overview_tab(state: SessionState):
     min_meas_sel = pn.widgets.Select(
         name="Min / condition",
         options=list(min_meas_options.keys()),
-        value="≥1",
+        value=f"≥{_init_max}",
         width=80,
     )
 
@@ -353,9 +358,12 @@ def overview_tab(state: SessionState):
     contrast_sel.param.watch(_on_contrast_change, "value")
 
     # Min numb. precursors options
-    min_prec_options = {f"≥{i}": i for i in range(0, 6)}
+    max_prec_options = 6 if analysis_type == "DIA" else 4
+    min_prec_options = {f"≥{i}": i for i in range(0, max_prec_options)}
+    min_prec_title = "pep" if analysis_type == "DIA" else "prec"
+
     min_prec_sel = pn.widgets.Select(
-        name="Consistent pep",
+        name=f"Consistent {min_prec_title}",
         options=list(min_prec_options.keys()),
         value="≥0",
         width=80,
@@ -400,6 +408,14 @@ def overview_tab(state: SessionState):
 
     clear_search = pn.widgets.Button(name="Clear", width=80)
     clear_search.on_click(lambda event: setattr(search_input, "value", ""))
+
+    # If the user clears the protein selection, we must also clear the export "click" state.
+    # Plotly click_data is sticky and does not reliably emit an "empty" event.
+    def _on_search_cleared(event) -> None:
+        if (event.new or "") == "":
+            _on_volcano_click_data({})
+
+    search_input.param.watch(_on_search_cleared, "value")
 
     search_field_sel = pn.widgets.Select(
         name="Search Field",
@@ -551,10 +567,18 @@ def overview_tab(state: SessionState):
     )
 
     def _on_volcano_click(event):
-        click = event.new        # the new click_data dict
+        click = event.new
         if click and click.get("points"):
-            gene = click["points"][0]["text"]
-            search_input.value = gene
+            pt = click["points"][0]
+            cd = pt.get("customdata") or []
+
+            mode = str(state.adata.uns.get("preprocessing", {}).get("analysis_type", "")).lower()
+            proteomics_mode = (mode in {"dia", "dda", "proteomics"})
+
+            if proteomics_mode:
+                search_input.value = str(pt.get("text", ""))
+            else:
+                search_input.value = str(cd[0] if isinstance(cd, (list, tuple)) and len(cd) else pt.get("text", ""))
 
     def _with_uirevision(fig, contrast):
         fig.update_layout(uirevision=f"volcano-{contrast}")
@@ -575,6 +599,29 @@ def overview_tab(state: SessionState):
         }
     )
     volcano_plot.param.watch(_on_volcano_click, "click_data")
+
+
+    # selection download
+    #download_selection, _on_volcano_selected_data, _on_volcano_click_data = make_volcano_selection_downloader(
+    download_selection, _on_volcano_selected_data, _on_volcano_click_data, _on_cohort_ids = make_volcano_selection_downloader(
+        state=state,
+        contrast_getter=lambda: str(contrast_sel.value),
+        spec=SelectionExportSpec(
+            filename="proteoflux_selection.csv",
+            label="Download selection",
+        ),
+    )
+    volcano_plot.param.watch(lambda e: _on_volcano_selected_data(e.new), "selected_data")
+    volcano_plot.param.watch(lambda e: _on_volcano_click_data(e.new), "click_data")
+
+    def _push_cohort_ids(_=None) -> None:
+        # group_ids_selected is a pn.bind; calling it evaluates the current cohort ids.
+        _on_cohort_ids(list(group_ids_selected() or []))
+
+    # Cohort changes must update the export state immediately (priority: click > cohort > lasso).
+    search_input_group.param.watch(_push_cohort_ids, "value")
+    _file_text.param.watch(_push_cohort_ids, "value")
+    clear_all.on_click(lambda event: _push_cohort_ids())
 
     # Cohort Violin View
     def _cohort_violin(ids, contrast, sm, s1, s2, min_nonimp_per_cond, min_consistent_peptides):
@@ -650,9 +697,9 @@ def overview_tab(state: SessionState):
             return pn.Spacer(width=800, height=170)
 
         # --- pull values that do not depend on the "layer" toggle ---
-        gene = _ensure_gene(protein)
-        protein_info = get_protein_info(state, contrast, gene, layers_sel)  # OK: we only read layer-agnostic bits
-        #protein_info = get_protein_info(state, contrast, protein, layers_sel)  # OK: we only read layer-agnostic bits
+        key = _ensure_gene(protein) if proteomics_mode else str(protein)
+        protein_info = get_protein_info(state, contrast, key, layers_sel)
+
         uniprot_id   = protein_info['uniprot_id']
         idx = protein_info['index']  # already used below for "Protein Index"
 
@@ -683,12 +730,10 @@ def overview_tab(state: SessionState):
             return default
 
         rec_val  = _safe_var("PRECURSORS_EXP", default=None)
-        #ibaq_raw = _safe_var("IBAQ", default=None)
         ibaq_avg = protein_info.get("avg_ibaq")
         ibaq_val = _fmt_ibaq(ibaq_avg) if ibaq_avg is not None else "n/a"
 
         re_count = _fmt_int(rec_val) if rec_val is not None else "n/a"
-        #ibaq_val = _fmt_ibaq(ibaq_raw) if ibaq_raw is not None else "n/a"
 
         Number = pn.indicators.Number
 
@@ -737,31 +782,74 @@ def overview_tab(state: SessionState):
             "flex": "0.1",
             "margin": "0px 0px",
         }
+        mode = str(state.adata.uns.get("preprocessing", {}).get("analysis_type", "")).lower()
+        peptido_mode = (mode in {"peptido", "peptidomics"})
+
         gene = _ensure_gene(protein)
         uid  = protein_info["uniprot_id"]
+        if peptido_mode:
+            # In peptido, what you currently display under "Uniprot ID" is the peptide sequence.
+            peptide_md = pn.pane.Markdown(f"**Peptide**: {uniprot_id}",
+                                          styles={"font-size": "16px", "padding": "0", "line-height": "0px"})
+
+            header = pn.Row(
+                peptide_md,
+                sizing_mode="stretch_width",
+                height=50,
+                styles={
+                    "display":         "flex",
+                    "background":      "#f9f9f9",
+                    "margin": "0px",
+                    "padding": "0px",
+                    "border-bottom":   "1px solid #ddd",
+                }
+            )
+        else:
+            gene_md = pn.pane.Markdown(f"**Gene(s)**: {gene}", styles=item_styles) #TODO adapt to each case ?
+            sep1    = pn.pane.Markdown("|", styles=sep_styles)
+            uid_md  = pn.pane.Markdown(f"**Uniprot ID**: {uniprot_id}", styles=item_styles)
+            sep2    = pn.pane.Markdown("|", styles=sep_styles)
+            idx_md  = pn.pane.Markdown(f"**Protein Index**: {protein_info['index']+1}",
+                                       styles=item_styles)
+            header = pn.Row(
+                gene_md, sep1, uid_md, sep2, idx_md,
+                sizing_mode="stretch_width",
+                height=50,
+                styles={
+                    "display":         "flex",
+                    "align-items":     "space-evenly",
+                    "justify-content": "space-evenly",
+                    "background":      "#f9f9f9",
+                    "margin": "0px",
+                    "padding": "0px",
+                    "border-bottom":   "1px solid #ddd",
+                }
+            )
+        #gene = _ensure_gene(protein)
+        #uid  = protein_info["uniprot_id"]
 
         #gene_md = pn.pane.Markdown(f"**Gene(s)**: {protein}", styles=item_styles)
-        gene_md = pn.pane.Markdown(f"**Gene(s)**: {gene}", styles=item_styles)
-        sep1    = pn.pane.Markdown("|", styles=sep_styles)
-        uid_md  = pn.pane.Markdown(f"**Uniprot ID**: {uniprot_id}", styles=item_styles)
-        sep2    = pn.pane.Markdown("|", styles=sep_styles)
-        idx_md  = pn.pane.Markdown(f"**Protein Index**: {protein_info['index']+1}",
-                                   styles=item_styles)
+        #gene_md = pn.pane.Markdown(f"**Gene(s)**: {gene}", styles=item_styles) #TODO adapt to each case ?
+        #sep1    = pn.pane.Markdown("|", styles=sep_styles)
+        #uid_md  = pn.pane.Markdown(f"**Uniprot ID**: {uniprot_id}", styles=item_styles)
+        #sep2    = pn.pane.Markdown("|", styles=sep_styles)
+        #idx_md  = pn.pane.Markdown(f"**Protein Index**: {protein_info['index']+1}",
+        #                           styles=item_styles)
 
-        header = pn.Row(
-            gene_md, sep1, uid_md, sep2, idx_md,
-            sizing_mode="stretch_width",
-            height=50,
-            styles={
-                "display":         "flex",
-                "align-items":     "space-evenly",
-                "justify-content": "space-evenly",
-                "background":      "#f9f9f9",
-                "margin": "0px",
-                "padding": "0px",
-                "border-bottom":   "1px solid #ddd",
-            }
-        )
+        #header = pn.Row(
+        #    gene_md, sep1, uid_md, sep2, idx_md,
+        #    sizing_mode="stretch_width",
+        #    height=50,
+        #    styles={
+        #        "display":         "flex",
+        #        "align-items":     "space-evenly",
+        #        "justify-content": "space-evenly",
+        #        "background":      "#f9f9f9",
+        #        "margin": "0px",
+        #        "padding": "0px",
+        #        "border-bottom":   "1px solid #ddd",
+        #    }
+        #)
 
         # STRING link is layer-agnostic; fetch once & cache
         uid_for_link = _first_token(uniprot_id) or ""
@@ -770,26 +858,60 @@ def overview_tab(state: SessionState):
         except Exception:
             string_link = ""
 
-        left_bits = []
-        if rec_val is not None:
-            left_bits.append(f"Precursors (global): <b>{re_count}</b>")
-        if ibaq_avg is not None:
-            left_bits.append(f"IBAQ (global mean): <b>{ibaq_val}</b>")
-        # If neither is available, show a friendly placeholder
-        if not left_bits:
-            left_bits.append("No extra protein metrics available")
+        if peptido_mode:
+            # Optional peptido metadata (must not crash if missing)
+            parent_uid = _safe_var("PARENT_PROTEIN", default=None)
+            if parent_uid is None:
+                parent_uid = _safe_var("UNIPROT", default=None)
+            parent_uid = _first_token(str(parent_uid)) if parent_uid is not None else "n/a"
+
+            pep_prec = _safe_var("PRECURSORS_USED", default=None)
+            if pep_prec is None:
+                pep_prec = _safe_var("PRECURSORS_EXP", default=None)
+            pep_prec_txt = _fmt_int(pep_prec) if pep_prec is not None else "n/a"
+
+            left_bits = [
+                f"Gene: <b>{gene}</b>",
+                f"UniProt: <b>{parent_uid}</b>",
+                f"Precursors (peptide): <b>{pep_prec_txt}</b>",
+                f"Peptide index: <b>{protein_info['index']+1}</b>",
+            ]
+        else:
+            left_bits = []
+            if rec_val is not None:
+                left_bits.append(f"Precursors (global): <b>{re_count}</b>")
+            if ibaq_avg is not None:
+                left_bits.append(f"IBAQ (global mean): <b>{ibaq_val}</b>")
+            # If neither is available, show a friendly placeholder
+            if not left_bits:
+                left_bits.append("No extra protein metrics available")
+        #left_bits = []
+        #if rec_val is not None:
+        #    left_bits.append(f"Precursors (global): <b>{re_count}</b>")
+        #if ibaq_avg is not None:
+        #    left_bits.append(f"IBAQ (global mean): <b>{ibaq_val}</b>")
+        ## If neither is available, show a friendly placeholder
+        #if not left_bits:
+        #    left_bits.append("No extra protein metrics available")
 
         footer_left = pn.pane.HTML(
             "<span style='font-size: 12px;'>" + " &nbsp;|&nbsp; ".join(left_bits) + "</span>"
         )
 
-        footer_right = pn.pane.HTML(
+        footer_right = pn.pane.HTML("") if peptido_mode else pn.pane.HTML(
             f"<span style='font-size: 12px;'>"
             f"🔗 <a href='https://www.uniprot.org/uniprotkb/{uid_for_link}/entry' target='_blank' rel='noopener'>UniProt Entry</a>"
             f" &nbsp;|&nbsp; "
             f"<a href='{string_link}' target='_blank' rel='noopener'>STRING Entry</a>"
             f"</span>"
         )
+        #footer_right = pn.pane.HTML(
+        #    f"<span style='font-size: 12px;'>"
+        #    f"🔗 <a href='https://www.uniprot.org/uniprotkb/{uid_for_link}/entry' target='_blank' rel='noopener'>UniProt Entry</a>"
+        #    f" &nbsp;|&nbsp; "
+        #    f"<a href='{string_link}' target='_blank' rel='noopener'>STRING Entry</a>"
+        #    f"</span>"
+        #)
 
         footer_links = pn.Row(
             footer_left, pn.Spacer(), footer_right,
@@ -838,9 +960,13 @@ def overview_tab(state: SessionState):
             return pn.Spacer(width=800, height=500, margin=(-30, 0, 0, 0))
 
         # --- bar plot (unchanged) ---
-        gene = _ensure_gene(protein)
+        #gene = _ensure_gene(protein)
         #fig = plot_intensity_by_protein(state, contrast, protein, layers_sel)
-        fig = plot_intensity_by_protein(state, contrast, gene, layers_sel)
+        #fig = plot_intensity_by_protein(state, contrast, gene, layers_sel)
+        key = _ensure_gene(protein) if proteomics_mode else str(protein)
+        fig = plot_intensity_by_protein(state, contrast, key, layers_sel)
+        protein_info = get_protein_info(state, contrast, key, layers_sel)
+
         barplot_pane = pn.pane.Plotly(
             fig,
             width=800,
@@ -853,9 +979,9 @@ def overview_tab(state: SessionState):
         )
 
         # --- intensity Number (layer-dependent) ---
-        gene = _ensure_gene(protein)
+        #gene = _ensure_gene(protein)
         #protein_info   = get_protein_info(state, contrast, protein, layers_sel)
-        protein_info   = get_protein_info(state, contrast, gene, layers_sel)
+        #protein_info   = get_protein_info(state, contrast, gene, layers_sel)
         intensity_scale = "Avg Log Intensity" if layer != "Raw" else "Avg Intensity"
 
         # NOTE: preserve your original formatting logic exactly
@@ -900,12 +1026,11 @@ def overview_tab(state: SessionState):
     bokeh_doc = pn.state.curdoc  # for next-tick scheduling if you want it
 
     def _current_uniprot_id():
-        gene = search_input.value
-        if not gene:
+        token = search_input.value
+        if not token:
             return None
-        # cheap call; we only need the ID
-        gene = _ensure_gene(gene)
-        info = get_protein_info(state, contrast_sel.value, gene, layers_sel)
+        key = _ensure_gene(token) if proteomics_mode else str(token)
+        info = get_protein_info(state, contrast_sel.value, key, layers_sel)
         return info["uniprot_id"]
 
     def _render_info():
@@ -920,7 +1045,6 @@ def overview_tab(state: SessionState):
         uid = _current_uniprot_id()
         if not uid:
             return pn.Spacer(width=800, height=320)
-
         fig = plot_peptide_trends_centered(state.adata, uid, contrast_sel.value)
         return pn.pane.Plotly(
             fig,
@@ -1035,6 +1159,8 @@ def overview_tab(state: SessionState):
             pn.Row(clear_search, margin = (17,0,0,0)),
             pn.Spacer(width=0),
             pn.Row(layers_sel, margin = (-17,0,0,0)),
+            pn.Spacer(width=20),
+            download_selection,
             width=300,
             height=80,
         ),

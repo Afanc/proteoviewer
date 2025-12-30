@@ -475,6 +475,7 @@ def build_app():
         # Optional autoload in dev (unchanged)
         try:
             from anndata import read_h5ad
+            #adata = read_h5ad("proteoflux_results_phospho.h5ad")
             adata = read_h5ad("proteoflux_results.h5ad")
             _load(adata, "proteoflux_results.h5ad")
             logging.info("DEV autoload successful.")
