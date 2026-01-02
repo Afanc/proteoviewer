@@ -113,6 +113,145 @@ def plot_prec_pep_distributions(
     adata: AnnData,
 ) -> tuple[Optional[go.Figure], Optional[go.Figure]]:
     """
+    Left: donut (precursors per peptide)
+    Right: histogram (peptides per protein for proteomics; precursors per protein for peptido/phospho)
+
+    Strict: uses only ProteoFlux-provided arrays in:
+      adata.uns["preprocessing"]["distributions"].
+    """
+    preproc = adata.uns.get("preprocessing", {})
+    dist = preproc.get("distributions", {})
+
+    def _require(cond: bool, msg: str) -> None:
+        if not cond:
+            raise ValueError(msg)
+
+    _require(
+        isinstance(dist, dict),
+        f"Expected adata.uns['preprocessing']['distributions'] to be a dict, got {type(dist)!r}",
+    )
+
+    analysis = str(preproc.get("analysis_type", "")).strip().lower()
+    proteomics_mode = analysis in {"dia", "dda", "proteomics"}
+
+    prec_per_pep = dist.get("num_precursors_per_peptide")
+    pep_per_prot = dist.get("num_peptides_per_protein")
+    prec_per_prot = dist.get("num_precursors_per_protein")
+
+    _require(
+        prec_per_pep is not None,
+        "Missing preprocessing.distributions['num_precursors_per_peptide'] in AnnData.uns "
+        f"(analysis_type={analysis!r}).",
+    )
+
+    if proteomics_mode:
+        _require(
+            pep_per_prot is not None,
+            "Missing preprocessing.distributions['num_peptides_per_protein'] in AnnData.uns "
+            f"(analysis_type={analysis!r}).",
+        )
+        right_vals = pep_per_prot
+        right_title = "Peptides per protein"
+        right_xlab = "Peptides"
+        right_nbins = 50
+    else:
+        _require(
+            prec_per_prot is not None,
+            "Missing preprocessing.distributions['num_precursors_per_protein'] in AnnData.uns "
+            f"(analysis_type={analysis!r}).",
+        )
+        right_vals = prec_per_prot
+        right_title = "Precursors per protein"
+        right_xlab = "Precursors"
+        right_nbins = 50
+
+    # -----------------------
+    # Left: donut (bucketed)
+    # -----------------------
+    arr = np.asarray(prec_per_pep, dtype=float)
+    arr = arr[np.isfinite(arr)]
+    _require(arr.size > 0, "Empty distribution array: num_precursors_per_peptide")
+
+    arr_i = np.floor(arr).astype(int)
+    arr_i[arr_i < 0] = 0
+
+    # Bucket 0/1/2/3/4/≥5 (works well for typical max~4; keeps tail visible)
+    buckets = {"0": 0, "1": 0, "2": 0, "3": 0, "4": 0, "≥5": 0}
+    for v in arr_i:
+        if v >= 5:
+            buckets["≥5"] += 1
+        else:
+            buckets[str(v)] += 1
+
+    labels = [k for k, n in buckets.items() if n > 0]
+    values = [buckets[k] for k in labels]
+    _require(bool(values), "No nonzero buckets for precursors-per-peptide donut.")
+
+    fig_prec_per_pep = go.Figure(
+        go.Pie(
+            labels=labels,
+            values=values,
+            hole=0.55,
+            sort=False,
+            textinfo="label+percent",
+            hovertemplate=(
+                "Precursors: %{label}<br>"
+                "Count: %{value:,}<br>"
+                "Share: %{percent}<extra></extra>"
+            ),
+        )
+    )
+    fig_prec_per_pep.update_layout(
+        title=dict(text="Precursors per peptide", x=0.5),
+        template="plotly_white",
+        width=600,
+        height=400,
+        showlegend=False,
+        margin=dict(l=10, r=10, t=60, b=10),
+    )
+
+    # -----------------------
+    # Right: histogram (log y)
+    # -----------------------
+    arr_r = np.asarray(right_vals, dtype=float)
+    arr_r = arr_r[np.isfinite(arr_r)]
+    _require(arr_r.size > 0, f"Empty distribution array for '{right_title}'")
+
+    fig_right = go.Figure(
+        go.Histogram(
+            x=arr_r,
+            nbinsx=right_nbins,
+            marker_line_color="black",
+            marker_line_width=1,
+            hoverinfo="none",
+            showlegend=False,
+        )
+    )
+    fig_right.update_layout(
+        title=dict(text=right_title, x=0.5),
+        xaxis_title=right_xlab,
+        yaxis_title="Count",
+        template="plotly_white",
+        width=600,
+        height=400,
+        xaxis_tickformat=",d",
+    )
+    fig_right.update_yaxes(
+        type="log",
+        dtick=1,
+        exponentformat="power",
+        showexponent="all",
+    )
+    if arr_r.size > 0 and float(np.nanmax(arr_r)) < 10:
+        fig_right.update_xaxes(range=[0, 8])
+
+    return fig_prec_per_pep, fig_right
+
+@log_time("Plotting precursor/peptide depth distributions")
+def plot_prec_pep_distributions_old(
+    adata: AnnData,
+) -> tuple[Optional[go.Figure], Optional[go.Figure]]:
+    """
     Two small histograms:
       - number of precursors per peptide
       - number of peptides per protein
