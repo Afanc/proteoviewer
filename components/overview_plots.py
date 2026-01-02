@@ -141,6 +141,9 @@ def plot_intensity_by_protein(state, contrast, protein, layer):
 
     mode = str(ad.uns.get("preprocessing", {}).get("analysis_type", "")).lower()
     proteomics_mode = (mode in {"dia", "dda", "proteomics"})
+    title_txt = "Protein Expression"
+    if not proteomics_mode:
+        title_txt = "Peptide Expression"
 
     if proteomics_mode:
         col = list(ad.var["GENE_NAMES"].astype(str)).index(str(protein))
@@ -161,12 +164,6 @@ def plot_intensity_by_protein(state, contrast, protein, layer):
         proc_data = ad.layers.get('spectral_counts')
         intensity_scale = "Spectral Counts"
         is_spectral = True
-
-    # find column index by GENE_NAMES
-    #try:
-    #    col = list(ad.var["GENE_NAMES"]).index(protein)
-    #except ValueError:
-    #    return px.bar(pd.DataFrame({"x":[],"y":[]}))
 
     # extract processed and raw values for this protein
     y_vals = proc_data[:, col].A1 if hasattr(proc_data, "A1") else proc_data[:, col]
@@ -241,7 +238,7 @@ def plot_intensity_by_protein(state, contrast, protein, layer):
 
     fig.update_layout(
         margin={"t":40,"b":40,"l":60,"r":60},
-        title=dict(text="Protein Expression", x=0.5),
+        title=dict(text=title_txt, x=0.5),
         legend_title_text="Conditions",
         legend_itemclick=False,
         legend_itemdoubleclick=False,
