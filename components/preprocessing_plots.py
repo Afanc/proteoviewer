@@ -573,6 +573,17 @@ def plot_dynamic_range(
     mat = adata.layers['raw']
     vals = np.asarray(np.nanmean(mat, axis=0)).ravel()
 
+    # 1) text
+    mode = str(adata.uns.get("preprocessing", {}).get("analysis_type", "")).lower()
+    title_txt = "Protein rank"
+    data_txt = "Protein"
+    if mode in {"peptido", "peptidomics"}:
+        title_txt = "Peptide rank"
+        data_txt = "Peptide"
+    elif mode in {"phospho"}:
+        title_txt = "Phosphosite rank"
+        data_txt = "Phosphosite"
+
     # 2) filter out zero / non-finite, take log10
     mask = np.isfinite(vals) & (vals > 0)
     vals = vals[mask]
@@ -595,7 +606,7 @@ def plot_dynamic_range(
         marker=dict(size=6, opacity=0.6),
         hovertemplate=(
             "Rank %{x}<br>"
-            "Protein: %{customdata[0]}<br>"
+            f"{data_txt}: "+"%{customdata[0]}<br>"
             "Gene: %{customdata[1]}<br>"
             "log₁₀(abundance): %{y:.2f}<extra></extra>"
         ),
@@ -604,7 +615,7 @@ def plot_dynamic_range(
 
     fig.update_layout(
         title=dict(text=f"Dynamic Range across all samples", x=0.5),
-        xaxis_title="Protein rank",
+        xaxis_title=title_txt,
         yaxis_title="log₁₀(abundance)",
         template="plotly_white",
         width=800,
