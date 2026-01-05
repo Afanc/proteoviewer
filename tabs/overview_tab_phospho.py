@@ -25,7 +25,7 @@ from components.overview_plots import (
     resolve_pattern_to_uniprot_ids,
     get_protein_info,  # used for UID helper
 )
-from components.selection_export import SelectionExportSpec, make_volcano_selection_downloader
+from components.selection_export import SelectionExportSpec, make_volcano_selection_downloader, make_adjacent_sites_csv_callback
 from components.plot_utils import plot_pca_2d, plot_umap_2d
 from components.string_links import get_string_link
 from components.texts import intro_preprocessing_text, log_transform_text  # keep parity
@@ -961,8 +961,25 @@ def overview_tab_phospho(state: SessionState):
 
         tbl.param.watch(_on_select, "selection")
 
-        header = pn.pane.Markdown("**Adjacent Sites**",
-                                  styles={"font-size": "16px", "padding": "0", "line-height": "0px"})
+        download_adjacent = pn.widgets.FileDownload(
+            label="Download",
+            callback=make_adjacent_sites_csv_callback(
+                state=state,
+                contrast_getter=lambda: str(contrast_sel.value),
+                siblings_getter=lambda: list(siblings),
+            ),
+            filename="proteoflux_adjacent_sites.csv",
+            button_type="success",
+            visible=True,
+            margin=(5, 10, 0, 0),
+        )
+
+        header = pn.Row(
+                    pn.pane.Markdown("**Adjacent Sites**",
+                                  styles={"font-size": "16px", "padding": "0", "line-height": "0px"}),
+                    pn.Spacer(sizing_mode="stretch_width"),
+                    download_adjacent,
+                    sizing_mode="stretch_width")
 
         card = pn.Card(
             header, make_hr(), tbl,

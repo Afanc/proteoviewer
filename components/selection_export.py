@@ -350,3 +350,30 @@ def make_volcano_selection_downloader(
 
     return download, _on_selected_data, _on_click_data, _on_cohort_ids
 
+def make_adjacent_sites_csv_callback(
+    *,
+    state,
+    contrast_getter,
+    siblings_getter,
+):
+    """
+    Factory for Adjacent Sites CSV export.
+    Explicitly captures all required state via closures.
+    """
+
+    def _adjacent_sites_csv() -> bytes:
+        feature_ids = [str(x) for x in siblings_getter()]
+        if not feature_ids:
+            raise ValueError("No adjacent sites to export.")
+
+        df = build_volcano_selection_df(
+            state=state,
+            contrast=str(contrast_getter()),
+            feature_ids=feature_ids,
+            uniprot_var_col="PARENT_PROTEIN",
+            id_col_name="PHOSPHOSITE_ID",
+        )
+        return io.BytesIO(df.to_csv(index=False).encode("utf-8"))
+
+    return _adjacent_sites_csv
+
