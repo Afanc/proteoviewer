@@ -111,10 +111,14 @@ def get_intensity_long_df(
 @log_time("Plotting precursor/peptide depth distributions")
 def plot_prec_pep_distributions(
     adata: AnnData,
-) -> tuple[Optional[go.Figure], Optional[go.Figure]]:
+#) -> tuple[Optional[go.Figure], Optional[go.Figure]]:
+) -> tuple[Optional[go.Figure], Optional[go.Figure], Optional[go.Figure]]:
     """
-    Left: donut (precursors per peptide)
-    Right: histogram (peptides per protein for proteomics; precursors per protein for peptido/phospho)
+    Three panels:
+      1) Always: donut (precursors per peptide)
+      2) Proteomics only: histogram (peptides per protein). Otherwise: Unavailable placeholder.
+      3) Missed cleavages per sample (bar, colored by condition). If missing (retro-compat): Unavailable.
+
 
     Strict: uses only ProteoFlux-provided arrays in:
       adata.uns["preprocessing"]["distributions"].
@@ -131,6 +135,28 @@ def plot_prec_pep_distributions(
         f"Expected adata.uns['preprocessing']['distributions'] to be a dict, got {type(dist)!r}",
     )
 
+    def _unavailable_fig(title: str) -> go.Figure:
+        fig = go.Figure()
+        fig.update_layout(
+            title=dict(text=title, x=0.5),
+            template="plotly_white",
+            width=600,
+            height=400,
+            margin=dict(l=10, r=10, t=60, b=10),
+        )
+        fig.add_annotation(
+            text="Unavailable",
+            x=0.5,
+            y=0.5,
+            xref="paper",
+            yref="paper",
+            showarrow=False,
+            font=dict(size=18),
+        )
+        fig.update_xaxes(visible=False)
+        fig.update_yaxes(visible=False)
+        return fig
+
     analysis = str(preproc.get("analysis_type", "")).strip().lower()
     proteomics_mode = analysis in {"dia", "dda", "proteomics"}
 
@@ -144,26 +170,26 @@ def plot_prec_pep_distributions(
         f"(analysis_type={analysis!r}).",
     )
 
-    if proteomics_mode:
-        _require(
-            pep_per_prot is not None,
-            "Missing preprocessing.distributions['num_peptides_per_protein'] in AnnData.uns "
-            f"(analysis_type={analysis!r}).",
-        )
-        right_vals = pep_per_prot
-        right_title = "Peptides per protein"
-        right_xlab = "Peptides"
-        right_nbins = 50
-    else:
-        _require(
-            prec_per_prot is not None,
-            "Missing preprocessing.distributions['num_precursors_per_protein'] in AnnData.uns "
-            f"(analysis_type={analysis!r}).",
-        )
-        right_vals = prec_per_prot
-        right_title = "Precursors per protein"
-        right_xlab = "Precursors"
-        right_nbins = 50
+    #if proteomics_mode:
+    #    _require(
+    #        pep_per_prot is not None,
+    #        "Missing preprocessing.distributions['num_peptides_per_protein'] in AnnData.uns "
+    #        f"(analysis_type={analysis!r}).",
+    #    )
+    #    right_vals = pep_per_prot
+    #    right_title = "Peptides per protein"
+    #    right_xlab = "Peptides"
+    #    right_nbins = 50
+    #else:
+    #    _require(
+    #        prec_per_prot is not None,
+    #        "Missing preprocessing.distributions['num_precursors_per_protein'] in AnnData.uns "
+    #        f"(analysis_type={analysis!r}).",
+    #    )
+    #    right_vals = prec_per_prot
+    #    right_title = "Precursors per protein"
+    #    right_xlab = "Precursors"
+    #    right_nbins = 50
 
     # -----------------------
     # Left: donut (bucketed)
@@ -211,117 +237,94 @@ def plot_prec_pep_distributions(
     )
 
     # -----------------------
-    # Right: histogram (log y)
+    # Middle: proteomics-only pep/prot (log-y hist), else Unavailable
     # -----------------------
-    arr_r = np.asarray(right_vals, dtype=float)
-    arr_r = arr_r[np.isfinite(arr_r)]
-    _require(arr_r.size > 0, f"Empty distribution array for '{right_title}'")
-
-    fig_right = go.Figure(
-        go.Histogram(
-            x=arr_r,
-            nbinsx=right_nbins,
-            marker_line_color="black",
-            marker_line_width=1,
-            hoverinfo="none",
-            showlegend=False,
+    if proteomics_mode:
+        _require(
+            pep_per_prot is not None,
+            "Missing preprocessing.distributions['num_peptides_per_protein'] in AnnData.uns "
+            f"(analysis_type={analysis!r}).",
         )
-    )
-    fig_right.update_layout(
-        title=dict(text=right_title, x=0.5),
-        xaxis_title=right_xlab,
-        yaxis_title="Count",
-        template="plotly_white",
-        width=600,
-        height=400,
-        xaxis_tickformat=",d",
-    )
-    fig_right.update_yaxes(
-        type="log",
-        dtick=1,
-        exponentformat="power",
-        showexponent="all",
-    )
-    if arr_r.size > 0 and float(np.nanmax(arr_r)) < 10:
-        fig_right.update_xaxes(range=[0, 8])
+        arr_mid = np.asarray(pep_per_prot, dtype=float)
+        arr_mid = arr_mid[np.isfinite(arr_mid)]
+        _require(arr_mid.size > 0, "Empty distribution array: num_peptides_per_protein")
 
-    return fig_prec_per_pep, fig_right
-
-@log_time("Plotting precursor/peptide depth distributions")
-def plot_prec_pep_distributions_old(
-    adata: AnnData,
-) -> tuple[Optional[go.Figure], Optional[go.Figure]]:
-    """
-    Two small histograms:
-      - number of precursors per peptide
-      - number of peptides per protein
-
-    This *only* uses pre-computed arrays if they are present in
-    `adata.uns["preprocessing"]` and otherwise falls back to placeholders,
-    so it's fully backward compatible.
-    """
-    preproc = adata.uns.get("preprocessing", {}).get("distributions", {})
-
-    prec_per_pep = preproc.get("num_precursors_per_peptide")
-    pep_per_prot = preproc.get("num_peptides_per_protein")
-    prec_per_prot = preproc.get("num_precursors_per_protein")
-
-    def _make_hist(
-        vals: Optional,
-        title: str,
-        xlab: str,
-        nbins: int,
-    ) -> Optional[go.Figure]:
-        if vals is None:
-            return None
-        arr = np.asarray(vals)
-        arr = arr[np.isfinite(arr)]
-        if arr.size == 0:
-            return None
-
-        fig = go.Figure(go.Histogram(
-            x=arr,
-            nbinsx=nbins,
-            marker_line_color="black",
-            marker_line_width=1,
-            hoverinfo="none",
-            showlegend=False,
-        ))
-        fig.update_layout(
-            title=dict(text=title, x=0.5),
-            xaxis_title=xlab,
+        fig_mid = go.Figure(
+            go.Histogram(
+                x=arr_mid,
+                nbinsx=50,
+                marker_line_color="black",
+                marker_line_width=1,
+                hoverinfo="none",
+                showlegend=False,
+            )
+        )
+        fig_mid.update_layout(
+            title=dict(text="Peptides per protein", x=0.5),
+            xaxis_title="Peptides",
             yaxis_title="Count",
             template="plotly_white",
             width=600,
             height=400,
-            xaxis_tickformat=',d',
+            xaxis_tickformat=",d",
         )
-        fig.update_yaxes(
-            type="log",
-            dtick=1,
-            exponentformat="power",
-            showexponent="all",
-        )
-        if max(arr) < 10:
-            fig.update_xaxes(range=[0, 8])
-        return fig
+        fig_mid.update_yaxes(type="log", dtick=1, exponentformat="power", showexponent="all")
+        if float(np.nanmax(arr_mid)) < 10:
+            fig_mid.update_xaxes(range=[0, 8])
+    else:
+        fig_mid = _unavailable_fig("Peptides per protein")
 
-    fig_prec_per_pep = _make_hist(
-        prec_per_pep,
-        "Precursors per peptide",
-        "Precursors",
-        nbins=6,
+    # -----------------------
+    # Right: missed cleavages per sample (viewer consumes precomputed payload)
+    # -----------------------
+    mc = dist.get("missed_cleavages_per_sample")
+    if mc is None:
+        fig_mc = _unavailable_fig("Missed cleavages per sample")
+        return fig_prec_per_pep, fig_mid, fig_mc
+
+    _require(
+        isinstance(mc, dict) and "samples" in mc and "fraction" in mc,
+        "Invalid preprocessing.distributions['missed_cleavages_per_sample']: "
+        "expected dict with keys {'samples','fraction'}.",
     )
 
-    # For phospho you may or may not have this; if absent we just return None.
-    fig_pep_per_prot = _make_hist(
-        pep_per_prot,
-        "Peptides per protein",
-        "Peptides",
-        nbins=50,
-    )
+    samples = [str(s) for s in mc["samples"]]
+    frac = np.asarray(mc["fraction"], dtype=float)
+    _require(len(samples) == int(frac.size), "missed_cleavages_per_sample length mismatch.")
 
-    return fig_prec_per_pep, fig_pep_per_prot
+    # Map samples -> condition using adata.obs
+    obs = adata.obs.copy()
+    _require("CONDITION" in obs.columns, "Missing adata.obs['CONDITION'] required for coloring.")
+    cond_map = obs["CONDITION"].astype(str).to_dict()
+
+    conds = [cond_map.get(s, "Unknown") for s in samples]
+    df_mc = pd.DataFrame({"Sample": samples, "Condition": conds, "Fraction": frac})
+
+    # Stable condition order (as in obs)
+    cond_order = adata.obs["CONDITION"].astype(str).unique().tolist()
+    if "Unknown" in df_mc["Condition"].unique().tolist() and "Unknown" not in cond_order:
+        cond_order = cond_order + ["Unknown"]
+
+    fig_mc = px.bar(
+        df_mc,
+        x="Sample",
+        y="Fraction",
+        color="Condition",
+        category_orders={"Condition": cond_order},
+    )
+    fig_mc.update_layout(
+        title=dict(text="Missed cleavages per sample", x=0.5),
+        template="plotly_white",
+        width=600,
+        height=400,
+        margin=dict(l=10, r=10, t=60, b=10),
+        legend_title_text="Condition",
+    )
+    fig_mc.update_yaxes(tickformat=".0%", range=[0, 1])
+    fig_mc.update_traces(hovertemplate="%{y:.3%}<extra></extra>")
+    fig_mc.update_xaxes(tickangle=30)
+
+    return fig_prec_per_pep, fig_mid, fig_mc
 
 @log_time("Plotting violins before/after norm")
 def plot_violin_by_group_go(

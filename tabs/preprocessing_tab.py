@@ -94,19 +94,25 @@ def preprocessing_tab(state: SessionState):
     )
 
     # Quantification
-    prec_pep_fig, pep_prot_fig = plot_prec_pep_distributions(adata)
+    prec_pep_fig, pep_prot_fig, missed_cleav_fig = plot_prec_pep_distributions(adata)
 
     prec_pep_pane = plotly_section(
         prec_pep_fig if prec_pep_fig is not None else _placeholder_plot("Precursors per peptide"),
         height=400,
-        flex="0.5",
+        flex="0.2",
         margin=(0,0,0,-100),
     )
 
     pep_prot_pane = plotly_section(
         pep_prot_fig if pep_prot_fig is not None else _placeholder_plot("Peptides per protein"),
         height=400,
-        flex="0.5",
+        flex="0.4",
+    )
+
+    missed_cleav_pane = plotly_section(
+        missed_cleav_fig if missed_cleav_fig is not None else _placeholder_plot("Missed cleavages"),
+        height=400,
+        flex="0.4",
     )
 
     depth_row = make_row(
@@ -116,6 +122,10 @@ def preprocessing_tab(state: SessionState):
         make_vr(),
         pn.Spacer(width=10),
         pep_prot_pane,
+        pn.Spacer(width=10),
+        make_vr(),
+        pn.Spacer(width=10),
+        missed_cleav_pane,
         height=420,
         width='95vw',
     )

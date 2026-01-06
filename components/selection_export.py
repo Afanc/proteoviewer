@@ -167,11 +167,44 @@ def build_volcano_selection_df(
     mode = str(adata.uns.get("preprocessing", {}).get("analysis_type", "")).lower()
     proteomics_mode = (mode in {"dia", "dda", "proteomics"})
     peptido_mode = (mode in {"peptido", "peptidomics"})
+    phospho_mode = (mode == "phospho")
 
     # Contrast-specific stats tables
-    df_fc = pd.DataFrame(adata.varm["log2fc"], index=adata.var_names, columns=contrasts)
-    df_p = pd.DataFrame(adata.varm["p_ebayes"], index=adata.var_names, columns=contrasts)
-    df_q = pd.DataFrame(adata.varm["q_ebayes"], index=adata.var_names, columns=contrasts)
+    df_fc_adj = pd.DataFrame(adata.varm["log2fc"], index=adata.var_names, columns=contrasts)
+    df_p_adj = pd.DataFrame(adata.varm["p_ebayes"], index=adata.var_names, columns=contrasts)
+    df_q_adj = pd.DataFrame(adata.varm["q_ebayes"], index=adata.var_names, columns=contrasts)
+
+    # Optional: phospho raw statistics (falls back to adjusted for non-covariate runs)
+    df_fc_raw = df_p_raw = df_q_raw = None
+    if phospho_mode:
+        if "raw_log2fc" in adata.varm:
+            df_fc_raw = pd.DataFrame(adata.varm["raw_log2fc"], index=adata.var_names, columns=contrasts)
+        else:
+            df_fc_raw = df_fc_adj
+
+        if "raw_p_ebayes" in adata.varm:
+            df_p_raw = pd.DataFrame(adata.varm["raw_p_ebayes"], index=adata.var_names, columns=contrasts)
+        else:
+            df_p_raw = df_p_adj
+
+        if "raw_q_ebayes" in adata.varm:
+            df_q_raw = pd.DataFrame(adata.varm["raw_q_ebayes"], index=adata.var_names, columns=contrasts)
+        else:
+            df_q_raw = df_q_adj
+
+    # Optional: phospho covariate-part + flowthrough stats
+    df_cov_part = None
+    if phospho_mode and ("cov_part" in adata.varm):
+        df_cov_part = pd.DataFrame(adata.varm["cov_part"], index=adata.var_names, columns=contrasts)
+
+    df_ft_fc = df_ft_p = df_ft_q = None
+    if phospho_mode:
+        if "ft_log2fc" in adata.varm:
+            df_ft_fc = pd.DataFrame(adata.varm["ft_log2fc"], index=adata.var_names, columns=contrasts)
+        if "ft_p_ebayes" in adata.varm:
+            df_ft_p = pd.DataFrame(adata.varm["ft_p_ebayes"], index=adata.var_names, columns=contrasts)
+        if "ft_q_ebayes" in adata.varm:
+            df_ft_q = pd.DataFrame(adata.varm["ft_q_ebayes"], index=adata.var_names, columns=contrasts)
 
     gene_names = adata.var["GENE_NAMES"].astype(str)
     fasta_headers = adata.var["FASTA_HEADER"].astype(str) if "FASTA_HEADER" in adata.var.columns else None
@@ -184,6 +217,7 @@ def build_volcano_selection_df(
     # Materialize matrices
     mat_proc = adata.X.toarray() if hasattr(adata.X, "toarray") else adata.X
     mat_raw = adata.layers["raw"].toarray() if hasattr(adata.layers["raw"], "toarray") else adata.layers["raw"]
+    samples = list(map(str, adata.obs_names))
 
     # Validate feature ids exist and map to indices
     var_index = {str(v): i for i, v in enumerate(map(str, adata.var_names))}
@@ -225,12 +259,48 @@ def build_volcano_selection_df(
 
     # Contrast-specific stats (ALL CAPS + contrast name)
     ctag = str(contrast).upper()
-    df[f"LOG2FC_{ctag}"] = df_fc.loc[df.index, contrast].astype(float).values
-    df[f"PVALUE_{ctag}"] = df_p.loc[df.index, contrast].astype(float).values
-    df[f"QVALUE_{ctag}"] = df_q.loc[df.index, contrast].astype(float).values
+    if phospho_mode:
+        _require(df_fc_raw is not None and df_p_raw is not None and df_q_raw is not None,
+                 "Phospho selection export: internal error; raw stats tables not materialized.")
+
+        df[f"RAW_LOG2FC_{ctag}"] = df_fc_raw.loc[df.index, contrast].astype(float).values
+        df[f"RAW_PVALUE_{ctag}"] = df_p_raw.loc[df.index, contrast].astype(float).values
+        df[f"RAW_QVALUE_{ctag}"] = df_q_raw.loc[df.index, contrast].astype(float).values
+
+        df[f"ADJUSTED_LOG2FC_{ctag}"] = df_fc_adj.loc[df.index, contrast].astype(float).values
+        df[f"ADJUSTED_PVALUE_{ctag}"] = df_p_adj.loc[df.index, contrast].astype(float).values
+        df[f"ADJUSTED_QVALUE_{ctag}"] = df_q_adj.loc[df.index, contrast].astype(float).values
+
+        if df_cov_part is not None:
+            df[f"COVARIATE_PART_{ctag}"] = df_cov_part.loc[df.index, contrast].astype(float).values
+
+        if (df_ft_fc is not None) and (df_ft_p is not None) and (df_ft_q is not None):
+            df[f"FT_LOG2FC_{ctag}"] = df_ft_fc.loc[df.index, contrast].astype(float).values
+            df[f"FT_PVALUE_{ctag}"] = df_ft_p.loc[df.index, contrast].astype(float).values
+            df[f"FT_QVALUE_{ctag}"] = df_ft_q.loc[df.index, contrast].astype(float).values
+    else:
+        df[f"LOG2FC_{ctag}"] = df_fc_adj.loc[df.index, contrast].astype(float).values
+        df[f"PVALUE_{ctag}"] = df_p_adj.loc[df.index, contrast].astype(float).values
+        df[f"QVALUE_{ctag}"] = df_q_adj.loc[df.index, contrast].astype(float).values
+
+    # Optional: phospho flowthrough intensities (covariate matrices)
+    if phospho_mode and ("processed_covariate" in adata.layers) and ("raw_covariate" in adata.layers):
+        mat_ft_proc = (
+            adata.layers["processed_covariate"].toarray()
+            if hasattr(adata.layers["processed_covariate"], "toarray")
+            else adata.layers["processed_covariate"]
+        )
+        mat_ft_raw = (
+            adata.layers["raw_covariate"].toarray()
+            if hasattr(adata.layers["raw_covariate"], "toarray")
+            else adata.layers["raw_covariate"]
+        )
+        for j, s in enumerate(samples):
+            df[f"FT_PROCESSED_INTENSITIES_{s}"] = mat_ft_proc[j, idx]
+        for j, s in enumerate(samples):
+            df[f"FT_RAW_INTENSITIES_{s}"] = mat_ft_raw[j, idx]
 
     # Intensities: all processed first, then all raw
-    samples = list(map(str, adata.obs_names))
     for j, s in enumerate(samples):
         df[f"PROCESSED_INTENSITIES_{s}"] = mat_proc[j, idx]
     for j, s in enumerate(samples):
@@ -244,7 +314,6 @@ def make_volcano_selection_downloader(
     state: SessionState,
     contrast_getter: Callable[[], str],
     spec: SelectionExportSpec = SelectionExportSpec(),
-#) -> tuple[pn.widgets.FileDownload, Callable[[dict], None]]:
 ) -> tuple[
     pn.widgets.FileDownload,
     Callable[[dict], None],
@@ -319,9 +388,9 @@ def make_volcano_selection_downloader(
             _set_loading_pulse()
 
     def _on_selected_data(selected_data: dict) -> None:
-        if selected_data is None:
-            return
-        if selected_data == {}:
+        if selected_data is None or selected_data == {}:
+            lasso_ids.clear()
+            _recompute_effective_ids()
             return
         if "points" in selected_data and not selected_data["points"]:
             # Panel/Plotly sometimes emits {"selector": None, "points": []} on re-render

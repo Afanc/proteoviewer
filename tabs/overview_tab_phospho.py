@@ -1121,7 +1121,7 @@ def overview_tab_phospho(state: SessionState):
             pn.Row(layers_phos_sel, margin=(-17, 0, 0, 0)),
             pn.Spacer(width=10),
             pn.Row(layers_cov_sel, margin=(-17, 0, 0, 0)),
-            pn.Spacer(width=10),
+            pn.Spacer(width=20),
             download_selection,
             #sizing_mode="fixed",
             width=300,
