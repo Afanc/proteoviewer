@@ -405,7 +405,7 @@ def overview_tab_phospho(state: SessionState):
 
     # which volcano to plot
     volcano_src_opts = (["Phospho (raw)"] if not has_cov
-                        else ["Phospho (raw)", "Phospho (adj.)", "Flowthrough"])
+                        else ["Phospho (adj.)", "Phospho (raw)", "Flowthrough"])
     volcano_src_sel = pn.widgets.Select(name="Volcano source", options=volcano_src_opts, value=volcano_src_opts[0], width=130)
 
     def _volcano_dtype(label: str) -> str:
@@ -485,8 +485,10 @@ def overview_tab_phospho(state: SessionState):
 
     search_field_sel = pn.widgets.Select(
         name="Search Field",
-        options=["FASTA headers", "Gene names", "UniProt IDs"],
-        value="FASTA headers",
+        #options=["FASTA headers", "Gene names", "UniProt IDs"],
+        options=["Gene names", "UniProt IDs"],
+        value="Gene names",
+        #value="FASTA headers",
         width=130,
         styles={"z-index": "10"},
         margin=(2, 0, 0, 0),
@@ -873,8 +875,19 @@ def overview_tab_phospho(state: SessionState):
             return pn.Spacer(width=300, height=120)
 
         contrast = contrast_sel.value
-        df_raw_fc = views["df_raw_fc"]
-        df_raw_q = views["df_raw_q"]
+        # Adjacent sites should show adjusted stats when FT is present.
+        # For "no-FT" contrasts, adjusted stats are already set to raw upstream.
+        if has_cov:
+            df_fc = views["df_log2fc"]
+            df_q  = views["df_q"]
+            hdr_suffix = " (adj.)"
+        else:
+            df_fc = views["df_raw_fc"]
+            df_q  = views["df_raw_q"]
+            hdr_suffix = ""
+        #contrast = contrast_sel.value
+        #df_raw_fc = views["df_raw_fc"]
+        #df_raw_q = views["df_raw_q"]
 
         #mask = (adata.var["PARENT_PEPTIDE_ID"].astype(str) == parent_pep)
         mask = (adata.var["PARENT_PROTEIN"].astype(str) == parent_prot)
@@ -884,8 +897,11 @@ def overview_tab_phospho(state: SessionState):
 
         df = pd.DataFrame(index=siblings)
         df["Site"] = [_pn_only(s) for s in siblings]
-        df["Log2FC"] = df_raw_fc.loc[siblings, contrast].astype(float).values
-        df["Q"] = df_raw_q.loc[siblings, contrast].astype(float).values
+        #df["Log2FC"] = df_raw_fc.loc[siblings, contrast].astype(float).values
+        #df["Q"] = df_raw_q.loc[siblings, contrast].astype(float).values
+        df["Log2FC"] = df_fc.loc[siblings, contrast].astype(float).values
+        df["Q"]      = df_q.loc[siblings, contrast].astype(float).values
+
         df["site_id"] = df.index
         #df["__pnum__"] = df["Site"].str.extract(r"p(\d+)").astype(int)
         df["__pnum__"] = pd.to_numeric(df["Site"].str.extract(r"(\d+)")[0], errors="coerce")
