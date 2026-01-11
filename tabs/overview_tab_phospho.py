@@ -397,8 +397,21 @@ def overview_tab_phospho(state: SessionState):
         sizing_mode="stretch_width",
         styles={"flex":"1"},
     )
+    cluster_info = pn.widgets.TooltipIcon(
+        value="""
+        Using left-censored QC data.
+        Results may differ from
+        analysis of processed data.
+        Multidimensional Scaling uses
+        correlation distances.
+        """,
+        margin=(-475,0,0,-40),
+        styles={"z-index":"10"},
+    )
+
     clustering_pane = pn.Row(
         pn.pane.Markdown("##   Clustering", styles={"flex": "0.1", "z-index": "10"}),
+        cluster_info,
         pca_pane,
         make_vr(),
         pn.Spacer(width=60),

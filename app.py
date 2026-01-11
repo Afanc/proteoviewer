@@ -63,11 +63,16 @@ def _resource_bytes(name: str) -> bytes:
     return p.read_bytes()
 
 
+def _read_version_from_spec(spec_path: str) -> str:
+    from pathlib import Path
+    import re
+
+    text = Path(spec_path).read_text(encoding="utf-8", errors="ignore")
+    m = re.search(r'(?i)\bversion\b\s*[:=]\s*[\'"]?(\d+\.\d+\.\d+(?:[-+.\w]*)?)', text)
+    return m.group(1) if m else "0.0.0"
+
+
 def _get_app_version() -> str:
-    """
-    - Windows EXE: env override once, else hard-coded APP_VERSION_DESKTOP
-    - Everything else (Linux/server/dev): package metadata if available, else 0.0.0
-    """
     v = os.environ.get("PV_VERSION")
     if v:
         return v.strip()
@@ -75,15 +80,20 @@ def _get_app_version() -> str:
     if DESKTOP:
         return APP_VERSION_DESKTOP
 
-    # Linux/server/dev: "original" behavior (package metadata)
+    # Linux dev/server: prefer package metadata if installed
     for dist_name in ("proteoviewer", "ProteoViewer"):
         try:
             return importlib_metadata.version(dist_name)
         except Exception:
             pass
 
-    return "0.0.0"
-
+    # Linux dev from source: fallback to local spec (previous behavior)
+    try:
+        spec_path = Path(__file__).resolve().parent / "proteoviewer.spec"
+        v = _read_version_from_spec(str(spec_path))
+        return v
+    except Exception:
+        return "0.0.0"
 
 # Server upload root (server ONLY; dev never uses this)
 UPROOT = os.environ.get("PV_UPLOAD_DIR", "/mnt/DATA/proteoviewer_uploads")
