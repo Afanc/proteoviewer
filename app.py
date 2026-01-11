@@ -13,6 +13,9 @@ from tabs.analysis_tab import analysis_tab
 from layout_utils import make_vr, make_hr
 from utils import logger, log_time, logging  # keep as-is; used elsewhere
 
+from pathlib import Path
+import importlib.metadata as importlib_metadata
+
 # Console-only logging (no file handlers)
 logging.getLogger().setLevel(logging.INFO)
 
@@ -25,11 +28,62 @@ doc = pn.state.curdoc
 if doc is not None:
     doc.title = "ProteoViewer"
 
-
 MIN_PF_VERSION = os.environ.get("PF_MIN_PF_VERSION", "1.7.7")
 
 # Single flag: dev (local run). If not dev => server mode.
 DEV = os.getenv("PV_DEV", "0") == "1"
+
+FROZEN = bool(getattr(sys, "frozen", False))
+DESKTOP = (sys.platform == "win32") and FROZEN
+
+APP_VERSION_DESKTOP = "1.8.1"
+
+def _resource_file(name: str) -> Path:
+    """
+    Resource location:
+      - Windows frozen (PyInstaller onedir): <exe_dir>/_internal/resources/<name> (preferred)
+                                            <exe_dir>/resources/<name> (fallback)
+      - Everything else (Linux server/dev):  <source_dir>/resources/<name>  (unchanged)
+    """
+    if DESKTOP:
+        exe_dir = Path(sys.executable).resolve().parent
+        p = (exe_dir / "_internal" / "resources" / name)
+        if p.is_file():
+            return p
+        return (exe_dir / "resources" / name)
+
+    # Linux server/dev: keep exactly the old behavior
+    return (Path(__file__).resolve().parent / "resources" / name)
+
+
+def _resource_bytes(name: str) -> bytes:
+    p = _resource_file(name).resolve()
+    if not p.is_file():
+        raise RuntimeError(f"Missing resource file: {p}")
+    return p.read_bytes()
+
+
+def _get_app_version() -> str:
+    """
+    - Windows EXE: env override once, else hard-coded APP_VERSION_DESKTOP
+    - Everything else (Linux/server/dev): package metadata if available, else 0.0.0
+    """
+    v = os.environ.get("PV_VERSION")
+    if v:
+        return v.strip()
+
+    if DESKTOP:
+        return APP_VERSION_DESKTOP
+
+    # Linux/server/dev: "original" behavior (package metadata)
+    for dist_name in ("proteoviewer", "ProteoViewer"):
+        try:
+            return importlib_metadata.version(dist_name)
+        except Exception:
+            pass
+
+    return "0.0.0"
+
 
 # Server upload root (server ONLY; dev never uses this)
 UPROOT = os.environ.get("PV_UPLOAD_DIR", "/mnt/DATA/proteoviewer_uploads")
@@ -155,23 +209,6 @@ html, body {
 """
 pn.config.raw_css = (pn.config.raw_css or []) + [CSS]
 
-def _read_version_from_spec(spec_path: str = "proteoviewer.spec") -> str:
-    """
-    Read version like:
-      version = "1.2.3"
-      version = '1.2.3'
-      Version: 1.2.3
-    Fallback '0.0.0' if nothing found (never blank).
-    """
-    from pathlib import Path
-    import re
-    try:
-        text = Path(spec_path).read_text(encoding="utf-8", errors="ignore")
-        m = re.search(r'(?i)\bversion\b\s*[:=]\s*[\'"]?(\d+\.\d+\.\d+(?:[-+.\w]*)?)', text)
-        return m.group(1) if m else "0.0.0"
-    except Exception:
-        return "0.0.0"
-
 
 def _about_modal_content(version: str) -> pn.viewable.Viewable:
     """Small modal with credits, companion note, and citation placeholder."""
@@ -207,8 +244,11 @@ def _make_about_card(version: str) -> pn.Card:
 
 def _build_header(area_center, version: str, dev_flag: bool) -> pn.Column:
     """Header with left stack (title, browse, status) and right stack (logo, facility)."""
-    pv_logo_path = "resources/pv_banner.png"
-    pv_logo_pane = pn.pane.PNG(pv_logo_path, width=200, height=90, sizing_mode="fixed", margin=(-10,0,-40,0))
+    #pv_logo_path = "resources/pv_banner.png"
+    pv_logo = _resource_bytes("pv_banner.png")
+    #pv_logo_pane = pn.pane.PNG(pv_logo_path, width=200, height=90, sizing_mode="fixed", margin=(-10,0,-40,0))
+    pv_logo_pane = pn.pane.PNG(pv_logo, width=200, height=90, sizing_mode="fixed", margin=(-10,0,-40,0), embed=True)
+
 
     ver_label = f"v{version}" + (" · DEV" if dev_flag else "")
     pv_ver = pn.pane.Markdown(
@@ -247,8 +287,10 @@ def _build_header(area_center, version: str, dev_flag: bool) -> pn.Column:
 
     # Right side: logo above facility — same width, left-aligned inside the block
     FACILITY_WIDTH = 140
-    facility_logo_path = "resources/Biozentrum_Logo_2011.png"
-    facility_logo_pane = pn.pane.PNG(facility_logo_path, width=FACILITY_WIDTH, height=90, sizing_mode="fixed", margin=(0, 10, 6, -15))
+    #facility_logo_path = "resources/Biozentrum_Logo_2011.png"
+    facility_logo = _resource_bytes("Biozentrum_Logo_2011.png")
+    #facility_logo_pane = pn.pane.PNG(facility_logo_path, width=FACILITY_WIDTH, height=90, sizing_mode="fixed", margin=(0, 10, 6, -15))
+    facility_logo_pane = pn.pane.PNG(facility_logo, width=FACILITY_WIDTH, height=90, sizing_mode="fixed", margin=(0, 10, 6, -15))
     right_top_row = pn.Row(facility_logo_pane,
                            pn.Spacer(width=50),
                            sizing_mode="fixed", height=90, align="center")
@@ -520,7 +562,8 @@ def build_app():
 
     #app = pn.Column("# ProteoViewer", controls, content, sizing_mode="stretch_width")
     # Build colored header with version + facility tag
-    version = _read_version_from_spec("proteoviewer.spec")
+    # version = _read_version_from_spec("proteoviewer.spec")
+    version = _get_app_version()
     header  = _build_header(controls, version, DEV)
 
     # Final layout: header (colored) on top, then the tabs/content
@@ -533,6 +576,7 @@ if __name__ != "__main__":
 
 if __name__ == "__main__":
     target = build_app
+
     if DEV:
         # Local dev: random free port, autoreload, window popup
         pn.serve(
@@ -544,6 +588,23 @@ if __name__ == "__main__":
             show=True,
             websocket_max_message_size=2000 * 1024 * 1024,
             http_server_kwargs={"max_buffer_size": 2000 * 1024 * 1024},
+        )
+    elif DESKTOP:
+        # Windows EXE: local single-process server (no num_procs), open browser
+        port = get_free_port()
+        pn.serve(
+            target,
+            title="ProteoViewer",
+            address="localhost",
+            port=port,
+            autoreload=False,
+            show=True,
+            websocket_max_message_size=2_000 * 1024 * 1024,
+            http_server_kwargs={"max_buffer_size": 2_000 * 1024 * 1024},
+            allow_websocket_origin=[
+                f"localhost:{port}",
+                f"127.0.0.1:{port}",
+            ],
         )
     else:
         # Server mode: fixed port, big buffers, proper origins, no GUI
