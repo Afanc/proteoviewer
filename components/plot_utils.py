@@ -625,12 +625,35 @@ def plot_umap_2d(
     """
     2D UMAP scatter of samples, colored by adata.obs[color_key].
     """
-    # ensure neighbors + UMAP are present
+    # Backward compatible: do not crash if UMAP is missing.
+    if "X_umap" not in adata.obsm:
+        fig = go.Figure()
+        fig.update_layout(
+            title=dict(text=f"{title} (not available)", x=0.5),
+            width=width, height=height,
+            template="plotly_white",
+            xaxis=dict(visible=False),
+            yaxis=dict(visible=False),
+            annotations=[dict(
+                x=0.5, y=0.5, xref="paper", yref="paper",
+                text="UMAP embedding not found in adata.obsm['X_umap']",
+                showarrow=False,
+                font=dict(size=12, color="black"),
+            )],
+        )
+        return fig
+
     df = pd.DataFrame(
         adata.obsm["X_umap"][:, :2],
-        columns=["UMAP1","UMAP2"],
-        index=adata.obs_names
+        columns=["UMAP1", "UMAP2"],
+        index=adata.obs_names,
     )
+    ## ensure neighbors + UMAP are present
+    #df = pd.DataFrame(
+    #    adata.obsm["X_umap"][:, :2],
+    #    columns=["UMAP1","UMAP2"],
+    #    index=adata.obs_names
+    #)
     df[color_key] = adata.obs[color_key].values
 
     levels = sorted(df[color_key].unique().tolist())
@@ -662,6 +685,88 @@ def plot_umap_2d(
             x=1.02, y=1,
             xanchor="left", yanchor="top"
         )
+    )
+    fig.update_xaxes(showline=True, mirror=True, linecolor="black")
+    fig.update_yaxes(showline=True, mirror=True, linecolor="black")
+    return fig
+
+@log_time("MDS")
+def plot_mds_2d(
+    adata: AnnData,
+    color_key: str = "CONDITION",
+    colors: dict[str,str] = None,
+    title: str = "MDS",
+    width: int = 900,
+    height: int = 500,
+    annotate: bool = False,
+) -> go.Figure:
+    """
+    2D MDS scatter of samples, colored by adata.obs[color_key].
+    Expects adata.obsm["X_mds"] with at least 2 columns.
+    """
+    if "X_mds" not in adata.obsm:
+        fig = go.Figure()
+        fig.update_layout(
+            title=dict(text=f"{title} (not available)", x=0.5),
+            width=width, height=height,
+            template="plotly_white",
+            xaxis=dict(visible=False),
+            yaxis=dict(visible=False),
+            annotations=[dict(
+                x=0.5, y=0.5, xref="paper", yref="paper",
+                text="MDS embedding not found in adata.obsm['X_mds']",
+                showarrow=False,
+                font=dict(size=12, color="black"),
+            )],
+        )
+        return fig
+
+    df = pd.DataFrame(
+        adata.obsm["X_mds"][:, :2],
+        columns=["MDS1", "MDS2"],
+        index=adata.obs_names,
+    )
+    df[color_key] = adata.obs[color_key].values
+
+    levels = sorted(df[color_key].unique().tolist())
+    palette = get_color_map(levels, px.colors.qualitative.Plotly)
+
+    fig = go.Figure()
+    for lv in levels:
+        sub = df[df[color_key] == lv]
+        fig.add_trace(go.Scatter(
+            x=sub["MDS1"],
+            y=sub["MDS2"],
+            mode="markers+text" if annotate else "markers",
+            text=sub.index.to_list(),
+            textposition="top center",
+            name=lv,
+            marker=dict(color=palette[lv], size=8, line=dict(width=1, color="black")),
+            hovertemplate="Sample: %{text}",
+        ))
+
+    # Optional: show stress if you persisted it in adata.uns["mds"]["stress"]
+    stress = None
+    try:
+        stress = adata.uns.get("mds", {}).get("stress", None)
+        stress = float(stress) if stress is not None else None
+    except Exception:
+        stress = None
+    title_txt = title if stress is None else f"{title}"
+
+    fig.update_layout(
+        title=dict(text=title_txt, x=0.5),
+        width=width, height=height,
+        template="plotly_white",
+        xaxis=dict(title="MDS1"),
+        yaxis=dict(title="MDS2"),
+        legend=dict(
+            title_text=" Condition",
+            bordercolor="black",
+            borderwidth=1,
+            x=1.02, y=1,
+            xanchor="left", yanchor="top",
+        ),
     )
     fig.update_xaxes(showline=True, mirror=True, linecolor="black")
     fig.update_yaxes(showline=True, mirror=True, linecolor="black")

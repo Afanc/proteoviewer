@@ -19,7 +19,7 @@ from components.selection_export import (
     make_volcano_selection_downloader,
     SelectionExportSpec
 )
-from components.plot_utils import plot_pca_2d, plot_umap_2d
+from components.plot_utils import plot_pca_2d, plot_umap_2d, plot_mds_2d
 from components.texts import (
     intro_preprocessing_text,
     log_transform_text
@@ -262,12 +262,37 @@ def overview_tab(state: SessionState):
                               styles={"flex":"1"},
                               margin=(0,0,0,-100),
                               )
-    umap_pane = pn.pane.Plotly(plot_umap_2d(state.adata),
-                               height=500,
-                               sizing_mode="stretch_width",
-                               styles={"flex":"1"})
+    #umap_pane = pn.pane.Plotly(plot_umap_2d(state.adata),
+    #                           height=500,
+    #                           sizing_mode="stretch_width",
+    #                           styles={"flex":"1"})
+    # Prefer MDS when present; fall back to UMAP for backward compatibility.
+    if "X_mds" in state.adata.obsm:
+        emb_fig = plot_mds_2d(state.adata, title="MDS")
+    else:
+        emb_fig = plot_umap_2d(state.adata, title="UMAP")
+
+    umap_pane = pn.pane.Plotly(
+        emb_fig,
+        height=500,
+        sizing_mode="stretch_width",
+        styles={"flex":"1"},
+    )
+
+    cluster_info = pn.widgets.TooltipIcon(
+        value="""
+        Using left-censored QC data.
+        Results may differ from
+        analysis of processed data.
+        Multidimensional Scaling uses
+        correlation distances.
+        """,
+        margin=(-475,0,0,-40),
+        styles={"z-index":"10"},
+    )
     clustering_pane = pn.Row(
-            pn.pane.Markdown("##   Clustering", styles={"flex": "0.1", "z-index": "10"}),
+            pn.pane.Markdown("##   Clustering", styles={"flex": "0.15", "z-index": "10"}),
+            cluster_info,
             pca_pane,
             make_vr(),
             pn.Spacer(width=60),

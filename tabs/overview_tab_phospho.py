@@ -26,7 +26,7 @@ from components.overview_plots import (
     get_protein_info,  # used for UID helper
 )
 from components.selection_export import SelectionExportSpec, make_volcano_selection_downloader, make_adjacent_sites_csv_callback
-from components.plot_utils import plot_pca_2d, plot_umap_2d
+from components.plot_utils import plot_pca_2d, plot_umap_2d, plot_mds_2d
 from components.string_links import get_string_link
 from components.texts import intro_preprocessing_text, log_transform_text  # keep parity
 from layout_utils import plotly_section, make_vr, make_hr, make_section, make_row, FRAME_STYLES, FRAME_STYLES_TALL, FRAME_STYLES_SHORT
@@ -380,11 +380,22 @@ def overview_tab_phospho(state: SessionState):
         styles={"flex": "1"},
         margin=(0, 0, 0, -100),
     )
+    #umap_pane = pn.pane.Plotly(
+    #    plot_umap_2d(adata),
+    #    height=500,
+    #    sizing_mode="stretch_width",
+    #    styles={"flex": "1"},
+    #)
+    if "X_mds" in state.adata.obsm:
+        emb_fig = plot_mds_2d(state.adata, title="MDS")
+    else:
+        emb_fig = plot_umap_2d(state.adata, title="UMAP")
+
     umap_pane = pn.pane.Plotly(
-        plot_umap_2d(adata),
+        emb_fig,
         height=500,
         sizing_mode="stretch_width",
-        styles={"flex": "1"},
+        styles={"flex":"1"},
     )
     clustering_pane = pn.Row(
         pn.pane.Markdown("##   Clustering", styles={"flex": "0.1", "z-index": "10"}),
