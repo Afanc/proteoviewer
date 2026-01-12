@@ -180,5 +180,6 @@ def plot_h_clustering_heatmap(adata, mode: Literal["Deviations","Intensities"]="
         title=title,
         sample_linkage=sample_linkage,
         feature_linkage=feature_linkage,
+        cluster_type=tag,
     )
     return fig

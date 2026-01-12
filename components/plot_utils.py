@@ -828,6 +828,7 @@ def plot_cluster_heatmap_plotly(
     title: str = "Hierarchical Clustering Heatmap",
     sample_linkage: np.ndarray = None,
     feature_linkage: np.ndarray = None,
+    cluster_type: str = "centered",
 ) -> go.Figure:
     """
     Produces a “clustergram” of sample–sample distances:
@@ -872,9 +873,11 @@ def plot_cluster_heatmap_plotly(
     min_val, max_val = np.nanmin(df.values), np.nanmax(df.values)
 
     if (min_val < 0) and (max_val > 0):
-        # centered data → symmetric diverging scale
+        # centered data -> symmetric diverging scale
         abs_max = max(abs(min_val), abs(max_val))
         zmin, zmax = -abs_max, abs_max
+        if cluster_type != "centered":
+            zmin, zmax = min_val, max_val
         zmid = 0
         rev  = True
     else:
