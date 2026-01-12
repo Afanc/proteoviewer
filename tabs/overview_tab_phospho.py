@@ -405,12 +405,12 @@ def overview_tab_phospho(state: SessionState):
         Multidimensional Scaling uses
         correlation distances.
         """,
-        margin=(-475,0,0,-40),
+        margin=(-475,0,0,-80),
         styles={"z-index":"10"},
     )
 
     clustering_pane = pn.Row(
-        pn.pane.Markdown("##   Clustering", styles={"flex": "0.1", "z-index": "10"}),
+        pn.pane.Markdown("##   Clustering", styles={"flex": "0.15", "z-index": "10"}),
         cluster_info,
         pca_pane,
         make_vr(),

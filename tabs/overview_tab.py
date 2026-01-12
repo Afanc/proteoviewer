@@ -262,10 +262,6 @@ def overview_tab(state: SessionState):
                               styles={"flex":"1"},
                               margin=(0,0,0,-100),
                               )
-    #umap_pane = pn.pane.Plotly(plot_umap_2d(state.adata),
-    #                           height=500,
-    #                           sizing_mode="stretch_width",
-    #                           styles={"flex":"1"})
     # Prefer MDS when present; fall back to UMAP for backward compatibility.
     if "X_mds" in state.adata.obsm:
         emb_fig = plot_mds_2d(state.adata, title="MDS")
@@ -287,7 +283,7 @@ def overview_tab(state: SessionState):
         Multidimensional Scaling uses
         correlation distances.
         """,
-        margin=(-475,0,0,-40),
+        margin=(-475,0,0,-80),
         styles={"z-index":"10"},
     )
     clustering_pane = pn.Row(

@@ -111,13 +111,13 @@ def get_intensity_long_df(
 @log_time("Plotting precursor/peptide depth distributions")
 def plot_prec_pep_distributions(
     adata: AnnData,
-#) -> tuple[Optional[go.Figure], Optional[go.Figure]]:
-) -> tuple[Optional[go.Figure], Optional[go.Figure], Optional[go.Figure]]:
+) -> tuple[Optional[go.Figure], Optional[go.Figure], Optional[go.Figure], Optional[go.Figure]]:
     """
     Three panels:
       1) Always: donut (precursors per peptide)
       2) Proteomics only: histogram (peptides per protein). Otherwise: Unavailable placeholder.
-      3) Missed cleavages per sample (bar, colored by condition). If missing (retro-compat): Unavailable.
+      3) Missed cleavages per sample (raw + intensity-weighted) (bar, colored by condition).
+         If missing (retro-compat): Unavailable placeholder(s).
 
 
     Strict: uses only ProteoFlux-provided arrays in:
@@ -141,7 +141,7 @@ def plot_prec_pep_distributions(
             title=dict(text=title, x=0.5),
             template="plotly_white",
             width=600,
-            height=400,
+            height=300,
             margin=dict(l=10, r=10, t=60, b=10),
         )
         fig.add_annotation(
@@ -169,27 +169,6 @@ def plot_prec_pep_distributions(
         "Missing preprocessing.distributions['num_precursors_per_peptide'] in AnnData.uns "
         f"(analysis_type={analysis!r}).",
     )
-
-    #if proteomics_mode:
-    #    _require(
-    #        pep_per_prot is not None,
-    #        "Missing preprocessing.distributions['num_peptides_per_protein'] in AnnData.uns "
-    #        f"(analysis_type={analysis!r}).",
-    #    )
-    #    right_vals = pep_per_prot
-    #    right_title = "Peptides per protein"
-    #    right_xlab = "Peptides"
-    #    right_nbins = 50
-    #else:
-    #    _require(
-    #        prec_per_prot is not None,
-    #        "Missing preprocessing.distributions['num_precursors_per_protein'] in AnnData.uns "
-    #        f"(analysis_type={analysis!r}).",
-    #    )
-    #    right_vals = prec_per_prot
-    #    right_title = "Precursors per protein"
-    #    right_xlab = "Precursors"
-    #    right_nbins = 50
 
     # -----------------------
     # Left: donut (bucketed)
@@ -279,18 +258,24 @@ def plot_prec_pep_distributions(
     # -----------------------
     mc = dist.get("missed_cleavages_per_sample")
     if mc is None:
-        fig_mc = _unavailable_fig("Missed cleavages per sample")
-        return fig_prec_per_pep, fig_mid, fig_mc
+        fig_mc_raw = _unavailable_fig("Missed cleavages per sample (raw)")
+        fig_mc_w   = _unavailable_fig("Missed cleavages per sample (intensity-weighted)")
+        return fig_prec_per_pep, fig_mid, fig_mc_raw, fig_mc_w
 
     _require(
         isinstance(mc, dict) and "samples" in mc and "fraction" in mc,
         "Invalid preprocessing.distributions['missed_cleavages_per_sample']: "
-        "expected dict with keys {'samples','fraction'}.",
+        "expected dict with keys {'samples','fraction'} (and optionally 'fraction_weighted').",
     )
 
     samples = [str(s) for s in mc["samples"]]
-    frac = np.asarray(mc["fraction"], dtype=float)
-    _require(len(samples) == int(frac.size), "missed_cleavages_per_sample length mismatch.")
+    frac_raw = np.asarray(mc["fraction"], dtype=float)
+    _require(len(samples) == int(frac_raw.size), "missed_cleavages_per_sample length mismatch (raw).")
+
+    frac_w = None
+    if "fraction_weighted" in mc:
+        frac_w = np.asarray(mc["fraction_weighted"], dtype=float)
+        _require(len(samples) == int(frac_w.size), "missed_cleavages_per_sample length mismatch (weighted).")
 
     # Map samples -> condition using adata.obs
     obs = adata.obs.copy()
@@ -298,33 +283,45 @@ def plot_prec_pep_distributions(
     cond_map = obs["CONDITION"].astype(str).to_dict()
 
     conds = [cond_map.get(s, "Unknown") for s in samples]
-    df_mc = pd.DataFrame({"Sample": samples, "Condition": conds, "Fraction": frac})
+    def _make_mc_fig(frac: np.ndarray, title: str) -> go.Figure:
+        df_mc = pd.DataFrame({"Sample": samples, "Condition": conds, "Fraction": frac})
+
+        fig = px.bar(
+            df_mc,
+            x="Sample",
+            y="Fraction",
+            color="Condition",
+            category_orders={"Condition": cond_order},
+        )
+        fig.update_layout(
+            title=dict(text=title, x=0.5),
+            template="plotly_white",
+            width=600,
+            height=400,
+            margin=dict(l=10, r=10, t=60, b=10),
+            legend_title_text="Condition",
+        )
+        fig.update_yaxes(tickformat=".0%", range=[0, 1])
+        fig.update_traces(hovertemplate="%{y:.3%}<extra></extra>")
+        # Shorten sample labels on x-axis (same logic used elsewhere via _abbr)
+        short = [_abbr(s) for s in samples]
+        fig.update_xaxes(
+            tickmode="array", tickvals=samples, ticktext=short, tickangle=30
+        )
+        return fig
 
     # Stable condition order (as in obs)
     cond_order = adata.obs["CONDITION"].astype(str).unique().tolist()
-    if "Unknown" in df_mc["Condition"].unique().tolist() and "Unknown" not in cond_order:
+    if "Unknown" in set(conds) and "Unknown" not in cond_order:
         cond_order = cond_order + ["Unknown"]
 
-    fig_mc = px.bar(
-        df_mc,
-        x="Sample",
-        y="Fraction",
-        color="Condition",
-        category_orders={"Condition": cond_order},
+    fig_mc_raw = _make_mc_fig(frac_raw, "Missed cleavages per sample (raw)")
+    fig_mc_w = (
+        _make_mc_fig(frac_w, "Missed cleavages per sample (intensity-normalized)")
+        if frac_w is not None
+        else _unavailable_fig("Missed cleavages per sample (intensity-normalized)")
     )
-    fig_mc.update_layout(
-        title=dict(text="Missed cleavages per sample", x=0.5),
-        template="plotly_white",
-        width=600,
-        height=400,
-        margin=dict(l=10, r=10, t=60, b=10),
-        legend_title_text="Condition",
-    )
-    fig_mc.update_yaxes(tickformat=".0%", range=[0, 1])
-    fig_mc.update_traces(hovertemplate="%{y:.3%}<extra></extra>")
-    fig_mc.update_xaxes(tickangle=30)
-
-    return fig_prec_per_pep, fig_mid, fig_mc
+    return fig_prec_per_pep, fig_mid, fig_mc_raw, fig_mc_w
 
 @log_time("Plotting violins before/after norm")
 def plot_violin_by_group_go(
@@ -1272,13 +1269,6 @@ def plot_grouped_violin_imputation_by_sample(
                 width=offset * 1.8,
                 spanmode='hard',
                 scalemode='width',
-                #customdata=[sample] * len(sub),  # FULL sample name
-                #hovertemplate=(
-                #    "Type: %{fullData.name}<br>"   # “Measured” / “Imputed”
-                #    "Value: %{y:.3f}"
-                #    "<extra>%{customdata}</extra>" # ← only change the extra box
-                #),
-                #hovertemplate="Sample: %{customdata}<br>Type: %{fullData.name}<br>Value: %{y:.3f}<extra></extra>",
             ))
             first_seen[norm_label] = True
 

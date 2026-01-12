@@ -60,8 +60,7 @@ def preprocessing_tab(state: SessionState):
     p = plotly_section(p_fig if p_fig is not None else _placeholder_plot("Probab. filtering"),
                        height=400, flex='0.32')
     prec = plotly_section(prec_fig if prec_fig is not None else _placeholder_plot("Precursors filtering"),
-                       height=400, flex='0.32')
-    #hists = plot_filter_histograms(adata)
+                       height=400, flex='0.32', margin=(0,10,0,0))
 
     filtering_row = make_row(
         pn.pane.Markdown("##   Filtering", styles={"flex": "0.05", "z-index": "10"}),
@@ -72,7 +71,7 @@ def preprocessing_tab(state: SessionState):
         width='95vw',
     )
 
-    censor_fig = plotly_section(plot_left_censoring_histogram(adata), height=400, flex="1", margin=(0,0,0,-150))
+    censor_fig = plotly_section(plot_left_censoring_histogram(adata), height=400, flex="1", margin=(10,10,0,-150))
     censor_row = make_row(
         pn.pane.Markdown("##   Left-censoring", styles={"flex": "0.07", "z-index": "10"}),
         censor_fig,
@@ -94,13 +93,13 @@ def preprocessing_tab(state: SessionState):
     )
 
     # Quantification
-    prec_pep_fig, pep_prot_fig, missed_cleav_fig = plot_prec_pep_distributions(adata)
+    prec_pep_fig, pep_prot_fig, missed_cleav_raw_fig, missed_cleav_w_fig = plot_prec_pep_distributions(adata)
 
     prec_pep_pane = plotly_section(
         prec_pep_fig if prec_pep_fig is not None else _placeholder_plot("Precursors per peptide"),
         height=400,
         flex="0.2",
-        margin=(0,0,0,-100),
+        margin=(10,0,0,-100),
     )
 
     pep_prot_pane = plotly_section(
@@ -109,10 +108,31 @@ def preprocessing_tab(state: SessionState):
         flex="0.4",
     )
 
-    missed_cleav_pane = plotly_section(
-        missed_cleav_fig if missed_cleav_fig is not None else _placeholder_plot("Missed cleavages"),
-        height=400,
-        flex="0.4",
+    mc_mode = pn.widgets.RadioButtonGroup(
+        name="",
+        options=["Raw", "Intensity-normalized"],
+        value="Raw",
+        width=160,
+        button_type="default",
+        styles={"z-index": "10"},
+    )
+
+    mc_plot_holder = pn.Column(sizing_mode="stretch_width")
+
+    def _render_mc_plot(mode: str):
+        fig = missed_cleav_raw_fig if mode == "Raw" else missed_cleav_w_fig
+        if fig is None:
+            fig = _placeholder_plot("Missed cleavages")
+        mc_plot_holder[:] = [plotly_section(fig, height=400, flex="1")]
+
+    _render_mc_plot(mc_mode.value)
+    mc_mode.param.watch(lambda e: _render_mc_plot(e.new), "value")
+
+    missed_cleav_pane = pn.Column(
+        pn.Row(mc_mode, styles={"z-index": "10"}, margin=(10, 0, 0, 0)),
+        pn.Row(mc_plot_holder, margin=(-30, 5, 0, 0)),
+        sizing_mode="stretch_width",
+        styles={"flex": "0.4"},
     )
 
     depth_row = make_row(
@@ -126,10 +146,11 @@ def preprocessing_tab(state: SessionState):
         make_vr(),
         pn.Spacer(width=10),
         missed_cleav_pane,
-        height=420,
+        height=430,
         width='95vw',
     )
-    dyn_fig = plotly_section(plot_dynamic_range(adata), height=400)
+
+    dyn_fig = plotly_section(plot_dynamic_range(adata), height=400, margin=(10,10,0,-20))
 
     dyn_fig_row = make_row(
         pn.pane.Markdown("##   Dynamic Range", styles={"flex": "0.05"}),
@@ -148,11 +169,11 @@ def preprocessing_tab(state: SessionState):
         row=quant_content,
         background="#E8F5E9",
         width="98vw",
-        height=940
+        height=950
     )
 
     # pre/post log trasform
-    hist_fig = plotly_section(plot_intensities_histogram(adata), height=430, margin=(0,0,0,-100))
+    hist_fig = plotly_section(plot_intensities_histogram(adata), height=430, margin=(10,10,0,-100))
 
     loghistogram_row = make_row(
         pn.pane.Markdown("##   Distributions", styles={"flex": "0.05", "z-index": "10"}),
@@ -447,17 +468,6 @@ def preprocessing_tab(state: SessionState):
                                           height=500,
                                           flex="1",
                                           margin=(20,0,0,-50))
-
-    #rmad_cond_fig, cv_cond_fig = plot_grouped_violin_imputation_metrics_by_condition(adata)
-    #imput_rmad_pane = plotly_section(rmad_cond_fig,
-    #                                 height=500,
-    #                                 flex="1",
-    #                                 margin=(20,0,0,-100))
-
-    #imput_cv_pane = plotly_section(cv_cond_fig,
-    #                               height=500,
-    #                               flex="1",
-    #                               margin=(20,0,0,-50))
 
     fig_cv_ba, fig_rmad_ba = plot_grouped_violin_before_after_imputation_metrics_by_condition(adata)
     imput_rmad_ba_pane = plotly_section(fig_rmad_ba,
