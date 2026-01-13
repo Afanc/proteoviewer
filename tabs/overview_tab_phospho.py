@@ -477,6 +477,19 @@ def overview_tab_phospho(state: SessionState):
     def _min_meas_value(label: str) -> int:
         return min_meas_options[label]
 
+    # Flowthrough non-imputed datapoints per condition filter (only meaningful when has_cov)
+    ft_min_meas_sel = pn.widgets.Select(
+        name="Min / FT condition",
+        options=list(min_meas_options.keys()),
+        value=f"≥{_init_max}",
+        width=90,
+        disabled=(not has_cov),
+    )
+
+    def _min_meas_ft_value(label: str) -> int:
+        # same option mapping as min_meas_sel; we may disable/no-op this in raw mode
+        return min_meas_options[label]
+
     # Min numb. precursors options
     max_prec_options = 6 if analysis_type == "DIA" else 4
     min_prec_options = {f"≥{i}": i for i in range(0, max_prec_options)}
@@ -500,6 +513,32 @@ def overview_tab_phospho(state: SessionState):
     )
     clear_search = pn.widgets.Button(name="Clear", width=80)
     clear_search.on_click(lambda _e: setattr(search_input, "value", ""))
+
+    def _refresh_min_meas_widgets(event=None) -> None:
+        # Keep option ranges aligned to the currently selected contrast
+        mx = _max_reps_for_contrast(contrast_sel.value)
+        nonlocal min_meas_options
+        min_meas_options = _mk_min_meas_options(mx)
+
+        # Update both selects (phospho + FT) with the new option set
+        opts = list(min_meas_options.keys())
+        min_meas_sel.options = opts
+        ft_min_meas_sel.options = opts
+
+        # Default both to max reps (consistent with current behavior)
+        min_meas_sel.value = f"≥{mx}"
+        ft_min_meas_sel.value = f"≥{mx}"
+
+    def _update_ft_filter_enable(_=None) -> None:
+        # FT filter is a no-op in raw volcano mode; disable it so UI matches semantics
+        if not has_cov:
+            ft_min_meas_sel.disabled = True
+            return
+        ft_min_meas_sel.disabled = (volcano_src_sel.value == "Phospho (raw)")
+
+    contrast_sel.param.watch(_refresh_min_meas_widgets, "value")
+    volcano_src_sel.param.watch(_update_ft_filter_enable, "value")
+    _update_ft_filter_enable()
 
     # If the user clears the phosphosite selection, we must also clear the export "click" state.
     # Plotly click_data is sticky and does not reliably emit an "empty" event.
@@ -567,6 +606,7 @@ def overview_tab_phospho(state: SessionState):
         show_imp_cond1=show_imp_cond1,
         show_imp_cond2=show_imp_cond2,
         min_nonimp_per_cond=pn.bind(_min_meas_value, min_meas_sel),
+        min_nonimp_ft_per_cond=(0 if (not has_cov) else pn.bind(_min_meas_ft_value, ft_min_meas_sel)),
         min_precursors=pn.bind(_min_prec_value, min_prec_sel),
         highlight=search_input,
         highlight_group=group_ids_dmap,
@@ -1144,7 +1184,10 @@ def overview_tab_phospho(state: SessionState):
                 min_prec_sel,
                 margin=(-30,0,0,0),
             ),
-
+            pn.Spacer(width=10),
+            make_vr(),
+            pn.Spacer(width=10),
+            ft_min_meas_sel,
             pn.Spacer(width=10),
             make_vr(),
             pn.Spacer(width=20),

@@ -1092,6 +1092,7 @@ def plot_volcanoes(
     show_imp_cond1: bool = True,
     show_imp_cond2: bool = True,
     min_nonimp_per_cond: int = 0,
+    min_nonimp_ft_per_cond: int = 0,
     min_precursors: int = 1,
     highlight: str = None,
     highlight_group: Optional[Sequence[str]] = None,
@@ -1271,6 +1272,33 @@ def plot_volcanoes(
     measured_mask, imp1_mask, imp2_mask = get_volcano_classification_masks(
         adata, contrast, min_nonimp_per_cond, min_precursors
     )
+
+    # --------------------------------------------
+    # Optional: Flowthrough (covariate) consistency filter
+    # Applies ONLY for adjusted + flowthrough volcanoes.
+    # In raw phospho volcano mode, this is a no-op by design.
+    # --------------------------------------------
+    thr_ft = int(min_nonimp_ft_per_cond or 0)
+    if has_cov and thr_ft > 0 and (data_type in {"default", "flowthrough"}):
+        # Use covariate raw layer if present; if absent, do not filter (fail-safe, viewer-only).
+        raw_ft = adata.layers.get("raw_covariate", None)
+        if raw_ft is not None:
+            mat_ft = raw_ft.toarray() if hasattr(raw_ft, "toarray") else raw_ft
+
+            cond = adata.obs["CONDITION"].astype(str).to_numpy()
+            grp1, grp2 = contrast.split("_vs_")
+            idx1_ft = (cond == grp1)
+            idx2_ft = (cond == grp2)
+
+            n1_ft = np.sum(~np.isnan(mat_ft[idx1_ft, :]), axis=0).astype(int)
+            n2_ft = np.sum(~np.isnan(mat_ft[idx2_ft, :]), axis=0).astype(int)
+
+            # Keep if FT is measured >=thr in at least one of the two conditions
+            ft_keep = (n1_ft >= thr_ft) | (n2_ft >= thr_ft)
+
+            measured_mask &= ft_keep
+            imp1_mask     &= ft_keep
+            imp2_mask     &= ft_keep
 
     sig_up   = (df_q[contrast] < sign_threshold) & (x > 0)
     sig_down = (df_q[contrast] < sign_threshold) & (x < 0)

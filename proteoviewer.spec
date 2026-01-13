@@ -1,7 +1,7 @@
 # -*- mode: python -*-
 
 block_cipher = None
-VERSION = "1.8.1" #until we package that thing
+VERSION = "1.8.2" #until we package that thing
 
 from PyInstaller.utils.hooks import copy_metadata
 from glob import glob
