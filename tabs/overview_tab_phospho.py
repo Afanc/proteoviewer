@@ -459,7 +459,7 @@ def overview_tab_phospho(state: SessionState):
         grp1, grp2 = contrast.split("_vs_")
         n1 = int((adata.obs["CONDITION"] == grp1).sum())
         n2 = int((adata.obs["CONDITION"] == grp2).sum())
-        return max(n1, n2)
+        return min(n1, n2)
 
     def _mk_min_meas_options(max_reps: int) -> dict[str, int]:
         # labels "≥1", "≥2", ... mapped to int values
