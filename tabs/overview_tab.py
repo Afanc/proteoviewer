@@ -340,24 +340,24 @@ def overview_tab(state: SessionState):
     contrast_sel.param.watch(_update_toggle_labels, "value")
 
     # Non-imputed datapoints per condition filter (same as phospho)
-    def _max_reps_for_contrast(contrast: str) -> int:
+    def _min_max_reps_for_contrast(contrast: str) -> int:
         grp1, grp2 = contrast.split("_vs_")
         n1 = int((adata.obs["CONDITION"] == grp1).sum())
         n2 = int((adata.obs["CONDITION"] == grp2).sum())
-        return min(n1, n2)
+        return min(n1, n2), max(n1,n2)
 
     def _mk_min_meas_options(max_reps: int) -> dict[str, int]:
         # labels "≥1", "≥2", ... mapped to int values
         return {f"≥{i}": i for i in range(1, max_reps + 1)}
 
     # initialize from the first contrast
-    _init_max = _max_reps_for_contrast(contrast_sel.value)
+    _init_min, _init_max = _min_max_reps_for_contrast(contrast_sel.value)
     min_meas_options = _mk_min_meas_options(_init_max)
 
     min_meas_sel = pn.widgets.Select(
         name="Min / condition",
         options=list(min_meas_options.keys()),
-        value=f"≥{_init_max}",
+        value=f"≥{_init_min}",
         width=80,
     )
 
