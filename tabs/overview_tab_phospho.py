@@ -194,6 +194,7 @@ def _build_pipeline_summary(adata) -> str:
     pep_step = filtering.get("pep", {})
     prec_step = filtering.get("prec", {})
     censor_step= filtering.get("censor", {})
+    loc_step = filtering.get("loc", {})
 
     cont_txt, _ = _fmt_step(cont_step, "n/a")
     q_txt, q_thr_txt = _fmt_step(q_step, "n/a")
@@ -201,6 +202,8 @@ def _build_pipeline_summary(adata) -> str:
     pep_op = _pep_dir_symbol(pep_step)
     prec_txt, prec_thr_txt = _fmt_step(prec_step, "n/a")
     censor_txt, censor_thr_txt= _fmt_step(censor_step,  "n/a")
+    loc_txt, loc_thr_txt = _fmt_step(loc_step, "n/a")
+    loc_mode = str(loc_step.get("mode", "N/A")).replace("filter_", "")
 
     contaminants_files = [os.path.basename(p) for p in cont_step.get("files", [])]
 
@@ -249,6 +252,7 @@ def _build_pipeline_summary(adata) -> str:
             - PEP {pep_op} {pep_thr_txt}: {pep_txt}
             - Min. run evidence count = {prec_thr_txt}: {prec_txt}
             - Left Censoring ≤ {censor_thr_txt}: {censor_txt}
+            - Phospho Localization Score ({loc_mode}, thr={loc_thr_txt}): {loc_txt}
         - **Normalization**: {norm_methods_str}
         - **Imputation**: {imp_method}
         - **Differential expression**: eBayes via {ebayes_method}
