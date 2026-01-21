@@ -37,7 +37,7 @@ def plot_barplot_proteins_per_sample(
     adata,
     matrix_key: str = "normalized",
     bar_color: str = "teal",
-    title: str = "Proteins Detected per Sample",
+    title: str = "Protein IDs by Sample and Category",
     width: int = 900,
     height: int = 500,
     sort_by: str = "sample",
@@ -47,7 +47,7 @@ def plot_barplot_proteins_per_sample(
     """
     # call the generic bar helper
 
-    fig = plot_stacked_proteins_by_category(adata, sort_by=sort_by)
+    fig = plot_stacked_proteins_by_category(adata, sort_by=sort_by, title=title)
     return fig
 
 @log_time("Plotting violins metrics per sample")

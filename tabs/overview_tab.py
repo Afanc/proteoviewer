@@ -67,8 +67,10 @@ def overview_tab(state: SessionState):
     filtering      = preproc_cfg.get("filtering", {})
     normalization  = preproc_cfg.get("normalization", {})
     imputation     = preproc_cfg.get("imputation", {})
-    analysis_type  = preproc_cfg.get("analysis_type", "DIA")
+    analysis_type  = preproc_cfg.get("analysis_type", "")
     proteomics_mode = analysis_type in {"dia", "dda", "proteomics"}
+    peptidomics_mode = analysis_type in {"peptido", "peptidomics"}
+    phospho_mode = analysis_type in {"phospho", "phosphoproteomics"}
     ebayes_method  = analysis_cfg.get("ebayes_method", "limma")
     input_layout  = preproc_cfg.get("input_layout", "")
 
@@ -197,10 +199,17 @@ def overview_tab(state: SessionState):
     def _sort_arg(mode: str) -> str:
         return "condition" if mode == "By condition" else "sample"
 
+    barplot_title = "Protein IDs by Sample and Category"
+    if peptidomics_mode:
+        barplot_title = "Peptide IDs by Sample and Category"
+    if phospho_mode:
+        barplot_title = "Phosphosites by Sample and Category"
+
     hist_ID_dmap = pn.bind(
         plot_barplot_proteins_per_sample,
         adata=adata,
         sort_by=pn.bind(_sort_arg, id_sort_toggle),
+        title=barplot_title,
     )
 
     hist_plot_pane = pn.pane.Plotly(hist_ID_dmap,

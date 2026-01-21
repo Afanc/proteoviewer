@@ -330,6 +330,7 @@ def overview_tab_phospho(state: SessionState):
         plot_barplot_proteins_per_sample,
         adata=adata,
         sort_by=pn.bind(_sort_arg, id_sort_toggle),
+        title="Phosphosites by Sample and Category"
     )
 
     hist_plot_pane = pn.pane.Plotly(

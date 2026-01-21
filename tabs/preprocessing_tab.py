@@ -150,7 +150,7 @@ def preprocessing_tab(state: SessionState):
         width='95vw',
     )
 
-    dyn_fig = plotly_section(plot_dynamic_range(adata), height=400, margin=(10,10,0,-20))
+    dyn_fig = plotly_section(plot_dynamic_range(adata), height=400, margin=(10,10,0,-15))
 
     dyn_fig_row = make_row(
         pn.pane.Markdown("##   Dynamic Range", styles={"flex": "0.05"}),

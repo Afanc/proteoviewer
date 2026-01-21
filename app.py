@@ -412,8 +412,8 @@ def _lazy_tabs(state):
     if state.adata.uns['analysis'].get('analysis_type'.lower(), "DIA") == "phospho":
         specs = [
             ("Overview",      lambda: overview_tab_phospho(state)),
-            ("Preprocessing-PO", lambda: preprocessing_tab(state)),
-            ("Analysis-PO", lambda: analysis_tab(state)),
+            ("Preprocessing-PO4", lambda: preprocessing_tab(state)),
+            ("Analysis-PO4", lambda: analysis_tab(state)),
         ]
 
     tabs = pn.Tabs(dynamic=True, sizing_mode="stretch_width")
