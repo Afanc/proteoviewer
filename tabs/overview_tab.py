@@ -388,9 +388,9 @@ def overview_tab(state: SessionState):
     contrast_sel.param.watch(_on_contrast_change, "value")
 
     # Min numb. precursors options
-    max_prec_options = 6 if analysis_type == "DIA" else 4
+    max_prec_options = 6 if proteomics_mode else 4
     min_prec_options = {f"≥{i}": i for i in range(0, max_prec_options)}
-    min_prec_title = "pep" if analysis_type == "DIA" else "prec"
+    min_prec_title = "pep" if proteomics_mode else "prec"
 
     min_prec_sel = pn.widgets.Select(
         name=f"Consistent {min_prec_title}",

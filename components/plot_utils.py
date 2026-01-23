@@ -100,7 +100,7 @@ def get_volcano_classification_masks(adata, contrast: str, min_nonimp_per_cond: 
     imp1     &= (n2 >= min_nonimp_per_cond)
     imp2     &= (n1 >= min_nonimp_per_cond)
 
-    cons_prefix = "CONSISTENT_PEPTIDE" if adata.uns["preprocessing"].get("analysis_type").lower() == "dia" else "CONSISTENT_PRECURSOR"
+    cons_prefix = "CONSISTENT_PEPTIDE" if adata.uns["preprocessing"].get("analysis_type") in {"DIA", "proteomics"} else "CONSISTENT_PRECURSOR"
 
     prec_keep = np.ones(len(adata.var_names), dtype=bool)
     c1_key = f"{cons_prefix}_{grp1}"
@@ -1114,7 +1114,7 @@ def plot_volcanoes(
     genes   = np.array(adata.var.get("GENE_NAMES", pd.Series(index=adata.var_names, dtype=str)).astype(str))
     protids = np.array(adata.var_names, dtype=str)
 
-    proteomics_mode = True if adata.uns["analysis"]["analysis_type"] == "DIA" else False
+    proteomics_mode = True if adata.uns["analysis"]["analysis_type"] in {"DIA", "proteomics"} else False
     if proteomics_mode:
         sites = genes
     else:
