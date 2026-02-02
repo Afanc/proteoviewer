@@ -152,7 +152,7 @@ def plot_intensity_by_protein(state, contrast, protein, layer):
     else:
         col = list(map(str, ad.var_names)).index(str(protein))
 
-    # pick your normalized layer (fallback to .X)
+    # pick normalized layer (fallback to .X)
     proc_data = ad.X
     intensity_scale = "Log Intensity"
     is_spectral = False
@@ -210,6 +210,12 @@ def plot_intensity_by_protein(state, contrast, protein, layer):
         marker_pattern_fillmode="overlay",
         marker_pattern_size=6,
         marker_pattern_solidity=0.3
+    )
+
+    # Shorten sample names on x-axis (display only; data untouched)
+    fig.update_xaxes(
+        tickvals=sample_order,
+        ticktext=_shorten_labels(sample_order),
     )
 
     # adjust legend: show each condition once, hide imputed from condition traces

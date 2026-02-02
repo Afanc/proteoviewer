@@ -571,7 +571,14 @@ def plot_dynamic_range(
     sorted descending, plotted on log10 scale vs. rank.
     """
     mat = adata.layers['raw']
-    vals = np.asarray(np.nanmean(mat, axis=0)).ravel()
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            message="Mean of empty slice",
+            category=RuntimeWarning,
+        )
+
+        vals = np.asarray(np.nanmean(mat, axis=0)).ravel()
 
     # 1) text
     mode = str(adata.uns.get("preprocessing", {}).get("analysis_type", "")).lower()

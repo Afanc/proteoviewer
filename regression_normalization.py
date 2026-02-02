@@ -17,7 +17,13 @@ def compute_reference_values(
     n_prots, n_samps = mat.shape
 
     # Precompute per-protein means (for global tile and local‐fallback)
-    prot_means = np.nanmean(mat, axis=1)
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            message="Mean of empty slice",
+            category=RuntimeWarning,
+        )
+        prot_means = np.nanmean(mat, axis=1)
 
     # GLOBAL / NONE: tile the vector
     if scale is None or scale == "global":
