@@ -232,7 +232,10 @@ def _build_pipeline_summary(adata) -> str:
     if "rf" in imp_method and "rf_max_iter" in imputation:
         extras.append(f"rf_max_iter={imputation['rf_max_iter']}")
     if "lc_conmed" in imp_method and "lc_conmed_lod_k" in imputation:
-        extras.append(f"lod_k={imputation['lc_conmed_lod_k']}")
+        lc_conmed_lod_k = preproc.get("imputation").get("lc_conmed_lod_k", "NA")
+        lc_conmed_min_obs = preproc.get("imputation").get("lc_conmed_in_min_obs", "1")
+        extras.append(f"lod_k={lc_conmed_lod_k}")
+        extras.append(f"min_obs={lc_conmed_min_obs}")
     if extras:
         imp_method = f"{imp_method} ({', '.join(extras)})"
 
@@ -521,7 +524,7 @@ def overview_tab_phospho(state: SessionState):
 
     def _refresh_min_meas_widgets(event=None) -> None:
         # Keep option ranges aligned to the currently selected contrast
-        mx = _max_reps_for_contrast(contrast_sel.value)
+        _mn, mx = _min_max_reps_for_contrast(contrast_sel.value)
         nonlocal min_meas_options
         min_meas_options = _mk_min_meas_options(mx)
 

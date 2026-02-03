@@ -185,7 +185,6 @@ def plot_stacked_proteins_by_category(
             "unique"  : "red",
         }
 
-    # --- NEW: decide x order without touching colors ---
     if sort_by == "condition":
         # group by condition (A,B,C...), then sort samples by name within each
         ordered_samples = []
@@ -215,8 +214,8 @@ def plot_stacked_proteins_by_category(
                 marker_line_color=[cond_color_map[cond]] * len(xs),
                 marker_line_width=2,
                 showlegend=False,                    # controlled by dummy legend items below
-                legendgroup=f"COND::{cond}",         # <-- link to condition legend item
-                customdata=np.array(samples),  # FULL names
+                legendgroup=f"COND::{cond}",
+                customdata=np.array(xs, dtype=object),
                 hovertemplate=(f"Category: {cat.capitalize()}<br>"
                                "Sample: %{customdata}<br>"
                                "Count: %{y}<extra></extra>"),

@@ -143,9 +143,10 @@ def overview_tab(state: SessionState):
         imp_method += f", rf_max_iter={rf_max_iter}"
 
     if "lc_conmed" in imp_method:
-        lc_conmed_lod_k = preproc_cfg.get("imputation").get("lc_conmed_lod_k")
+        lc_conmed_lod_k = preproc_cfg.get("imputation").get("lc_conmed_lod_k", "NA")
+        lc_conmed_min_obs = preproc_cfg.get("imputation").get("lc_conmed_in_min_obs", "1")
         imp_method += f", lod_k={lc_conmed_lod_k}"
-
+        imp_method += f", min_obs={lc_conmed_min_obs}"
 
     # build a single Markdown string
     summary_md = textwrap.dedent(f"""
@@ -377,7 +378,7 @@ def overview_tab(state: SessionState):
     # when the contrast changes, rebuild options (and clamp current value if needed)
     def _on_contrast_change(event):
         nonlocal min_meas_options
-        max_reps = _max_reps_for_contrast(event.new)
+        _mn, max_reps = _min_max_reps_for_contrast(event.new)
         min_meas_options = _mk_min_meas_options(max_reps)
         # keep the same label if still valid, otherwise fall back to the largest allowed
         current = min_meas_sel.value or "≥1"
@@ -420,7 +421,7 @@ def overview_tab(state: SessionState):
         if t in set(names):
             return t
 
-        # fallback: UniProt → gene
+        # fallback: UniProt -> gene
         try:
             idx = ad.var_names.get_loc(t)  # exact UID match
             gene = names.iloc[idx]
@@ -428,10 +429,18 @@ def overview_tab(state: SessionState):
         except KeyError:
             return t
 
+    search_input_name = "Search Protein"
+    placeholder_txt="Gene name or Uniprot ID"
+    options_list=list(state.adata.var["GENE_NAMES"]) + list(state.adata.var_names)
+    if peptidomics_mode:
+        search_input_name = "Search Peptide"
+        placeholder_txt = "Peptide Sequence"
+        options_list=list(state.adata.var_names)
+
     search_input = pn.widgets.AutocompleteInput(
-        name="Search Protein",
-        options=list(state.adata.var["GENE_NAMES"]) + list(state.adata.var_names),
-        placeholder="Gene name or Uniprot ID",
+        name=search_input_name,
+        options=options_list,
+        placeholder=placeholder_txt,
         width=200,
         case_sensitive=False,
     )
