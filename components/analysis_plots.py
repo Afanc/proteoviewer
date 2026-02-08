@@ -9,7 +9,7 @@ from scipy.cluster.hierarchy import linkage, leaves_list
 from scipy.spatial.distance import squareform
 from components.plot_utils import plot_cluster_heatmap_plotly
 
-from utils import log_time
+from utils.utils import log_time
 
 def _get_contrast_index(adata, contrast: str) -> int:
     names = adata.uns.get("contrast_names")

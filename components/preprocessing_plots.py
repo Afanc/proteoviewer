@@ -18,8 +18,8 @@ from components.plot_utils import (
     color_ticks_by_condition,
     _abbr,
 )
-from regression_normalization import compute_reference_values, compute_MA, fit_regression
-from utils import logger, log_time
+from components.regression_normalization import compute_reference_values, compute_MA, fit_regression
+from utils.utils import logger, log_time
 
 def _placeholder_plot(title: str, subtitle: str = "Not available for this dataset"):
     fig = go.Figure()

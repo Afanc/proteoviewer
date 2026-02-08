@@ -1,6 +1,6 @@
 import panel as pn
 from concurrent.futures import ThreadPoolExecutor
-from session_state import SessionState
+from utils.session_state import SessionState
 from components.preprocessing_plots import (
     plot_filter_histograms,
     plot_dynamic_range,
@@ -25,8 +25,8 @@ from components.texts import (
     intro_preprocessing_text,
     log_transform_text
 )
-from utils import logger, log_time
-from layout_utils import plotly_section, make_vr, make_hr, make_section, make_row, FRAME_STYLES
+from utils.utils import logger, log_time
+from utils.layout_utils import plotly_section, make_vr, make_hr, make_section, make_row, FRAME_STYLES
 from types import SimpleNamespace
 
 executor = ThreadPoolExecutor()

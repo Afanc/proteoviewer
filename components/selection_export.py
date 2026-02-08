@@ -9,7 +9,7 @@ import numpy as np
 import pandas as pd
 import panel as pn
 
-from session_state import SessionState
+from utils.session_state import SessionState
 
 
 @dataclass(frozen=True)

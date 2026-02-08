@@ -2,7 +2,7 @@ import os
 import re
 import panel as pn
 from functools import lru_cache
-from session_state import SessionState
+from utils.session_state import SessionState
 from components.overview_plots import (
     plot_barplot_proteins_per_sample,
     plot_violin_cv_rmad_per_condition,
@@ -25,8 +25,8 @@ from components.texts import (
     log_transform_text
 )
 from components.string_links import get_string_link
-from layout_utils import plotly_section, make_vr, make_hr, make_section, make_row, FRAME_STYLES, FRAME_STYLES_TALL, FRAME_STYLES_SHORT
-from utils import logger, log_time
+from utils.layout_utils import plotly_section, make_vr, make_hr, make_section, make_row, FRAME_STYLES, FRAME_STYLES_TALL, FRAME_STYLES_SHORT
+from utils.utils import logger, log_time
 import textwrap
 
 def _fmt_files_list(files, max_items=6):

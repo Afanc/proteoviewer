@@ -15,7 +15,7 @@ from typing import List, Sequence, Optional, Dict, Tuple, Union, Literal
 from anndata import AnnData
 from matplotlib.colors import LinearSegmentedColormap
 import matplotlib.patches as mpatches
-from utils import logger, log_time
+from utils.utils import logger, log_time
 from functools import lru_cache
 
 def _abbr(s, head=12, tail=6):

@@ -4,14 +4,14 @@ import uuid
 
 import panel as pn
 
-from session_state import SessionState
+from utils.session_state import SessionState
 from tabs.overview_tab import overview_tab
 from tabs.overview_tab_phospho import overview_tab_phospho
 from tabs.preprocessing_tab import preprocessing_tab
 from tabs.analysis_tab import analysis_tab
 
-from layout_utils import make_vr, make_hr
-from utils import logger, log_time, logging  # keep as-is; used elsewhere
+from utils.layout_utils import make_vr, make_hr
+from utils.utils import logger, log_time, logging  # keep as-is; used elsewhere
 
 from pathlib import Path
 import importlib.metadata as importlib_metadata
@@ -528,8 +528,8 @@ def build_app():
         # Optional autoload in dev (unchanged)
         try:
             from anndata import read_h5ad
-            #adata = read_h5ad("proteoflux_results_phospho.h5ad")
-            adata = read_h5ad("proteoflux_results.h5ad")
+            adata = read_h5ad("data/proteoflux_results_phospho.h5ad")
+            #adata = read_h5ad("proteoflux_results.h5ad")
             _load(adata, "proteoflux_results.h5ad")
             logging.info("DEV autoload successful.")
         except Exception:

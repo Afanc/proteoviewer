@@ -14,7 +14,7 @@ from components.analysis_plots import (
     plot_h_clustering_heatmap,
 )
 
-from layout_utils import plotly_section, make_vr, make_hr, make_section, make_row, FRAME_STYLES
+from utils.layout_utils import plotly_section, make_vr, make_hr, make_section, make_row, FRAME_STYLES
 
 def analysis_tab(state):
     adata = state.adata

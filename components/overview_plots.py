@@ -8,7 +8,7 @@ import plotly.express as px
 from plotly.subplots import make_subplots
 from components.plot_utils import plot_stacked_proteins_by_category, plot_violins, compute_metric_by_condition, get_color_map, plot_cluster_heatmap_plotly, plot_volcanoes, get_volcano_classification_masks
 
-from utils import logger, log_time
+from utils.utils import logger, log_time
 
 def _shorten_labels(labels, head=6, tail=4, sep="…"):
     """

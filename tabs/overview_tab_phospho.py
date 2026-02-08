@@ -11,7 +11,7 @@ import numpy as np
 import pandas as pd
 import panel as pn
 from bokeh.models.widgets.tables import NumberFormatter
-from session_state import SessionState
+from utils.session_state import SessionState
 
 from components.overview_plots import (
     plot_barplot_proteins_per_sample,
@@ -29,8 +29,8 @@ from components.selection_export import SelectionExportSpec, make_volcano_select
 from components.plot_utils import plot_pca_2d, plot_umap_2d, plot_mds_2d
 from components.string_links import get_string_link
 from components.texts import intro_preprocessing_text, log_transform_text  # keep parity
-from layout_utils import plotly_section, make_vr, make_hr, make_section, make_row, FRAME_STYLES, FRAME_STYLES_TALL, FRAME_STYLES_SHORT
-from utils import log_time, logger
+from utils.layout_utils import plotly_section, make_vr, make_hr, make_section, make_row, FRAME_STYLES, FRAME_STYLES_TALL, FRAME_STYLES_SHORT
+from utils.utils import log_time, logger
 
 
 # ---------- Small utilities (safe to hoist later into helpers modules) ----------
