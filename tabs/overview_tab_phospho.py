@@ -571,9 +571,8 @@ def overview_tab_phospho(state: SessionState):
         options=list(set(adata.var.get("GENE_NAMES", pd.Series(dtype=str)))) +
                 list(set(adata.var.get("PARENT_PROTEIN", pd.Series(dtype=str)))),
         case_sensitive=False,
-        width=180,
+        width=200,
         styles={"z-index": "10"},
-        margin=(2, 0, 0, 0),
     )
 
     def _group_ids(pattern, field):
@@ -584,30 +583,101 @@ def overview_tab_phospho(state: SessionState):
 
     group_ids_dmap = pn.bind(_group_ids, search_input_group, search_field_sel)
 
-    def _fmt_status(ids_pat, pat_text):
-        if not (pat_text and str(pat_text).strip()):
+    # Cohort via FileInput, with robust reset & single status line
+    _file_text = pn.widgets.TextAreaInput(visible=False)  # reactive bind target
+    cohort_filename = pn.widgets.StaticText(name="", value="")
+    file_holder = pn.Column()
+
+    def _new_file_input():
+        fi = pn.widgets.FileInput(accept=".txt,.csv,.tsv", multiple=False, width=200)
+        def _on_change(event):
+            b = event.new or b""
+            try:
+                txt = b.decode("utf-8", errors="ignore")
+            except Exception:
+                txt = ""
+            _file_text.value = txt
+            cohort_filename.value = fi.filename or ""
+            # EITHER-OR: if a file is provided, clear any existing pattern
+            if txt.strip():
+                try:
+                    search_input_group.value = ""
+                    if hasattr(search_input_group, "value_input"):
+                        search_input_group.value_input = ""
+                except Exception:
+                    pass
+        fi.param.watch(_on_change, "value")
+        return fi
+
+    file_upload = _new_file_input()
+    file_holder.objects = [file_upload]
+
+    def _parse_file_text(text: str) -> list[str]:
+        if not text:
+            return []
+        tokens = re.split(r"[,\t;\r\n\s]+", text)
+        return sorted({t.strip() for t in tokens if t and not t.isspace()})
+
+    def _file_ids(file_text: str, field: str):
+        items = _parse_file_text(file_text or "")
+        try:
+            return sorted(resolve_exact_list_to_uniprot_ids(adata, field, items))
+        except Exception:
+            return []
+
+    group_file_ids_dmap = pn.bind(_file_ids, _file_text, search_field_sel)
+
+    def _either(ids_pat, ids_file, pat_text, file_text):
+        use_file = bool((file_text or "").strip())
+        return ids_file if use_file else ids_pat
+
+    group_ids_selected = pn.bind(_either, group_ids_dmap, group_file_ids_dmap, search_input_group, _file_text)
+
+    def _fmt_status(ids_pat, ids_file, fname, pat_text, file_text):
+        if not (pat_text and str(pat_text).strip()) and not (file_text and str(file_text).strip()):
             return ""
-        n = len(ids_pat or [])
+        active_from_file = bool((file_text or "").strip())
+        n = len(ids_file or []) if active_from_file else len(ids_pat or [])
         label = "match" if n == 1 else "matches"
+        _ = os.path.basename(str(fname)) if (active_from_file and fname) else ""
         return f"**{n} {label}**"
 
-    status_md = pn.bind(_fmt_status, group_ids_dmap, search_input_group)
+    status_md = pn.bind(_fmt_status, group_ids_dmap, group_file_ids_dmap, cohort_filename, search_input_group, _file_text)
     status_pane = pn.pane.Markdown(status_md, margin=(-10, 0, 0, 0), align="center")
 
-    def _has_query(pat_text):
-        return bool((pat_text or "").strip())
+    def _has_query(pat_text, file_text):
+        return bool((pat_text or "").strip()) or bool((file_text or "").strip())
 
-    status_pane.visible = pn.bind(_has_query, search_input_group)
+    status_pane.visible = pn.bind(_has_query, search_input_group, _file_text)
 
     clear_all = pn.widgets.Button(name="Clear", width=80)
-    clear_all.on_click(lambda _e: setattr(search_input_group, "value", ""))
+    def _on_clear_all(_event):
+        search_input_group.value = ""
+        _file_text.value = ""
+        cohort_filename.value = ""
+        # recreate FileInput to ensure browsers fire change for same file
+        new_file = _new_file_input()
+        file_holder.objects = [new_file]
+        nonlocal file_upload
+        file_upload = new_file
+    clear_all.on_click(_on_clear_all)
+
+    # EITHER-OR: if user types a non-empty pattern, clear any uploaded file
+    def _on_pattern_change(event):
+        val = event.new or ""
+        if str(val).strip():
+            _file_text.value = ""
+            cohort_filename.value = ""
+            new_file = _new_file_input()
+            file_holder.objects = [new_file]
+            nonlocal file_upload
+            file_upload = new_file
+    search_input_group.param.watch(_on_pattern_change, "value")
 
     volcano_dmap = pn.bind(
         plot_volcanoes_wrapper,
         state=state,
         contrast=contrast_sel,
-        #data_type="phospho",
-        #data_type=pn.bind(_volcano_dtype, volcano_src_sel),
         data_type=(lambda: "phospho") if not has_cov else pn.bind(_volcano_dtype, volcano_src_sel),
         color_by=color_by,
         show_measured=show_measured,
@@ -617,7 +687,8 @@ def overview_tab_phospho(state: SessionState):
         min_nonimp_ft_per_cond=(0 if (not has_cov) else pn.bind(_min_meas_ft_value, ft_min_meas_sel)),
         min_precursors=pn.bind(_min_prec_value, min_prec_sel),
         highlight=search_input,
-        highlight_group=group_ids_dmap,
+        #highlight_group=group_ids_dmap,
+        highlight_group=group_ids_selected,
         sign_threshold=0.05,
         width=None,
         height=900,
@@ -660,11 +731,12 @@ def overview_tab_phospho(state: SessionState):
     volcano_plot.param.watch(lambda e: _on_volcano_click_data(e.new), "click_data")
 
     def _push_cohort_ids(_=None) -> None:
-        _on_cohort_ids(list(group_ids_dmap() or []))
+        _on_cohort_ids(list(group_ids_selected() or []))
 
     # Cohort changes must update the export state immediately (priority: click > cohort > lasso).
     search_input_group.param.watch(_push_cohort_ids, "value")
     search_field_sel.param.watch(_push_cohort_ids, "value")
+    _file_text.param.watch(_push_cohort_ids, "value")
     clear_all.on_click(lambda _e: _push_cohort_ids())
 
     # Clear exporter click state when phosphosite is cleared.
@@ -1201,7 +1273,11 @@ def overview_tab_phospho(state: SessionState):
             pn.Spacer(width=20),
             pn.Column(search_field_sel),
             pn.Spacer(width=10),
-            pn.Column(search_input_group),
+            pn.Column(
+                search_input_group,
+                file_holder,
+                margin=(-25,0,0,0)
+            ),
             pn.Column(pn.Row(clear_all, margin=(13, 0, 0, 0)), status_pane),
             pn.Spacer(width=10),
             make_vr(),

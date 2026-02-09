@@ -412,7 +412,28 @@ def resolve_exact_list_to_uniprot_ids(adata, field: str, items: List[str] | Set[
         return set(ids[mask])
 
     else:  # "UniProt IDs"
-        return set(u for u in ids if u in items)
+        # Default behavior (proteo/peptido): exact match on var_names
+        # Phospho behavior: var_names are typically "<UNIPROT>|<SITE>" (e.g. Q96JB3|S584).
+        # In that case, allow an uploaded UniProt accession to match ALL sites for that protein.
+
+        # normalize items a tiny bit (isoforms)
+        items_norm = set()
+        for x in items:
+            s = str(x).strip()
+            if not s:
+                continue
+            items_norm.add(s)
+            items_norm.add(s.split("-", 1)[0])  # Q03169-2 -> Q03169
+
+        ids_arr = np.array(ids, dtype=str)
+
+        # if any var_name looks phospho-like, match by prefix before '|'
+        if np.any(np.char.find(ids_arr, "|") >= 0):
+            parents = np.array([u.split("|", 1)[0] for u in ids_arr], dtype=str)
+            mask = np.isin(ids_arr, list(items_norm)) | np.isin(parents, list(items_norm))
+            return set(ids_arr[mask])
+
+        return set(u for u in ids_arr if u in items_norm)
 
 @log_time("Plotting Peptide Trends (centered)")
 def plot_peptide_trends_centered(adata, uniprot_id: str, contrast: str) -> go.Figure:
