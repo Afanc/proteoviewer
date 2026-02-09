@@ -2,7 +2,7 @@
 
 block_cipher = None
 
-VERSION = "1.8.5" #until we package that thing
+VERSION = "1.8.5" #until we properly package this
 
 from PyInstaller.utils.hooks import copy_metadata
 from glob import glob
@@ -25,34 +25,18 @@ datas += [(str(p), "resources") for p in resource_files]
 print("Resources picked up:", [p.name for p in resource_files])
 
 a = Analysis(
-    ['app.py'],           # your entry-point
+    ['app.py'],
     pathex=[],
-    #binaries=[],          # let PyInstaller auto-collect
-    # copy_metadata returns a list of (src, dest) pairs—exactly what PyInstaller wants
     datas=datas,
     hiddenimports=[
         'panel.io.server',
         'hatchling',
-        #'PIL._tkinter_finder',
         'sklearn._cyutility',
         'fastcluster',
         'binascii',
         'skmisc',
-        #'tkinter',
-        #'tkinter.filedialog',
-        #'asyncio.base_events',
-        #'asyncio.events',
-        #'asyncio.format_helpers',
-        #'asyncio.futures',
-        #'asyncio.protocols',
-        #'asyncio.tasks',
-        #'asyncio.transports',
-        #'asyncio.selector_events',
-        #'asyncio.windows_events',
-        #'asyncio.windows_utils',
     ],
     hookspath=[],
-    #runtime_hooks=[],
     runtime_hooks=['rthook_logging.py'],
     excludes=[],
     cipher=block_cipher,
@@ -79,7 +63,8 @@ coll = COLLECT(
     a.datas,
     strip=False,
     upx=True,
-    name=f'proteoviewer-{VERSION}',
+    #name=f'proteoviewer-{VERSION}',
+    name="proteoviewer",
 )
 
 import sys

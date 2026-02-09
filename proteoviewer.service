@@ -1,28 +1,27 @@
 [Unit]
-Description=Proteoviewer
+Description=ProteoViewer
 After=network-online.target mnt-NAS.mount
-Requires=network-online.target mnt-NAS.mount
+Wants=network-online.target mnt-NAS.mount
 StartLimitIntervalSec=0
 
 [Service]
 Type=simple
+
+# --- Adjust to your installation
 User=pcfuser
-WorkingDirectory=/opt/Proteoviewer
-
+WorkingDirectory=/opt/ProteoViewer
+EnvironmentFile=-/opt/ProteoViewer/proteoviewer.env
 Environment="PATH=/opt/miniforge3/envs/proteoviewer/bin:/opt/miniforge3/bin:/usr/bin"
+# --- 
+
+# Headless rendering on servers
 Environment="QT_QPA_PLATFORM=offscreen"
-Environment="PV_ENABLE_SYSTEM_DIALOG=0"
-Environment="PV_UPLOAD_DIR=/mnt/DATA/proteoviewer_uploads"
 
-ExecStart=/opt/miniforge3/envs/proteoviewer/bin/python /opt/Proteoviewer/app.py
-
-Restart=always
-RestartSec=5
+# Run the app
+ExecStart=/opt/miniforge3/envs/proteoviewer/bin/python /opt/ProteoViewer/app.py
 
 Restart=always
 RestartSec=5
-
 
 [Install]
 WantedBy=multi-user.target
-
