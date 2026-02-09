@@ -4,6 +4,7 @@ import uuid
 
 import panel as pn
 
+import re
 from utils.session_state import SessionState
 from tabs.overview_tab import overview_tab
 from tabs.overview_tab_phospho import overview_tab_phospho
@@ -11,7 +12,7 @@ from tabs.preprocessing_tab import preprocessing_tab
 from tabs.analysis_tab import analysis_tab
 
 from utils.layout_utils import make_vr, make_hr
-from utils.utils import logger, log_time, logging  # keep as-is; used elsewhere
+from utils.utils import logger, log_time, logging
 
 from pathlib import Path
 import importlib.metadata as importlib_metadata
@@ -30,7 +31,7 @@ if doc is not None:
 
 MIN_PF_VERSION = os.environ.get("PF_MIN_PF_VERSION", "1.7.7")
 
-# Single flag: dev (local run). If not dev => server mode.
+# flag: dev (local run). If not dev => server mode.
 DEV = os.getenv("PV_DEV", "0") == "1"
 
 FROZEN = bool(getattr(sys, "frozen", False))
@@ -52,7 +53,7 @@ def _resource_file(name: str) -> Path:
             return p
         return (exe_dir / "resources" / name)
 
-    # Linux server/dev: keep exactly the old behavior
+    # Linux server/dev
     return (Path(__file__).resolve().parent / "resources" / name)
 
 
@@ -64,8 +65,6 @@ def _resource_bytes(name: str) -> bytes:
 
 
 def _read_version_from_spec(spec_path: str) -> str:
-    from pathlib import Path
-    import re
 
     text = Path(spec_path).read_text(encoding="utf-8", errors="ignore")
     m = re.search(r'(?i)\bversion\b\s*[:=]\s*[\'"]?(\d+\.\d+\.\d+(?:[-+.\w]*)?)', text)
@@ -87,7 +86,7 @@ def _get_app_version() -> str:
         except Exception:
             pass
 
-    # Linux dev from source: fallback to local spec (previous behavior)
+    # Linux dev from source: fallback to local spec
     try:
         spec_path = Path(__file__).resolve().parent / "proteoviewer.spec"
         v = _read_version_from_spec(str(spec_path))
@@ -259,19 +258,22 @@ If you use ProteoViewer/ProteoFlux, please cite:
 def _make_about_card(version: str) -> pn.Card:
     # Collapsed by default; header is the toggle
     return pn.Card(
-        _about_modal_content(version),   # reuse your existing content
+        _about_modal_content(version),
         title="About",
-        collapsible=True,                # header acts like a button
-        collapsed=True,                  # start closed
-        #sizing_mode="fixed",
-        #width=720,                       # same width you liked
-        styles={"max-width": "720px"},   # keep it from growing wider
+        collapsible=True,
+        collapsed=True,
+        styles={"max-width": "720px"},
     )
 
 def _build_header(area_center, version: str, dev_flag: bool) -> pn.Column:
     """Header with left stack (title, browse, status) and right stack (logo, facility)."""
     pv_logo = _resource_bytes("pv_banner.png")
-    pv_logo_pane = pn.pane.PNG(pv_logo, width=200, height=90, sizing_mode="fixed", margin=(-10,0,-40,0), embed=True)
+    pv_logo_pane = pn.pane.PNG(pv_logo,
+                               width=200,
+                               height=90,
+                               sizing_mode="fixed",
+                               margin=(-10,0,-40,0),
+                               embed=True)
 
 
     ver_label = f"v{version}" + (" · DEV" if dev_flag else "")
@@ -309,7 +311,7 @@ def _build_header(area_center, version: str, dev_flag: bool) -> pn.Column:
     )
 
 
-    # Right side: logo above facility — same width, left-aligned inside the block
+    # Right side: logo above facility - same width, left-aligned inside the block
     FACILITY_WIDTH = 140
 
     facility_logo_path = os.environ.get("PV_FACILITY_LOGO_RESOURCE",
@@ -322,13 +324,13 @@ def _build_header(area_center, version: str, dev_flag: bool) -> pn.Column:
     right_block = pn.Column(right_top_row,
                             width=FACILITY_WIDTH, sizing_mode="fixed", height=90)
 
-    # One clean header row: left stack and right stack aligned at the top
+    # One header row: left stack and right stack aligned at the top
     mainbar = pn.Row(
         left_block,
         pn.Spacer(),
         right_block,
         sizing_mode="stretch_width",
-        align="center",                   # top-align both columns
+        align="center",
         css_classes=["pv-subbar"],
     )
 
@@ -540,7 +542,7 @@ def build_app():
             sizing_mode="stretch_width",
         )
 
-        # Optional autoload in dev (unchanged)
+        # Optional autoload in dev
         try:
             from anndata import read_h5ad
             adata = read_h5ad("data/proteoflux_results_phospho.h5ad")
@@ -552,7 +554,7 @@ def build_app():
 
     # ---- SERVER UI ----
     else:
-        # Use Panel's FileInput and copy to /mnt/data/<session>/ before loading
+        # Use Panel's FileInput and copy to /path.../<session>/ before loading
         file_in = pn.widgets.FileInput(accept='.h5ad', multiple=False)
 
         def _on_file_in(event):
@@ -585,14 +587,14 @@ def build_app():
             sizing_mode="stretch_width",
         )
 
-    #app = pn.Column("# ProteoViewer", controls, content, sizing_mode="stretch_width")
     # Build colored header with version + facility tag
-    # version = _read_version_from_spec("proteoviewer.spec")
     version = _get_app_version()
     header  = _build_header(controls, version, DEV)
 
-    # Final layout: header (colored) on top, then the tabs/content
-    app = pn.Column(header, content, sizing_mode="stretch_width")
+    # header (colored) on top, then the tabs/content
+    app = pn.Column(header,
+                    content,
+                    sizing_mode="stretch_width")
 
     return app
 
@@ -641,7 +643,7 @@ if __name__ == "__main__":
     target = build_app
 
     if DEV:
-        # Local dev: random free port, autoreload, window popup
+        # Local dev: first free port, autoreload, window popup
         pn.serve(
             target,
             title="ProteoViewer",
