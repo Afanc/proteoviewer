@@ -473,9 +473,14 @@ def overview_tab_phospho(state: SessionState):
         # labels "≥1", "≥2", ... mapped to int values
         return {f"≥{i}": i for i in range(1, max_reps + 1)}
 
+    def _mk_min_meas_ft_options(max_reps: int) -> dict[str, int]:
+        # FT can legitimately start at 0
+        return {f"≥{i}": i for i in range(0, max_reps + 1)}
+
     # initialize from the first contrast
     _init_min, _init_max = _min_max_reps_for_contrast(contrast_sel.value)
     min_meas_options = _mk_min_meas_options(_init_max)
+    min_meas_ft_options = _mk_min_meas_ft_options(_init_max)
 
     min_meas_sel = pn.widgets.Select(name="Min / condition",
                                      options=list(min_meas_options.keys()),
@@ -485,18 +490,18 @@ def overview_tab_phospho(state: SessionState):
     def _min_meas_value(label: str) -> int:
         return min_meas_options[label]
 
+    def _min_meas_ft_value(label: str) -> int:
+        # same option mapping as min_meas_sel; we may disable/no-op this in raw mode
+        return min_meas_ft_options[label]
+
     # Flowthrough non-imputed datapoints per condition filter (only meaningful when has_cov)
     ft_min_meas_sel = pn.widgets.Select(
         name="Min / FT condition",
-        options=list(min_meas_options.keys()),
+        options=list(min_meas_ft_options.keys()),
         value=f"≥{_init_max}",
         width=90,
         disabled=(not has_cov),
     )
-
-    def _min_meas_ft_value(label: str) -> int:
-        # same option mapping as min_meas_sel; we may disable/no-op this in raw mode
-        return min_meas_options[label]
 
     # Min numb. precursors options
     max_prec_options = 6 if analysis_type == "DIA" else 4
@@ -527,11 +532,14 @@ def overview_tab_phospho(state: SessionState):
         _mn, mx = _min_max_reps_for_contrast(contrast_sel.value)
         nonlocal min_meas_options
         min_meas_options = _mk_min_meas_options(mx)
+        nonlocal min_meas_ft_options
+        min_meas_ft_options = _mk_min_meas_ft_options(mx)
 
         # Update both selects (phospho + FT) with the new option set
-        opts = list(min_meas_options.keys())
-        min_meas_sel.options = opts
-        ft_min_meas_sel.options = opts
+        opts_main = list(min_meas_options.keys())
+        opts_ft   = list(min_meas_ft_options.keys())
+        min_meas_sel.options = opts_main
+        ft_min_meas_sel.options = opts_ft
 
         # Default both to max reps (consistent with current behavior)
         min_meas_sel.value = f"≥{mx}"
