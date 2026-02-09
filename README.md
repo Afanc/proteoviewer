@@ -79,7 +79,7 @@ Example:
 
 ```ini
 [Service]
-User=proteoviewer
+User=youruser
 WorkingDirectory=/opt/ProteoViewer
 Environment="PATH=/opt/conda/envs/proteoviewer/bin:/usr/bin"
 ExecStart=/opt/conda/envs/proteoviewer/bin/python app.py
@@ -95,8 +95,9 @@ ProteoViewer can be distributed as a standalone Windows executable built with **
 ### Building locally
 
 ```bash
-pip install pyinstaller
-pyinstaller proteoviewer.spec
+cd Proteoviewer
+.venv\Scripts\activate.bat
+python -m PyInstaller proteoviewer.spec
 ```
 
 The executable will be created under:
