@@ -9,8 +9,8 @@ Type=simple
 
 # --- Adjust to your installation
 User=pcfuser
-WorkingDirectory=/opt/ProteoViewer
-EnvironmentFile=-/opt/ProteoViewer/proteoviewer.env
+WorkingDirectory=/opt/Proteoviewer
+EnvironmentFile=-/opt/Proteoviewer/proteoviewer.env
 Environment="PATH=/opt/miniforge3/envs/proteoviewer/bin:/opt/miniforge3/bin:/usr/bin"
 # --- 
 
@@ -18,7 +18,7 @@ Environment="PATH=/opt/miniforge3/envs/proteoviewer/bin:/opt/miniforge3/bin:/usr
 Environment="QT_QPA_PLATFORM=offscreen"
 
 # Run the app
-ExecStart=/opt/miniforge3/envs/proteoviewer/bin/python /opt/ProteoViewer/app.py
+ExecStart=/opt/miniforge3/envs/proteoviewer/bin/python /opt/Proteoviewer/app.py
 
 Restart=always
 RestartSec=5
