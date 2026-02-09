@@ -95,8 +95,22 @@ def _get_app_version() -> str:
     except Exception:
         return "0.0.0"
 
-# Server upload root (server ONLY; dev never uses this)
-UPROOT = os.environ.get("PV_UPLOAD_DIR", "/mnt/DATA/proteoviewer_uploads")
+def _get_upload_root() -> str:
+    """
+    Server-only upload directory.
+    - If PV_UPLOAD_DIR is set, use it.
+    - Otherwise, prefer the legacy Biozentrum path if it exists.
+    - Else, fall back to a user cache directory.
+    """
+    v = os.environ.get("PV_UPLOAD_DIR")
+    if v:
+        return v
+    legacy = Path("/mnt/DATA/proteoviewer_uploads")
+    if legacy.exists():
+        return str(legacy)
+    fallback = Path.home() / ".cache" / "proteoviewer" / "uploads"
+    fallback.mkdir(parents=True, exist_ok=True)
+    return str(fallback)
 
 # Lazy Qt app for native dialogs (dev only)
 _QT_APP = None
@@ -584,6 +598,44 @@ def build_app():
 if __name__ != "__main__":
     build_app().servable()
 
+def _env_int(name: str, default: int) -> int:
+    v = os.environ.get(name)
+    if v is None or v == "":
+        return default
+    try:
+        return int(v)
+    except Exception:
+        raise ValueError(f"{name} must be an integer, got: {v!r}")
+
+
+def _env_csv(name: str) -> list[str]:
+    v = os.environ.get(name, "")
+    if not v.strip():
+        return []
+    return [x.strip() for x in v.split(",") if x.strip()]
+
+
+def _default_allow_origins(port: int) -> list[str]:
+    """
+    Bokeh/Panel websocket origin allowlist.
+    Defaults are safe/local + current hostnames. For public deployments,
+    set PV_ALLOW_ORIGINS (comma-separated), e.g.:
+      PV_ALLOW_ORIGINS="proteoviewer.example.org,proteoviewer.example.org:443"
+    """
+    origins: set[str] = set()
+    origins.add(f"localhost:{port}")
+    origins.add(f"127.0.0.1:{port}")
+    try:
+        origins.add(f"{socket.gethostname()}:{port}")
+        origins.add(f"{socket.getfqdn()}:{port}")
+    except Exception:
+        pass
+    for o in _env_csv("PV_ALLOW_ORIGINS"):
+        origins.add(o)
+        if ":" not in o:
+            origins.add(f"{o}:{port}")
+    return sorted(origins)
+
 if __name__ == "__main__":
     target = build_app
 
@@ -617,19 +669,19 @@ if __name__ == "__main__":
             ],
         )
     else:
-        # Server mode: fixed port, big buffers, proper origins, no GUI
+        # Server mode: fixed port by default, big buffers, proper origins, no GUI
+        port = _env_int("PV_PORT", 5007)
+        address = os.environ.get("PV_ADDRESS", "0.0.0.0")
+        num_procs = _env_int("PV_NUM_PROCS", 8)
         pn.serve(
             target,
             title="ProteoViewer",
-            address="0.0.0.0",
-            port=5007,
+            address=address,
+            port=port,
             autoreload=False,
             show=False,
             websocket_max_message_size=2_000 * 1024 * 1024,
             http_server_kwargs={"max_buffer_size": 2_000 * 1024 * 1024},
-            allow_websocket_origin=[
-                "131.152.17.97:5007",
-                "proteoviewer.biozentrum.unibas.ch",
-            ],
-            num_procs=8,
-        )
+            allow_websocket_origin=_default_allow_origins(port),
+            num_procs=num_procs,
+         )
