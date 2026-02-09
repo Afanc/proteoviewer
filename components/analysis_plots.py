@@ -1,4 +1,3 @@
-# components/de_plots.py
 import numpy as np
 import pandas as pd
 import plotly.express as px
@@ -149,7 +148,7 @@ def plot_h_clustering_heatmap(adata, mode: Literal["Deviations","Intensities"]="
         mat = X.toarray() if hasattr(X, "toarray") else X  # samples × genes
     df_z = pd.DataFrame(mat.T, index=adata.var_names, columns=adata.obs_names)
 
-    # 2) Prepare labels & colors
+    # Prepare labels & colors
 
     feat_order   = adata.uns.get(f"{tag}_feature_order")
     sample_order = adata.uns.get(f"{tag}_sample_order")
@@ -158,20 +157,20 @@ def plot_h_clustering_heatmap(adata, mode: Literal["Deviations","Intensities"]="
     if sample_order is not None:
         df_z = df_z.reindex(columns=sample_order)
 
-    # 2) Prepare labels & colors (after reindexing!)
+    # Prepare labels & colors (after reindexing!)
     if "GENE_NAMES" in adata.var.columns:
         y_labels = adata.var["GENE_NAMES"].reindex(df_z.index).tolist()
     else:
         y_labels = df_z.index.tolist()
 
     cond_ser = adata.obs["CONDITION"].reindex(df_z.columns)
-    # 3) Grab your precomputed linkages
+    # Grab your precomputed linkages
     sample_link_name = f"{tag}_sample_linkage"
     feature_link_name = f"{tag}_feature_linkage"
     sample_linkage  = adata.uns[sample_link_name]
     feature_linkage = adata.uns[feature_link_name]
 
-    # 4) Draw the heatmap using those linkages
+    # Draw the heatmap using those linkages
     fig = plot_cluster_heatmap_plotly(
         data=df_z,
         y_labels=y_labels,

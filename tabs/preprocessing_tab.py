@@ -89,7 +89,7 @@ def preprocessing_tab(state: SessionState):
         ),
         background="#E3F2FD",
         width="98vw",
-        height=940,   # was 500; increased to fit the extra row
+        height=940,
     )
 
     # Quantification
@@ -213,7 +213,6 @@ def preprocessing_tab(state: SessionState):
             fig = plot_line_density_by_sample(adata)
         else:
             fig = plot_violin_intensity_by_sample(adata)
-        # keep the same look-and-feel using plotly_section
         sample_plot_holder[:] = [plotly_section(fig, height=500, flex="1")]
 
     # initial render

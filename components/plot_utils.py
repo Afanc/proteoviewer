@@ -39,7 +39,6 @@ def get_color_map(
     if anchor in labels:
         out[anchor] = anchor_color
     # assign the rest in sorted order
-    #others = sorted(l for l in labels if l != anchor)
     others = [l for l in labels if l != anchor]
     for i, lbl in enumerate(others):
         out[lbl] = palette[i % len(palette)]
@@ -159,10 +158,10 @@ def plot_stacked_proteins_by_category(
                       columns=protein_ids)
 
 
-    # 1) categorize each protein
+    # categorize each protein
     prot_cat = categorize_proteins_by_run_count(df)
 
-    # 2) build a (sample × category) table of counts
+    # build a (sample × category) table of counts
     cats  = ["complete","shared","sparse","unique"]
     pivot = pd.DataFrame(
         {cat: df.loc[:, prot_cat[prot_cat==cat].index]
@@ -200,10 +199,10 @@ def plot_stacked_proteins_by_category(
 
     fig = go.Figure()
 
-    # 5) actual bar traces (no legend entries)
+    # actual bar traces (no legend entries)
     for cat in cats:
         for cond in unique_conds:
-            xs = [s for s in ordered_samples if sample_conditions[s] == cond]  # <-- use ordered
+            xs = [s for s in ordered_samples if sample_conditions[s] == cond]
             if not xs:
                 continue
             ys = pivot.loc[xs, cat].tolist()
@@ -221,7 +220,7 @@ def plot_stacked_proteins_by_category(
                                "Count: %{y}<extra></extra>"),
             ))
 
-    # 6) total annotations
+    # total annotations
     totals = pivot.sum(axis=1)
 
     # padding above the bar tops so the label sits just above the stack
@@ -247,7 +246,7 @@ def plot_stacked_proteins_by_category(
     existing.extend(rot_annos)
     fig.update_layout(annotations=existing)
 
-    # 7) Horizontal "Categories" legend row (inert) with a boxed background
+    # Horizontal "Categories" legend row (inert) with a boxed background
     cat_labels = ["Complete","Shared","Sparse","Unique"]
     cat_keys   = ["complete","shared","sparse","unique"]
 
@@ -291,7 +290,7 @@ def plot_stacked_proteins_by_category(
             font=dict(size=12, color="black")
         )
 
-    # 8) Conditions legend
+    # Conditions legend
     for j, cond in enumerate(unique_conds):
         fig.add_trace(go.Scatter(
             x=[None], y=[None],
@@ -309,7 +308,7 @@ def plot_stacked_proteins_by_category(
             hoverinfo="skip",
         ))
 
-    # 9) Layout: single (main) legend on the right; single‑click only
+    # Layout: single (main) legend on the right; single‑click only
     fig.update_layout(
         barmode="stack",
         title=dict(text=title, x=0.4),
@@ -353,14 +352,14 @@ def plot_bar_plotly(
     x: Sequence,
     y: Sequence,
     colors: Union[str, Sequence[str]] = "steelblue",
-    orientation: str = "v",             # "v" or "h"
+    orientation: str = "v",
     width: int = 900,
     height: int = 500,
     title: Optional[str] = None,
     x_title: Optional[str] = None,
     y_title: Optional[str] = None,
     template: str = "plotly_white",
-    **bar_kwargs,                       # passed to go.Bar
+    **bar_kwargs,
 ) -> go.Figure:
     """
     Generic bar plot.
@@ -403,7 +402,7 @@ def compute_metric_by_condition(
       - each condition → same‐length array
     computed **per protein** across samples *without ever transposing*.
     """
-    # 1) samples × proteins matrix
+    # samples × proteins matrix
     data = adata.X
     if layer is not None:
         data = adata.layers[layer]
@@ -415,7 +414,7 @@ def compute_metric_by_condition(
     )
     conditions = adata.obs[cond_key]
 
-    # 2) choose the right function (operate on axis=0 for proteins)
+    # choose the right function (operate on axis=0 for proteins)
     def _cv(x: np.ndarray) -> np.ndarray:
         """
         Geometric CV on log2-normalized data (samples × proteins),
@@ -459,7 +458,6 @@ def compute_metric_by_condition(
     out["Total"] = compute_fn(df.values)
 
     # Per‐condition
-    #for cond, subdf in df.groupby(conditions, axis=0):
     for cond, subdf in df.groupby(by=conditions, observed=False):
         out[cond] = compute_fn(subdf.values)
 
@@ -647,12 +645,7 @@ def plot_umap_2d(
         columns=["UMAP1", "UMAP2"],
         index=adata.obs_names,
     )
-    ## ensure neighbors + UMAP are present
-    #df = pd.DataFrame(
-    #    adata.obsm["X_umap"][:, :2],
-    #    columns=["UMAP1","UMAP2"],
-    #    index=adata.obs_names
-    #)
+
     df[color_key] = adata.obs[color_key].values
 
     levels = sorted(df[color_key].unique().tolist())
@@ -744,7 +737,7 @@ def plot_mds_2d(
             hovertemplate="Sample: %{text}",
         ))
 
-    # Optional: show stress if you persisted it in adata.uns["mds"]["stress"]
+    # Optional: show stress 
     stress = None
     try:
         stress = adata.uns.get("mds", {}).get("stress", None)
@@ -837,7 +830,7 @@ def plot_cluster_heatmap_plotly(
       - nice axis styling exactly like the Plotly example
     """
     import scipy.cluster.hierarchy as sch
-    # 1) Clean up: fill any NaNs, but keep all rows
+    # Clean up: fill any NaNs, but keep all rows
     df = data
 
     dendro_col = ff.create_dendrogram(
@@ -932,7 +925,6 @@ def plot_cluster_heatmap_plotly(
         tickvals = fig.layout.xaxis.tickvals,
         ticktext = [
             f"<span style='color:{col};'>{lbl}</span>"
-            #for lbl,col in zip(df.columns, colours)
             for lbl,col in zip(short, colours)
         ]
     )
@@ -960,9 +952,8 @@ def plot_cluster_heatmap_plotly(
         xanchor="left", yanchor="top"
     ))
 
-    # 7) Tidy up layout
+    # Tidy up layout
     fig.update_layout({
-        #"width": width, "height": height,
         "showlegend": True,
         "hovermode": "closest",
         "title": {"text": title, "x": 0.5},
@@ -1109,7 +1100,7 @@ def plot_volcanoes(
 
     has_cov = bool(adata.uns["has_covariate"])
 
-    # ---- labels & ids (robust to phospho) ----
+    # labels & ids 
     genes   = np.array(adata.var.get("GENE_NAMES", pd.Series(index=adata.var_names, dtype=str)).astype(str))
     protids = np.array(adata.var_names, dtype=str)
 
@@ -1123,7 +1114,7 @@ def plot_volcanoes(
 
     primary_ids = genes if proteomics_mode else feature_ids
 
-    # ---- single highlight (accept gene, UniProt, or site) ----
+    # single highlight 
     def _match_one(token: str) -> np.ndarray:
         if not token:
             return np.zeros(len(genes), dtype=bool)
@@ -1133,7 +1124,7 @@ def plot_volcanoes(
     is_high = _match_one(highlight)
     high_idx = int(np.flatnonzero(is_high)[0]) if is_high.any() else None
 
-    # ---- cohort highlight (accepts a list of gene/UniProt/site) ----
+    # cohort highlight (accepts a list of gene/UniProt/site) 
     if highlight_group:
         group = set(map(str, highlight_group))
         in_group = np.array(
@@ -1143,7 +1134,7 @@ def plot_volcanoes(
     else:
         in_group = np.zeros(len(genes), dtype=bool)
 
-    # ---- opacity & size style (unchanged logic, just uses new masks) ----
+    # opacity & size style (unchanged logic, just uses new masks) 
     base_opacity = np.ones(len(genes), dtype=float)
     any_single   = bool(is_high.any())
     any_group    = bool(in_group.any())
@@ -1162,7 +1153,7 @@ def plot_volcanoes(
     if any_group:
         base_size = np.where(in_group, base_size * 1.05, base_size)
 
-    # ---- data prep (same stats pipeline) ----
+    # data prep 
     if data_type == "default" or has_cov == False:
         df_fc = pd.DataFrame(
             adata.varm["log2fc"], index=adata.var_names, columns=adata.uns["contrast_names"]
@@ -1192,9 +1183,7 @@ def plot_volcanoes(
     x = df_fc[contrast]
     y = -np.log10(df_q[contrast])
 
-    # --------------------------------------------
     # Missingness-based initial classification
-    # --------------------------------------------
     miss = pd.DataFrame(adata.uns["missingness"])
     grp1, grp2 = contrast.split("_vs_")
 
@@ -1213,9 +1202,7 @@ def plot_volcanoes(
     imp1_mask     = (a & ~b)   # missing grp1 only
     imp2_mask     = (b & ~a)   # missing grp2 only
 
-    # --------------------------------------------
     # Per-condition raw non-imputed counts
-    # --------------------------------------------
     mat_raw = adata.layers.get("raw", adata.X)
     mat = mat_raw.toarray() if hasattr(mat_raw, "toarray") else mat_raw
 
@@ -1226,18 +1213,7 @@ def plot_volcanoes(
     n2 = np.sum(~np.isnan(mat[idx2, :]), axis=0).astype(int)
     thr = int(min_nonimp_per_cond or 0)
 
-    # DEBUG: single target peptide/protein id
-    if contrast == "A_vs_B" and "AAPHKEEVK" in adata.var_names:
-        j = list(adata.var_names).index("AAPHKEEVK")
-        s1 = adata.obs_names[idx1].tolist()
-        s2 = adata.obs_names[idx2].tolist()
-        v1 = mat[idx1, j]
-        v2 = mat[idx2, j]
-        miss = pd.DataFrame(adata.uns['missingness'])
-
-    # --------------------------------------------
-    # Fix: if raw says "zero non-imputed", treat as fully missing
-    # --------------------------------------------
+    # if raw says "zero non-imputed", treat as fully missing
     full_missing1 = (n1 == 0)
     full_missing2 = (n2 == 0)
 
@@ -1249,9 +1225,7 @@ def plot_volcanoes(
     imp1_mask     = (a & ~b)
     imp2_mask     = (b & ~a)
 
-    # --------------------------------------------
     # Apply min_nonimp_per_cond threshold *only to the measured side*
-    # --------------------------------------------
     measured_mask &= ((n1 >= thr) & (n2 >= thr))
     imp1_mask     &= (n2 >= thr)   # measured side = grp2
     imp2_mask     &= (n1 >= thr)   # measured side = grp1
@@ -1272,11 +1246,9 @@ def plot_volcanoes(
         adata, contrast, min_nonimp_per_cond, min_precursors
     )
 
-    # --------------------------------------------
     # Optional: Flowthrough (covariate) consistency filter
     # Applies ONLY for adjusted + flowthrough volcanoes.
     # In raw phospho volcano mode, this is a no-op by design.
-    # --------------------------------------------
     thr_ft = int(min_nonimp_ft_per_cond or 0)
     if has_cov and thr_ft > 0 and (data_type in {"default", "flowthrough"}):
         # Use covariate raw layer if present; if absent, do not filter (fail-safe, viewer-only).
@@ -1380,7 +1352,7 @@ def plot_volcanoes(
         )
 
     def add_group_trace(mask, name, symbol):
-        # NOTE: keep 'text' = gene for click → search to stay identical
+        # NOTE: keep 'text' = gene for click -> search to stay identical
         trace_kwargs = dict(
             x=x[mask],
             y=y[mask],
@@ -1392,7 +1364,6 @@ def plot_volcanoes(
                 line=dict(width=0),
             ),
             name=name,
-            #text=(genes[mask] if proteomics_mode else sites[mask]),
             text=primary_ids[mask],
             customdata=np.c_[feature_ids[mask], genes[mask]],
             hovertemplate=(
@@ -1401,27 +1372,13 @@ def plot_volcanoes(
                 "log2FC: %{x:.2f}<br>"
                 "-log10(q): %{y:.2f}<extra></extra>"
             ),
-            #customdata=(None if proteomics_mode else np.c_[sites[mask], genes[mask], protids[mask]]),
-            #hovertemplate=(
-            #    ("Gene: %{text}<br>"
-            #     "log2FC: %{x:.2f}<br>"
-            #     "-log10(q): %{y:.2f}<extra></extra>")
-            #    if proteomics_mode else
-            #    ("Phosphosite: %{customdata[0]}<br>"
-            #     "Gene: %{customdata[1]}<br>"
-            #     "log2FC: %{x:.2f}<br>"
-            #     "-log10(q): %{y:.2f}<extra></extra>")
-            #),
         )
-        #add_colorbar = (color_by != "Significance" and name == "Observed in both")
         add_colorbar = (color_by != "Significance")
         if color_by != "Significance":
             trace_kwargs["marker"].update(
                 color=color_vals[mask],
                 colorscale=colorscale,
                 coloraxis="coloraxis",
-                #showscale=True if add_colorbar else False,
-                #colorbar=colorbar if add_colorbar else None,
             )
         else:
             trace_kwargs["marker"]["color"] = color_vals[mask]
@@ -1470,20 +1427,14 @@ def plot_volcanoes(
     up   = int(((x > 0) & (df_q[contrast] < sign_threshold) & np.isin(x, all_x)).sum())
     down = int(((x < 0) & (df_q[contrast] < sign_threshold) & np.isin(x, all_x)).sum())
     rest = int(len(all_x) - up - down)
-    #down_ratio = 100*down/len(all_x)
-    #down_ratio_fmt = f"{down_ratio:.2f}%"
-    #up_ratio   = 100*up/len(all_x)
-    #up_ratio_fmt = f"{up_ratio:.2f}%"
 
     annos = [
         dict(x=0.02,  y=0.98, xref="paper", yref="paper", opacity=0.7,
-             #text=f"<b>{down}</b><br><span style='font-size:0.9em'>({down_ratio_fmt})</span>",
              text=f"<b>{down}</b>",
              bgcolor="blue",  font=dict(color="white"), showarrow=False),
         dict(x=0.500, y=0.98, xref="paper", yref="paper",
              text=f"<b>{rest}</b>", bgcolor="lightgrey", font=dict(color="black"), showarrow=False),
         dict(x=0.98,  y=0.98, xref="paper", yref="paper", opacity=0.7,
-             #text=f"<b>{up}</b><br><span style='font-size:0.9em'>({up_ratio_fmt})</span>",
              text=f"<b>{up}</b>",
              bgcolor="red",   font=dict(color="white"), showarrow=False),
     ]
@@ -1501,7 +1452,6 @@ def plot_volcanoes(
         xaxis=dict(title="log2 Fold Change", autorange=True),
         yaxis=dict(title="-log10(q-value)",  autorange=True),
         height=height,
-        #width=width,
     )
     return fig
 

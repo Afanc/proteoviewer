@@ -1,4 +1,3 @@
-# overview_tab_phospho.py (refactored)
 from __future__ import annotations
 
 import os
@@ -18,12 +17,12 @@ from components.overview_plots import (
     plot_covariate_by_site,
     plot_group_violin_for_volcano,
     plot_intensity_by_site,
-    plot_peptide_trends_centered,  # kept import parity
+    plot_peptide_trends_centered,
     plot_violin_cv_rmad_per_condition,
     plot_volcanoes_wrapper,
-    resolve_exact_list_to_uniprot_ids,  # kept import parity
+    resolve_exact_list_to_uniprot_ids,
     resolve_pattern_to_uniprot_ids,
-    get_protein_info,  # used for UID helper
+    get_protein_info,
 )
 from components.selection_export import SelectionExportSpec, make_volcano_selection_downloader, make_adjacent_sites_csv_callback
 from components.plot_utils import plot_pca_2d, plot_umap_2d, plot_mds_2d
@@ -33,7 +32,7 @@ from utils.layout_utils import plotly_section, make_vr, make_hr, make_section, m
 from utils.utils import log_time, logger
 
 
-# ---------- Small utilities (safe to hoist later into helpers modules) ----------
+# Small utilities 
 
 def _fmt_files_list(paths: Iterable[str], max_items: int = 6) -> list[str]:
     paths = list(paths or [])
@@ -50,9 +49,6 @@ def _pn_only(site_id: str) -> str:
     s = str(site_id)
     m = re.search(r"\|((?:p|[STY])\d+)", s)
     return m.group(1) if m else ""
-    #m = re.search(r"\|(p\d+)", str(site_id))
-    #return m.group(1) if m else ""
-
 
 def _peptide_from_site(site_id: str) -> str:
     return str(site_id).split("|", 1)[0]
@@ -104,7 +100,7 @@ def _pep_dir_symbol(step: dict) -> str:
     return "≥" if d.startswith("greater") else "≤"
 
 
-# ---------- Cached accessors bound to a specific AnnData ----------
+# Cached accessors bound to a specific AnnData 
 
 def _make_adata_views(adata):
     var_index = pd.Index(adata.var_names, name="INDEX")
@@ -116,7 +112,7 @@ def _make_adata_views(adata):
         if arr is None:
             return None
         return pd.DataFrame(arr, index=var_index, columns=contrast_names)
-    # Required (always written by limma)
+    # Required 
     df_log2fc = _df_opt("log2fc");  assert df_log2fc is not None, "Missing varm['log2fc']"
     df_q      = _df_opt("q_ebayes"); assert df_q      is not None, "Missing varm['q_ebayes']"
     # Optional: fall back to adjusted if raw_* are absent (no covariate run)
@@ -149,7 +145,7 @@ def _make_adata_views(adata):
     def vcol(name: str) -> Optional[pd.Series]:
         return adata.var[name] if name in var_cols else None
 
-    # cached indexing for site → integer position
+    # cached indexing for site -> integer position
     @lru_cache(maxsize=65536)
     def site_idx(site_id: str) -> int:
         return int(var_index.get_loc(site_id))
@@ -291,7 +287,7 @@ def _ensure_gene(state: SessionState, token: str | None) -> str | None:
         return t
 
 
-# ---------- Main Tab ----------
+# Main Tab 
 
 @log_time("Preparing Overview Tab")
 def overview_tab_phospho(state: SessionState):
@@ -310,7 +306,7 @@ def overview_tab_phospho(state: SessionState):
     has_cov = bool(adata.uns["has_covariate"])
     contrast_names = list(views["contrast_names"])
 
-    # ---------- Summary / Intro ----------
+    # Summary / Intro 
     summary_md = _build_pipeline_summary(adata)
     summary_pane = pn.pane.Markdown(
         summary_md,
@@ -359,7 +355,7 @@ def overview_tab_phospho(state: SessionState):
         styles={"border-radius": "15px", "box-shadow": "3px 3px 5px #bcbcbc", "width": "98vw"},
     )
 
-    # ---------- Metrics ----------
+    # Metrics 
     cv_fig, rmad_fig = plot_violin_cv_rmad_per_condition(adata)
     rmad_pane = pn.pane.Plotly(rmad_fig, height=500, sizing_mode="stretch_width",
                                styles={"flex": "1"}, config={'responsive': True}, margin=(0, 0, 0, -100))
@@ -380,7 +376,7 @@ def overview_tab_phospho(state: SessionState):
         styles={"border-radius": "15px", "box-shadow": "3px 3px 5px #bcbcbc", "width": "98vw"},
     )
 
-    # ---------- Clustering ----------
+    # Clustering 
     pca_pane = pn.pane.Plotly(
         plot_pca_2d(adata),
         height=500,
@@ -388,12 +384,6 @@ def overview_tab_phospho(state: SessionState):
         styles={"flex": "1"},
         margin=(0, 0, 0, -100),
     )
-    #umap_pane = pn.pane.Plotly(
-    #    plot_umap_2d(adata),
-    #    height=500,
-    #    sizing_mode="stretch_width",
-    #    styles={"flex": "1"},
-    #)
     if "X_mds" in state.adata.obsm:
         emb_fig = plot_mds_2d(state.adata, title="MDS")
     else:
@@ -431,7 +421,7 @@ def overview_tab_phospho(state: SessionState):
         styles={"border-radius": "15px", "box-shadow": "3px 3px 5px #bcbcbc", "width": "98vw"},
     )
 
-    # ---------- Volcanoes ----------
+    # Volcanoes 
     contrasts = contrast_names
     contrast_sel = pn.widgets.Select(name="Contrast", options=contrasts, value=contrasts[0], width=180)
 
@@ -442,9 +432,9 @@ def overview_tab_phospho(state: SessionState):
 
     def _volcano_dtype(label: str) -> str:
         return {
-            "Phospho (raw)"      : "phospho",   # raw_* columns
-            "Phospho (adj.)" : "default",   # adjusted columns
-            "Flowthrough"   : "flowthrough",  # ft_* columns
+            "Phospho (raw)"      : "phospho",
+            "Phospho (adj.)" : "default",
+            "Flowthrough"   : "flowthrough",
         }[label]
 
     show_measured = pn.widgets.Checkbox(name="Observed in Both", value=True)
@@ -462,7 +452,7 @@ def overview_tab_phospho(state: SessionState):
     _update_toggle_labels()
     contrast_sel.param.watch(_update_toggle_labels, "value")
 
-    # Non-imputed datapoints per condition filter (same as phospho)
+    # Non-imputed datapoints per condition filter
     def _min_max_reps_for_contrast(contrast: str) -> int:
         grp1, grp2 = contrast.split("_vs_")
         n1 = int((adata.obs["CONDITION"] == grp1).sum())
@@ -474,7 +464,7 @@ def overview_tab_phospho(state: SessionState):
         return {f"≥{i}": i for i in range(1, max_reps + 1)}
 
     def _mk_min_meas_ft_options(max_reps: int) -> dict[str, int]:
-        # FT can legitimately start at 0
+        # FT can legitimately be 0
         return {f"≥{i}": i for i in range(0, max_reps + 1)}
 
     # initialize from the first contrast
@@ -491,7 +481,7 @@ def overview_tab_phospho(state: SessionState):
         return min_meas_options[label]
 
     def _min_meas_ft_value(label: str) -> int:
-        # same option mapping as min_meas_sel; we may disable/no-op this in raw mode
+        # same option mapping as min_meas_sel;
         return min_meas_ft_options[label]
 
     # Flowthrough non-imputed datapoints per condition filter (only meaningful when has_cov)
@@ -564,10 +554,8 @@ def overview_tab_phospho(state: SessionState):
 
     search_field_sel = pn.widgets.Select(
         name="Search Field",
-        #options=["FASTA headers", "Gene names", "UniProt IDs"],
         options=["Gene names", "UniProt IDs"],
         value="Gene names",
-        #value="FASTA headers",
         width=130,
         styles={"z-index": "10"},
         margin=(2, 0, 0, 0),
@@ -695,7 +683,6 @@ def overview_tab_phospho(state: SessionState):
         min_nonimp_ft_per_cond=(0 if (not has_cov) else pn.bind(_min_meas_ft_value, ft_min_meas_sel)),
         min_precursors=pn.bind(_min_prec_value, min_prec_sel),
         highlight=search_input,
-        #highlight_group=group_ids_dmap,
         highlight_group=group_ids_selected,
         sign_threshold=0.05,
         width=None,
@@ -724,7 +711,7 @@ def overview_tab_phospho(state: SessionState):
     )
     volcano_plot.param.watch(_on_volcano_click, "click_data")
 
-    # ---------- selection download (same semantics as non-phospho overview) ----------
+    # selection download 
     download_selection, _on_volcano_selected_data, _on_volcano_click_data, _on_cohort_ids = make_volcano_selection_downloader(
         state=state,
         contrast_getter=lambda: str(contrast_sel.value),
@@ -750,7 +737,7 @@ def overview_tab_phospho(state: SessionState):
     # Clear exporter click state when phosphosite is cleared.
     search_input.param.watch(_on_site_cleared, "value")
 
-    # ---------- Detail panes (cards + bars + peptide table) ----------
+    # Detail panes 
     layers_phos = ["Processed", "Log-only", "Raw"]
     layers_cov = ["Processed", "Log-only", "Raw"]
     layers_phos_sel = pn.widgets.Select(name="Phospho View", options=layers_phos, value=layers_phos[0],
@@ -1022,7 +1009,6 @@ def overview_tab_phospho(state: SessionState):
         vcol = views["vcol"]
         parent_pep = str(vcol("PARENT_PEPTIDE_ID").iloc[idx])
         parent_prot = str(vcol("PARENT_PROTEIN").iloc[idx])
-        #if not parent_pep:
         if not parent_prot:
             return pn.Spacer(width=300, height=120)
 
@@ -1037,11 +1023,7 @@ def overview_tab_phospho(state: SessionState):
             df_fc = views["df_raw_fc"]
             df_q  = views["df_raw_q"]
             hdr_suffix = ""
-        #contrast = contrast_sel.value
-        #df_raw_fc = views["df_raw_fc"]
-        #df_raw_q = views["df_raw_q"]
 
-        #mask = (adata.var["PARENT_PEPTIDE_ID"].astype(str) == parent_pep)
         mask = (adata.var["PARENT_PROTEIN"].astype(str) == parent_prot)
         siblings = adata.var_names[mask]
         if len(siblings) == 0:
@@ -1049,13 +1031,10 @@ def overview_tab_phospho(state: SessionState):
 
         df = pd.DataFrame(index=siblings)
         df["Site"] = [_pn_only(s) for s in siblings]
-        #df["Log2FC"] = df_raw_fc.loc[siblings, contrast].astype(float).values
-        #df["Q"] = df_raw_q.loc[siblings, contrast].astype(float).values
         df["Log2FC"] = df_fc.loc[siblings, contrast].astype(float).values
         df["Q"]      = df_q.loc[siblings, contrast].astype(float).values
 
         df["site_id"] = df.index
-        #df["__pnum__"] = df["Site"].str.extract(r"p(\d+)").astype(int)
         df["__pnum__"] = pd.to_numeric(df["Site"].str.extract(r"(\d+)")[0], errors="coerce")
         if df["__pnum__"].isna().any():
             bad = df.loc[df["__pnum__"].isna(), "site_id"].astype(str).tolist()[:10]
@@ -1089,7 +1068,7 @@ def overview_tab_phospho(state: SessionState):
         styled = (disp.style
             .apply(_highlight_current, axis=1)
             .apply(_color_site_col, subset=["Site"])
-            .format({"Log2FC": "{:.2f}"})  # .2f as requested
+            .format({"Log2FC": "{:.2f}"})
         )
 
 
@@ -1298,7 +1277,6 @@ def overview_tab_phospho(state: SessionState):
             pn.Row(layers_cov_sel, margin=(-17, 0, 0, 0)),
             pn.Spacer(width=20),
             download_selection,
-            #sizing_mode="fixed",
             width=300,
             height=70,
         ),
@@ -1309,7 +1287,7 @@ def overview_tab_phospho(state: SessionState):
         styles={"border-radius": "15px", "box-shadow": "3px 3px 5px #bcbcbc", "width": "98vw"},
     )
 
-    # ---------- Final layout ----------
+    # Final layout 
     layout = pn.Column(
         pn.Spacer(height=10),
         intro_pane,

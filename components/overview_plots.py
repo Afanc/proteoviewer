@@ -66,7 +66,7 @@ def plot_violin_cv_rmad_per_condition(
     cv_dict = compute_metric_by_condition(adata, metric="CV")
     rmad_dict = compute_metric_by_condition(adata, metric="rMAD")
 
-    # 3) draw grouped violins
+    # draw grouped violins
 
     labels = list(cv_dict.keys())
     color_map = get_color_map(labels,
@@ -119,7 +119,7 @@ def plot_volcanoes_wrapper(
 ) -> go.Figure:
     # simply forward the SessionState + args into the pure util
     fig =  plot_volcanoes(
-        state=state,               # if `im` is your SessionState
+        state=state,
         contrast=contrast,
         data_type=data_type,
         sign_threshold=sign_threshold,
@@ -222,7 +222,7 @@ def plot_intensity_by_protein(state, contrast, protein, layer):
     for trace in fig.data:
         trace.showlegend = False
 
-    # 2) re-add one dummy bar per condition
+    # re-add one dummy bar per condition
     for cond in [grp1, grp2]:
         fig.add_trace(go.Bar(
             x=[None], y=[None],
@@ -437,7 +437,7 @@ def resolve_exact_list_to_uniprot_ids(adata, field: str, items: List[str] | Set[
 
 @log_time("Plotting Peptide Trends (centered)")
 def plot_peptide_trends_centered(adata, uniprot_id: str, contrast: str) -> go.Figure:
-    ## 1) pull & slice matrices
+    ## pull & slice matrices
     analysis_type = str(adata.uns.get("preprocessing", {}).get("analysis_type", "")).lower()
     proteomics_mode = analysis_type in {"dia", "dda", "proteomics"}
     src_key = "peptides" if proteomics_mode else "precursors"
@@ -475,7 +475,7 @@ def plot_peptide_trends_centered(adata, uniprot_id: str, contrast: str) -> go.Fi
     if src_key == "precursors":
         chg = chg[keep]
 
-    # 2) align columns to obs order, then filter to the contrast’s samples
+    # align columns to obs order, then filter to the contrast’s samples
     obs_order = list(map(str, adata.obs_names))
 
     if cols != obs_order:
@@ -503,7 +503,7 @@ def plot_peptide_trends_centered(adata, uniprot_id: str, contrast: str) -> go.Fi
     sample_labels = np.array(new_labels)
     cond_labels = np.array([grp1] * len(order1) + [grp2] * len(order2))
 
-    # 3) build figure: one line per peptide, marker color by condition
+    # build figure: one line per peptide, marker color by condition
     fig = go.Figure()
     palette = px.colors.qualitative.Prism
     uniq = sorted(pd.unique(labels).tolist())

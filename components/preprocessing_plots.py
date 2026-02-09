@@ -170,9 +170,7 @@ def plot_prec_pep_distributions(
         f"(analysis_type={analysis!r}).",
     )
 
-    # -----------------------
     # Left: donut (bucketed)
-    # -----------------------
     arr = np.asarray(prec_per_pep, dtype=float)
     arr = arr[np.isfinite(arr)]
     _require(arr.size > 0, "Empty distribution array: num_precursors_per_peptide")
@@ -215,9 +213,7 @@ def plot_prec_pep_distributions(
         margin=dict(l=10, r=10, t=60, b=10),
     )
 
-    # -----------------------
     # Middle: proteomics-only pep/prot (log-y hist), else Unavailable
-    # -----------------------
     if proteomics_mode:
         _require(
             pep_per_prot is not None,
@@ -253,9 +249,7 @@ def plot_prec_pep_distributions(
     else:
         fig_mid = _unavailable_fig("Peptides per protein")
 
-    # -----------------------
     # Right: missed cleavages per sample (viewer consumes precomputed payload)
-    # -----------------------
     mc = dist.get("missed_cleavages_per_sample")
     if mc is None:
         fig_mc_raw = _unavailable_fig("Missed cleavages per sample (raw)")
@@ -649,7 +643,6 @@ def plot_intensities_histogram(adata: AnnData) -> go.Figure:
         colors=["blue","red"],
         nbins=50,
         stat="probability",
-        #log_x=True,
         opacity=0.5,
         width=900,
         height=500,
@@ -664,7 +657,6 @@ def plot_violin_intensity_by_condition(adata) -> go.Figure:
     df = get_intensity_long_df(adata, cond_map=None)
     return plot_violin_by_group_go(
         df_long=df,
-        #key="CV",
         group_col="Condition",
         colors=("blue","red"),
         subplot_titles=("Before Normalization","After Normalization"),
@@ -701,10 +693,9 @@ def compute_before_after_metrics(
     for both the 'Before' (raw) and 'After' (normalized) matrices,
     in one pass each.
     """
-    # 1) pick the same metric functions as your original compute_metric_by_condition :contentReference[oaicite:2]{index=2}
+    # 1) pick the same metric functions compute_metric_by_condition
     def _cv(x: np.ndarray) -> np.ndarray:
         with warnings.catch_warnings():
-            # filterwarnings lets us match on the exact message
             warnings.filterwarnings(
                 "ignore",
                 message="Mean of empty slice",
@@ -748,7 +739,7 @@ def compute_before_after_metrics(
     conds = adata.obs[cond_key].values
     unique_conds = sorted(np.unique(conds).tolist())
 
-    # preserve insertion order: Total → sorted(conds)
+    # preserve insertion order: Total -> sorted(conds)
     before_metrics = {"Total": before_total}
     after_metrics  = {"Total": after_total}
 
@@ -819,7 +810,7 @@ def plot_grouped_violin_metric_by_condition(
             layer="above"
         )
 
-    # 5) finalize layout exactly as before
+    # 5) finalize layout 
     title_text = title or f"{metric} per Condition"
     fig.update_layout(
         template="plotly_white",
@@ -1011,7 +1002,7 @@ def plot_mv_barplots(adata: AnnData):
     cond_color_map = {
         "Total (Non-Missing)": "#888888",
         "Total (Missing)"    : "#CCCCCC",
-        **base_map,                                   # ← colors now consistent app-wide
+        **base_map,
     }
 
     # 7) Plot missing-by-condition (log-y)
@@ -1046,7 +1037,7 @@ def plot_mv_barplots(adata: AnnData):
             y=mvi_per_sample[m],
             name=cond,
             marker=dict(color=cond_color_map[cond]),
-            customdata=np.array(sample_names)[m],  # FULL names
+            customdata=np.array(sample_names)[m],
             hovertemplate="Condition: " + cond + "<br>Sample: %{customdata}<br>Missing: %{y}<extra></extra>",
             showlegend=True,
         ))
@@ -1057,7 +1048,7 @@ def plot_mv_barplots(adata: AnnData):
         yaxis_title="Count",
         width=1200,
         height=400,
-        barmode="group",  # bars won’t overlap since x’s differ, but keeps spacing tidy
+        barmode="group",
         legend=dict(
             title=" Conditions",
             orientation="h",
@@ -1098,13 +1089,13 @@ def plot_mv_heatmaps(adata:AnnData):
         height=900,
     )
 
-    # 3b) Correlation heatmap (plotly) of sample‐sample missingness
+    # Correlation heatmap (plotly) of sample‐sample missingness
     corr = df_missing.corr()
 
     samples = list(corr.columns)  # same as index
     cond_ser = adata.obs["CONDITION"].astype(str).reindex(samples)
 
-    # reuse the same mapping you already use elsewhere
+    # reuse the same mapping 
     cmap_cond = get_color_map(sorted(cond_ser.unique()), palette=None)
 
     fig_corr = px.imshow(
@@ -1116,7 +1107,6 @@ def plot_mv_heatmaps(adata:AnnData):
     fig_corr.update_layout(
         title=dict(text="Missing Values Correlation Heatmap", x=0.5,
                    pad=dict(t=0, b=0), y=0.95),
-        #coloraxis_colorbar=dict(x=0.10, y=-0.25, len=0.5, orientation='h'),
         coloraxis_colorbar=dict(len=0.5),
     ),
     color_ticks_by_condition(fig_corr, samples, cond_ser, cmap_cond)
@@ -1161,7 +1151,7 @@ def plot_grouped_violin_imputation_by_condition(
         'Value':         np.concatenate([meas_vals, imp_vals])
     })
 
-    # 5) now the plotting loop is untouched
+    # 5) now the plotting loop 
     fig = go.Figure()
     for norm_label, color in zip(['Measured','Imputed'], colors):
         sub = df[df['Normalization'] == norm_label]
@@ -1185,7 +1175,7 @@ def plot_grouped_violin_imputation_by_condition(
             scalemode='width',
         ))
 
-    # 6) vertical separators and styling (identical to original)
+    # 6) vertical separators and styling
     for i in idx_map.values():
         fig.add_vline(
             x=i,
@@ -1247,7 +1237,7 @@ def plot_grouped_violin_imputation_by_sample(
         'Value'        : np.concatenate([meas_vals, imp_vals])
     })
 
-    # 5) reuse your exact plotting code below—unchanged—
+    # 5) plotting 
     idx_map    = {s: i for i, s in enumerate(samples)}
     offset     = 0.2
     fig        = go.Figure()
@@ -1279,7 +1269,7 @@ def plot_grouped_violin_imputation_by_sample(
             ))
             first_seen[norm_label] = True
 
-    # separators & styling (identical)
+    # separators & styling 
     for i in idx_map.values():
         fig.add_vline(
             x=i, line=dict(color='gray', dash='dot', width=1), layer='above'
@@ -1391,7 +1381,7 @@ def plot_grouped_violin_imputation_metrics_by_condition(
                 tickmode='array',
                 tickvals=list(idx_map.values()),
                 ticktext=conditions,
-                showline=True, mirror=True, linecolor='black'#, tickangle=30
+                showline=True, mirror=True, linecolor='black'
             ),
             yaxis=dict(title=metric, showgrid=True, showline=True, mirror=True, linecolor='black'),
             showlegend=True,
@@ -1493,7 +1483,6 @@ def plot_line_density_by_sample(
             bordercolor="black", borderwidth=1,
             groupclick="togglegroup",
         ),
-        #margin=dict(l=60, r=140, t=60, b=60),
     )
 
     for c in (1, 2):
@@ -1550,7 +1539,6 @@ def plot_left_censoring_histogram(adata: AnnData) -> go.Figure:
 
     fig = go.Figure()
 
-    # red = censored (≤ cutoff), blue = kept (> cutoff)
     fig.add_trace(go.Bar(
         x=centers, y=y_left, width=bin_width,
         name="Censored",
@@ -1588,16 +1576,14 @@ def plot_left_censoring_histogram(adata: AnnData) -> go.Figure:
 
     fig.update_layout(
         title=dict(text=title_md, x=0.5),
-        barmode="overlay",  # bars do not overlap because we split bins
+        barmode="overlay",
         template="plotly_white",
         width=900, height=400,
         xaxis_title="log10(Intensity)",
         yaxis_title="Count",
         legend=dict(
             orientation="v", x=0.995, xanchor="right", y=1.10, yanchor="top",
-            #bordercolor="black", borderwidth=1
         ),
-        #margin=dict(l=60, r=20, t=80, b=40),
     )
     fig.update_xaxes(range=[lo, hi], showline=False, tickformat='.1f')
     fig.update_layout(hovermode="x unified")
@@ -1687,12 +1673,6 @@ def plot_grouped_violin_before_after_imputation_metrics_by_condition(
             ),
             yaxis=dict(title=metric, showgrid=True, showline=True, mirror=True, linecolor='black'),
             showlegend=True,
-            #legend=dict(orientation="v",
-            #            x=1.02,
-            #            xanchor="left",
-            #            y=0.5,
-            #            yanchor="middle",
-            #            ),
         )
         return fig
 

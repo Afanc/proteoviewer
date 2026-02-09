@@ -13,7 +13,6 @@ from components.overview_plots import (
     resolve_pattern_to_uniprot_ids,
     resolve_exact_list_to_uniprot_ids,
     plot_group_violin_for_volcano,
-    #_ensure_gene
 )
 from components.selection_export import (
     make_volcano_selection_downloader,
@@ -112,8 +111,6 @@ def overview_tab(state: SessionState):
 
     # Norm condensation
     norm_methods = normalization.get("method", []).tolist()
-    #if isinstance(norm_methods, list):
-    #    norm_methods = "+".join(norm_methods)
     if "loess" in norm_methods:
         loess_span = preproc_cfg.get("normalization").get("loess_span")
         norm_methods += f" (loess_span={loess_span})"
@@ -178,7 +175,6 @@ def overview_tab(state: SessionState):
         margin=(-10, 0, 0, 20),
         styles={
             "line-height":"1.4em",
-            #"white-space": "pre-wrap",
             "word-break": "break-word",
             "overflow-wrap": "anywhere",
             "min-width": "0",
@@ -190,13 +186,12 @@ def overview_tab(state: SessionState):
         options=["By condition", "By sample"],
         value="By condition",
         button_type="default",
-        #sizing_mode="fixed",
         width=170,
         margin=(20, 0, 0, 20),
         styles={"z-index": "10"},
     )
 
-    # translate widget → function arg
+    # translate widget -> function arg
     def _sort_arg(mode: str) -> str:
         return "condition" if mode == "By condition" else "sample"
 
@@ -338,7 +333,7 @@ def overview_tab(state: SessionState):
         value=color_options[0],
         width=150,
     )
-    # 3) Function to update toggle labels whenever contrast changes
+    # Function to update toggle labels whenever contrast changes
     def _update_toggle_labels(event=None):
         grp1, grp2 = contrast_sel.value.split("_vs_")
         show_imp_cond1.name = f"▲ Fully Imputed in {grp1}"
@@ -349,7 +344,7 @@ def overview_tab(state: SessionState):
 
     contrast_sel.param.watch(_update_toggle_labels, "value")
 
-    # Non-imputed datapoints per condition filter (same as phospho)
+    # Non-imputed datapoints per condition filter
     def _min_max_reps_for_contrast(contrast: str) -> int:
         grp1, grp2 = contrast.split("_vs_")
         n1 = int((adata.obs["CONDITION"] == grp1).sum())
@@ -423,7 +418,7 @@ def overview_tab(state: SessionState):
 
         # fallback: UniProt -> gene
         try:
-            idx = ad.var_names.get_loc(t)  # exact UID match
+            idx = ad.var_names.get_loc(t)
             gene = names.iloc[idx]
             return gene.split(";", 1)[0].strip() if isinstance(gene, str) else str(gene)
         except KeyError:
@@ -470,9 +465,8 @@ def overview_tab(state: SessionState):
         width=200, styles={"z-index": "10"}
     )
 
-    # Turn (pattern, field) → sorted list of UniProt IDs using the shared helper
+    # Turn (pattern, field) -> sorted list of UniProt IDs using the shared helper
     def _group_ids(pattern, field):
-        #pattern='ECOLI'
         try:
             ids = resolve_pattern_to_uniprot_ids(state.adata, field, pattern)
             return sorted(ids)
@@ -481,7 +475,7 @@ def overview_tab(state: SessionState):
 
     group_ids_dmap = pn.bind(_group_ids, search_input_group, search_field_sel)
 
-    # --- Exact-match cohort via FileInput, with robust reset & single status line ---
+    # Cohort via FileInput
     # Hidden text holder (reactive bind target) and filename label
     _file_text = pn.widgets.TextAreaInput(visible=False)
     cohort_filename = pn.widgets.StaticText(name="", value="")
@@ -641,7 +635,6 @@ def overview_tab(state: SessionState):
 
 
     # selection download
-    #download_selection, _on_volcano_selected_data, _on_volcano_click_data = make_volcano_selection_downloader(
     download_selection, _on_volcano_selected_data, _on_volcano_click_data, _on_cohort_ids = make_volcano_selection_downloader(
         state=state,
         contrast_getter=lambda: str(contrast_sel.value),
@@ -693,11 +686,11 @@ def overview_tab(state: SessionState):
     # Bind reactivity via pn.bind (don’t pass bind objects into @depends)
     cohort_violin_view = pn.bind(
         _cohort_violin,
-        group_ids_selected,    # ids (either file OR pattern)
-        contrast_sel,          # contrast
-        show_measured,         # sm
-        show_imp_cond1,        # s1
-        show_imp_cond2,        # s2
+        group_ids_selected,
+        contrast_sel,
+        show_measured,
+        show_imp_cond1,
+        show_imp_cond2,
         min_nonimp_per_cond=pn.bind(_min_meas_value, min_meas_sel),
         min_consistent_peptides=pn.bind(_min_prec_value, min_prec_sel),
     )
@@ -735,12 +728,12 @@ def overview_tab(state: SessionState):
             # Reserve the card’s area when nothing is selected
             return pn.Spacer(width=800, height=170)
 
-        # --- pull values that do not depend on the "layer" toggle ---
+        # pull values that do not depend on the "layer" toggle
         key = _ensure_gene(protein) if proteomics_mode else str(protein)
         protein_info = get_protein_info(state, contrast, key, layers_sel)
 
         uniprot_id   = protein_info['uniprot_id']
-        idx = protein_info['index']  # already used below for "Protein Index"
+        idx = protein_info['index']
 
         def _first_token(x):
             if isinstance(x, str) and ";" in x:
@@ -794,10 +787,9 @@ def overview_tab(state: SessionState):
             styles={'flex': '1'}
         )
 
-        # we will inject the layer-dependent intensity Number into _intensity_slot elsewhere
-        _intensity_slot[:] = [pn.Spacer(height=0)]  # keeps layout tidy until bar function runs
+        _intensity_slot[:] = [pn.Spacer(height=0)]
 
-        # --- header (unchanged) ---
+        # header 
         base_size = 18
         max_len   = 10
         length    = len(protein)
@@ -827,7 +819,7 @@ def overview_tab(state: SessionState):
         gene = _ensure_gene(protein)
         uid  = protein_info["uniprot_id"]
         if peptido_mode:
-            # In peptido, what you currently display under "Uniprot ID" is the peptide sequence.
+            # In peptido, "Uniprot ID" is the peptide sequence.
             peptide_md = pn.pane.Markdown(f"**Peptide**: {uniprot_id}",
                                           styles={"font-size": "16px", "padding": "0", "line-height": "0px"})
 
@@ -844,7 +836,7 @@ def overview_tab(state: SessionState):
                 }
             )
         else:
-            gene_md = pn.pane.Markdown(f"**Gene(s)**: {gene}", styles=item_styles) #TODO adapt to each case ?
+            gene_md = pn.pane.Markdown(f"**Gene(s)**: {gene}", styles=item_styles)
             sep1    = pn.pane.Markdown("|", styles=sep_styles)
             uid_md  = pn.pane.Markdown(f"**Uniprot ID**: {uniprot_id}", styles=item_styles)
             sep2    = pn.pane.Markdown("|", styles=sep_styles)
@@ -864,31 +856,6 @@ def overview_tab(state: SessionState):
                     "border-bottom":   "1px solid #ddd",
                 }
             )
-        #gene = _ensure_gene(protein)
-        #uid  = protein_info["uniprot_id"]
-
-        #gene_md = pn.pane.Markdown(f"**Gene(s)**: {protein}", styles=item_styles)
-        #gene_md = pn.pane.Markdown(f"**Gene(s)**: {gene}", styles=item_styles) #TODO adapt to each case ?
-        #sep1    = pn.pane.Markdown("|", styles=sep_styles)
-        #uid_md  = pn.pane.Markdown(f"**Uniprot ID**: {uniprot_id}", styles=item_styles)
-        #sep2    = pn.pane.Markdown("|", styles=sep_styles)
-        #idx_md  = pn.pane.Markdown(f"**Protein Index**: {protein_info['index']+1}",
-        #                           styles=item_styles)
-
-        #header = pn.Row(
-        #    gene_md, sep1, uid_md, sep2, idx_md,
-        #    sizing_mode="stretch_width",
-        #    height=50,
-        #    styles={
-        #        "display":         "flex",
-        #        "align-items":     "space-evenly",
-        #        "justify-content": "space-evenly",
-        #        "background":      "#f9f9f9",
-        #        "margin": "0px",
-        #        "padding": "0px",
-        #        "border-bottom":   "1px solid #ddd",
-        #    }
-        #)
 
         # STRING link is layer-agnostic; fetch once & cache
         uid_for_link = _first_token(uniprot_id) or ""
@@ -898,7 +865,7 @@ def overview_tab(state: SessionState):
             string_link = ""
 
         if peptido_mode:
-            # Optional peptido metadata (must not crash if missing)
+            # Optional peptido metadata
             parent_uid = _safe_var("PARENT_PROTEIN", default=None)
             if parent_uid is None:
                 parent_uid = _safe_var("UNIPROT", default=None)
@@ -924,14 +891,6 @@ def overview_tab(state: SessionState):
             # If neither is available, show a friendly placeholder
             if not left_bits:
                 left_bits.append("No extra protein metrics available")
-        #left_bits = []
-        #if rec_val is not None:
-        #    left_bits.append(f"Precursors (global): <b>{re_count}</b>")
-        #if ibaq_avg is not None:
-        #    left_bits.append(f"IBAQ (global mean): <b>{ibaq_val}</b>")
-        ## If neither is available, show a friendly placeholder
-        #if not left_bits:
-        #    left_bits.append("No extra protein metrics available")
 
         footer_left = pn.pane.HTML(
             "<span style='font-size: 12px;'>" + " &nbsp;|&nbsp; ".join(left_bits) + "</span>"
@@ -944,13 +903,6 @@ def overview_tab(state: SessionState):
             f"<a href='{string_link}' target='_blank' rel='noopener'>STRING Entry</a>"
             f"</span>"
         )
-        #footer_right = pn.pane.HTML(
-        #    f"<span style='font-size: 12px;'>"
-        #    f"🔗 <a href='https://www.uniprot.org/uniprotkb/{uid_for_link}/entry' target='_blank' rel='noopener'>UniProt Entry</a>"
-        #    f" &nbsp;|&nbsp; "
-        #    f"<a href='{string_link}' target='_blank' rel='noopener'>STRING Entry</a>"
-        #    f"</span>"
-        #)
 
         footer_links = pn.Row(
             footer_left, pn.Spacer(), footer_right,
@@ -977,7 +929,6 @@ def overview_tab(state: SessionState):
             'justify-content':'space-evenly',
         }
 
-        # IMPORTANT: keep the exact row with 3 slots (q, lfc, INTENSITY_SLOT)
         card = pn.Card(
             header,
             pn.Row(q_ind, lfc_ind, _intensity_slot, sizing_mode="stretch_width"),
@@ -998,10 +949,7 @@ def overview_tab(state: SessionState):
             _intensity_slot[:] = [pn.Spacer(height=0)]
             return pn.Spacer(width=800, height=500, margin=(-30, 0, 0, 0))
 
-        # --- bar plot (unchanged) ---
-        #gene = _ensure_gene(protein)
-        #fig = plot_intensity_by_protein(state, contrast, protein, layers_sel)
-        #fig = plot_intensity_by_protein(state, contrast, gene, layers_sel)
+        # bar plot
         key = _ensure_gene(protein) if proteomics_mode else str(protein)
         fig = plot_intensity_by_protein(state, contrast, key, layers_sel)
         protein_info = get_protein_info(state, contrast, key, layers_sel)
@@ -1017,13 +965,9 @@ def overview_tab(state: SessionState):
             }
         )
 
-        # --- intensity Number (layer-dependent) ---
-        #gene = _ensure_gene(protein)
-        #protein_info   = get_protein_info(state, contrast, protein, layers_sel)
-        #protein_info   = get_protein_info(state, contrast, gene, layers_sel)
+        # intensity Number
         intensity_scale = "Avg Log Intensity" if layer != "Raw" else "Avg Intensity"
 
-        # NOTE: preserve your original formatting logic exactly
         prot_avg_val = protein_info["avg_int"]
         prot_avg_val = f"{prot_avg_val:.3f}" if prot_avg_val <= 100 else f"{prot_avg_val:.0f}"
 
@@ -1062,7 +1006,7 @@ def overview_tab(state: SessionState):
         }
     )
 
-    bokeh_doc = pn.state.curdoc  # for next-tick scheduling if you want it
+    bokeh_doc = pn.state.curdoc  # for next-tick scheduling
 
     def _current_uniprot_id():
         token = search_input.value
@@ -1100,7 +1044,7 @@ def overview_tab(state: SessionState):
     def _update_bar(_=None):
         protein = search_input.value
         if not protein:
-            # No protein selected → no spinner, show placeholder and clear intensity slot
+            # No protein selected -> no spinner, show placeholder and clear intensity slot
             _intensity_slot[:] = [pn.Spacer(height=0)]
             bar_holder.loading = False
             bar_holder[:] = [pn.Spacer(width=800, height=500, margin=(-30, 0, 0, 0))]
@@ -1129,10 +1073,10 @@ def overview_tab(state: SessionState):
     contrast_sel.param.watch(lambda e: (_update_info(), _update_bar(), _update_pep()), "value")
     layers_sel.param.watch(lambda e: _update_bar(), "value")
 
-    # Initial fill (after the page paints so you don’t see a flash)
+    # Initial fill (after the page paints so we don’t see a flash)
     bokeh_doc.add_next_tick_callback(lambda: (_update_info(), _update_bar(), _update_pep()))
 
-    # 3) assemble into a layout, no legend‐based toggles
+    # assemble into a layout, no legend‐based toggles
     volcano_and_detail = pn.Row(
         pn.Column(                 # left container that can stretch
             volcano_plot,
@@ -1140,7 +1084,6 @@ def overview_tab(state: SessionState):
             sizing_mode="stretch_width",
             styles={
                 "flex": "1",
-                #"min-width": "600px",      # ← keep a sane minimum for the plot
             },
         ),
         pn.Spacer(width=30),

@@ -1,4 +1,3 @@
-# tabs/analysis_tab.py
 import panel as pn
 import plotly.graph_objects as go
 from concurrent.futures import ThreadPoolExecutor
@@ -26,17 +25,17 @@ def analysis_tab(state):
         n = adata.varm["log2fc"].shape[1]
         contrast_names = [f"C{i}" for i in range(n)]
 
-    # ---------- widgets ----------
+    # widgets 
     contrast_sel_logfc = pn.widgets.Select(name="Contrast", options=list(contrast_names), value=contrast_names[0], width=160, styles={"z-index": "10"}, margin=(-10,0,0,0))
 
-    # ---------- section: linear model (residual variance) ----------
+    # section: linear model (residual variance) 
     resvar_fig = plotly_section(
         residual_variance_hist(adata),
         height=430,
         flex='0.8',
         margin=(20,0,0,-50))
 
-    # ---------- section: log2FC distribution (per contrast) ----------
+    # section: log2FC distribution (per contrast) 
     @pn.depends(contrast=contrast_sel_logfc)
     def log2fc_pane(contrast):
         fig = log2fc_histogram(adata, contrast)
@@ -62,7 +61,7 @@ def analysis_tab(state):
         height=570
     )
 
-    # ---------- section: stats distributions (p & q, overlay raw vs eBayes) ----------
+    # section: stats distributions (p & q, overlay raw vs eBayes) 
     contrast_sel_stat = pn.widgets.Select(name="Contrast", options=list(contrast_names), value=contrast_names[0], width=180,
                                           margin=(-10,0,0,20), styles={"z-index": "10"})
 
@@ -84,12 +83,11 @@ def analysis_tab(state):
             contrast_sel_stat,
             stats_row,
         ),
-        #stats_row,
         height=470,
         width='95vw',
     )
 
-    # ---------- section: shrinkage scatter (p & q) ----------
+    # section: shrinkage scatter (p & q) 
     contrast_sel_shrink = pn.widgets.Select(name="Contrast", options=list(contrast_names), value=contrast_names[0], width=180,
                                             margin=(-10,0,0,20), styles={"z-index": "10"})
     @pn.depends(contrast=contrast_sel_shrink)
@@ -109,7 +107,6 @@ def analysis_tab(state):
             contrast_sel_shrink,
             shrink_row,
         ),
-        #shrink_row,
         height=440,
         width='95vw',
     )
@@ -129,7 +126,6 @@ def analysis_tab(state):
     )
 
     # Clustering
-    # --- Clustering (same pattern as volcano detail: holder + single pane + loader) ---
 
     heatmap_toggle = pn.widgets.RadioButtonGroup(
         name="Matrix",
@@ -230,7 +226,7 @@ def analysis_tab(state):
         pn.pane.Markdown("##   Clustering", styles={"flex": "0.05", "z-index": "10"}),
         pn.Spacer(width=50),
         heatmap_toggle,
-        heatmap_holder,  # stable container, children never removed
+        heatmap_holder,
         height=830,
     )
 
