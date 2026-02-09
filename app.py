@@ -270,9 +270,7 @@ def _make_about_card(version: str) -> pn.Card:
 
 def _build_header(area_center, version: str, dev_flag: bool) -> pn.Column:
     """Header with left stack (title, browse, status) and right stack (logo, facility)."""
-    #pv_logo_path = "resources/pv_banner.png"
     pv_logo = _resource_bytes("pv_banner.png")
-    #pv_logo_pane = pn.pane.PNG(pv_logo_path, width=200, height=90, sizing_mode="fixed", margin=(-10,0,-40,0))
     pv_logo_pane = pn.pane.PNG(pv_logo, width=200, height=90, sizing_mode="fixed", margin=(-10,0,-40,0), embed=True)
 
 
@@ -313,9 +311,10 @@ def _build_header(area_center, version: str, dev_flag: bool) -> pn.Column:
 
     # Right side: logo above facility — same width, left-aligned inside the block
     FACILITY_WIDTH = 140
-    #facility_logo_path = "resources/Biozentrum_Logo_2011.png"
-    facility_logo = _resource_bytes("Biozentrum_Logo_2011.png")
-    #facility_logo_pane = pn.pane.PNG(facility_logo_path, width=FACILITY_WIDTH, height=90, sizing_mode="fixed", margin=(0, 10, 6, -15))
+
+    facility_logo_path = os.environ.get("PV_FACILITY_LOGO_RESOURCE",
+                                        "Biozentrum_Logo_2011.png")
+    facility_logo = _resource_bytes(facility_logo_path)
     facility_logo_pane = pn.pane.PNG(facility_logo, width=FACILITY_WIDTH, height=90, sizing_mode="fixed", margin=(0, 10, 6, -15))
     right_top_row = pn.Row(facility_logo_pane,
                            pn.Spacer(width=50),
