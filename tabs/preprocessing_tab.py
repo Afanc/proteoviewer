@@ -317,7 +317,14 @@ def preprocessing_tab(state: SessionState):
             pass
 
         def compute():
-            fig_before, fig_after = plot_ma(state.adata, sample)
+            """Compute MA plots in a worker thread; always schedule a UI update."""
+            try:
+                fig_before, fig_after = plot_ma(state.adata, sample)
+            except Exception as e:
+                # If compute fails, we MUST still clear the spinner and show something.
+                logger.exception("MA plot computation failed")
+                fig_before = _placeholder_plot("MA before normalization", subtitle=str(e))
+                fig_after  = _placeholder_plot("MA after normalization",  subtitle=str(e))
 
             def finish():
                 # Ignore stale results
@@ -330,7 +337,11 @@ def preprocessing_tab(state: SessionState):
                 except Exception:
                     pass
 
-            bokeh_doc.add_next_tick_callback(finish)
+            # pn.state.curdoc can be None in odd build contexts; fall back gracefully.
+            if bokeh_doc is not None:
+                bokeh_doc.add_next_tick_callback(finish)
+            else:
+                finish()
 
         executor.submit(compute)
 
@@ -339,7 +350,10 @@ def preprocessing_tab(state: SessionState):
     # Initial lazy compute AFTER first paint
     def _initial_ma():
         on_sample_change(SimpleNamespace(new=sample_sel.value))
-    bokeh_doc.add_next_tick_callback(_initial_ma)
+    if bokeh_doc is not None:
+        bokeh_doc.add_next_tick_callback(_initial_ma)
+    else:
+        _initial_ma()
 
     ma_pane = pn.Row(
         pn.Column(
