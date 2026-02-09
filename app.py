@@ -112,6 +112,8 @@ def _get_upload_root() -> str:
     fallback.mkdir(parents=True, exist_ok=True)
     return str(fallback)
 
+UPROOT = _get_upload_root()
+
 # Lazy Qt app for native dialogs (dev only)
 _QT_APP = None
 
