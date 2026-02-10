@@ -457,7 +457,7 @@ def overview_tab(state: SessionState):
         value="FASTA headers",
         width=130,
         styles={"z-index": "10"},
-        margin=(2,0,0,0),
+        margin=(2,0,0,-2),
     )
 
     search_input_group = pn.widgets.TextInput(
@@ -1120,7 +1120,7 @@ def overview_tab(state: SessionState):
             make_vr(),
             pn.Spacer(width=20),
             pn.Column(
-                pn.pane.Markdown("**Cohort Inspector**", align="start", margin=(-20,0,0,0)),
+                pn.pane.Markdown("**Cohort Inspector**", align="start", margin=(-20,0,0,10)),
                 search_field_sel,
             ),
             pn.Spacer(width=10),

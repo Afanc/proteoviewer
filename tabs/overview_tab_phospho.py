@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import re
+import warnings
 import textwrap
 from functools import lru_cache
 from typing import Iterable, Optional
@@ -552,21 +553,32 @@ def overview_tab_phospho(state: SessionState):
         if (event.new or "") == "":
             _on_volcano_click_data({})
 
+    # Ensure FASTA headers are available under a stable name for the resolver.
+    # Non-phospho uses a "FASTA headers" field option; phospho datasets may or may not have FASTA headers.
+    # We support common column variants and keep behavior "no matches" if absent.
+    if "FASTA_HEADERS" not in adata.var.columns:
+        if "FASTA_HEADER" in adata.var.columns:
+            adata.var["FASTA_HEADERS"] = adata.var["FASTA_HEADER"]
+        elif "FASTA" in adata.var.columns:
+            adata.var["FASTA_HEADERS"] = adata.var["FASTA"]
+        else:
+            # Don't spam logs; just warn once per session.
+            warnings.warn("Phospho overview: FASTA headers not found in adata.var; pattern search on FASTA will return 0 matches.")
+            adata.var["FASTA_HEADERS"] = ""
+
     search_field_sel = pn.widgets.Select(
         name="Search Field",
-        options=["Gene names", "UniProt IDs"],
+        options=["FASTA headers", "Gene names", "UniProt IDs"],
         value="Gene names",
         width=130,
         styles={"z-index": "10"},
         margin=(2, 0, 0, 0),
     )
 
-    search_input_group = pn.widgets.AutocompleteInput(
-        name="Search Gene/Protein",
-        placeholder="Gene name or Uniprot ID",
-        options=list(set(adata.var.get("GENE_NAMES", pd.Series(dtype=str)))) +
-                list(set(adata.var.get("PARENT_PROTEIN", pd.Series(dtype=str)))),
-        case_sensitive=False,
+    # Pattern search input (same semantics as non-phospho overview_tab: simple substring / wildcard style)
+    search_input_group = pn.widgets.TextInput(
+        name="Pattern or File",
+        placeholder="*_ECOLI* or PROX1",
         width=200,
         styles={"z-index": "10"},
     )
