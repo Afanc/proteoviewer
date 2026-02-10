@@ -25,31 +25,51 @@ from components.overview_plots import (
     resolve_pattern_to_uniprot_ids,
     get_protein_info,
 )
-from components.selection_export import SelectionExportSpec, make_volcano_selection_downloader, make_adjacent_sites_csv_callback
+from components.selection_export import (
+    SelectionExportSpec,
+    make_volcano_selection_downloader,
+    make_adjacent_sites_csv_callback
+)
+from tabs.overview_shared import (
+    make_id_sort_toggle,
+    sort_arg,
+    make_intro_pane,
+    make_min_meas_select,
+    make_min_precursor_select,
+    make_toggle_label_updater,
+    make_cohort_inspector_widgets,
+    make_metrics_pane,
+    make_clustering_pane,
+    fmt_files_list,
+    bind_uirevision,
+    wire_cohort_export_updates,
+)
 from components.plot_utils import plot_pca_2d, plot_umap_2d, plot_mds_2d
 from components.string_links import get_string_link
-from components.texts import intro_preprocessing_text, log_transform_text  # keep parity
-from utils.layout_utils import plotly_section, make_vr, make_hr, make_section, make_row, FRAME_STYLES, FRAME_STYLES_TALL, FRAME_STYLES_SHORT
+from components.texts import intro_preprocessing_text, log_transform_text
+from utils.layout_utils import (
+    plotly_section,
+    make_vr,
+    make_hr,
+    make_section,
+    make_row,
+    FRAME_STYLES,
+    FRAME_STYLES_TALL,
+    FRAME_STYLES_SHORT
+)
 from utils.utils import log_time, logger
 
 
-# Small utilities 
-
-def _fmt_files_list(paths: Iterable[str], max_items: int = 6) -> list[str]:
-    paths = list(paths or [])
-    if not paths:
-        return []
-    head = [f"  - {os.path.basename(str(p))}" for p in paths[:max_items]]
-    rest = len(paths) - max_items
-    if rest > 0:
-        head.append(f"  - … (+{rest} more)")
-    return head
-
+# Small utilities
 
 def _pn_only(site_id: str) -> str:
     s = str(site_id)
     m = re.search(r"\|((?:p|[STY])\d+)", s)
     return m.group(1) if m else ""
+
+def _site_token_after_pipe(site_id: str) -> str:
+    s = str(site_id)
+    return s.split("|", 1)[1] if "|" in s else s
 
 def _peptide_from_site(site_id: str) -> str:
     return str(site_id).split("|", 1)[0]
@@ -179,7 +199,9 @@ def _build_pipeline_summary(adata) -> str:
     num_conditions = len(adata.obs["CONDITION"].unique())
     num_contrasts = int(num_conditions * (num_conditions - 1) / 2)
 
-    analysis_type = preproc.get("analysis_type", "DIA")
+    analysis_type = preproc.get("analysis_type", "phospho")
+    phospho_cfg = preproc.get("phospho", {}) or {}
+    multisite_mode = str(phospho_cfg.get("multisite_collapse_policy", "explode") or "explode")
     ebayes_method = analysis.get("ebayes_method", "limma")
     input_layout = preproc.get("input_layout", "")
     quant_method = preproc.get("quantification_method", "sum")
@@ -246,6 +268,7 @@ def _build_pipeline_summary(adata) -> str:
 
         **Pipeline steps**
         - **Quantification**: {quant_method}
+        - **Multiphosphorylated policy**: {multisite_mode}
         - **Filtering**:
             - Contaminants ({', '.join(contaminants_files)}): {cont_txt}
             - q-value ≤ {q_thr_txt}: {q_txt}
@@ -302,6 +325,8 @@ def overview_tab_phospho(state: SessionState):
     adata = state.adata
     preproc_cfg = adata.uns["preprocessing"]
     analysis_type  = preproc_cfg.get("analysis_type", "DIA")
+    phospho_cfg = preproc_cfg.get("phospho", {}) or {}
+    multisite_mode = str(phospho_cfg.get("multisite_collapse_policy", "explode") or "explode")
 
     views = _make_adata_views(adata)
     has_cov = bool(adata.uns["has_covariate"])
@@ -316,24 +341,12 @@ def overview_tab_phospho(state: SessionState):
         styles={"line-height": "1.4em", "word-break": "break-word", "overflow-wrap": "anywhere", "min-width": "0"},
     )
 
-    id_sort_toggle = pn.widgets.RadioButtonGroup(
-        name="Order",
-        options=["By condition", "By sample"],
-        value="By condition",
-        button_type="default",
-        sizing_mode="fixed",
-        width=170,
-        margin=(20, 0, 0, 20),
-        styles={"z-index": "10"},
-    )
-
-    def _sort_arg(mode: str) -> str:
-        return "condition" if mode == "By condition" else "sample"
+    id_sort_toggle = make_id_sort_toggle(margin=(20, 0, 0, 20), width=170)
 
     hist_ID_dmap = pn.bind(
         plot_barplot_proteins_per_sample,
         adata=adata,
-        sort_by=pn.bind(_sort_arg, id_sort_toggle),
+        sort_by=pn.bind(sort_arg, id_sort_toggle),
         title="Phosphosites by Sample and Category"
     )
 
@@ -344,82 +357,23 @@ def overview_tab_phospho(state: SessionState):
         styles={"flex": "1"},
     )
 
-    intro_pane = pn.Row(
-        pn.Column(pn.pane.Markdown("##   Summary"), summary_pane, styles={"flex": "0.32", "min-width": "0"}),
-        make_vr(),
-        pn.Spacer(width=20),
-        id_sort_toggle,
-        hist_plot_pane,
+    intro_pane = make_intro_pane(
+        summary_pane=summary_pane,
+        id_sort_toggle=id_sort_toggle,
+        hist_plot_pane=hist_plot_pane,
+        hist_plot_margin=(-20, 20, 0, -190),
         height=530,
-        margin=(0, 0, 0, 20),
-        sizing_mode="stretch_width",
-        styles={"border-radius": "15px", "box-shadow": "3px 3px 5px #bcbcbc", "width": "98vw"},
     )
 
-    # Metrics 
+    # Metrics + Clustering (shared builders; figures are unchanged)
     cv_fig, rmad_fig = plot_violin_cv_rmad_per_condition(adata)
-    rmad_pane = pn.pane.Plotly(rmad_fig, height=500, sizing_mode="stretch_width",
-                               styles={"flex": "1"}, config={'responsive': True}, margin=(0, 0, 0, -100))
-    cv_pane = pn.pane.Plotly(cv_fig, height=500, sizing_mode="stretch_width",
-                             styles={"flex": "1"}, config={'responsive': True})
+    metrics_pane = make_metrics_pane(cv_fig=cv_fig, rmad_fig=rmad_fig)
 
-    metrics_pane = pn.Row(
-        pn.pane.Markdown("##   Metrics", styles={"flex": "0.1", "z-index": "10"}),
-        rmad_pane,
-        pn.Spacer(width=25),
-        make_vr(),
-        pn.Spacer(width=25),
-        cv_pane,
-        pn.Spacer(width=50),
-        height=530,
-        margin=(0, 0, 0, 20),
-        sizing_mode="stretch_width",
-        styles={"border-radius": "15px", "box-shadow": "3px 3px 5px #bcbcbc", "width": "98vw"},
-    )
-
-    # Clustering 
-    pca_pane = pn.pane.Plotly(
-        plot_pca_2d(adata),
-        height=500,
-        sizing_mode="stretch_width",
-        styles={"flex": "1"},
-        margin=(0, 0, 0, -100),
-    )
-    if "X_mds" in state.adata.obsm:
-        emb_fig = plot_mds_2d(state.adata, title="MDS")
-    else:
-        emb_fig = plot_umap_2d(state.adata, title="UMAP")
-
-    umap_pane = pn.pane.Plotly(
-        emb_fig,
-        height=500,
-        sizing_mode="stretch_width",
-        styles={"flex":"1"},
-    )
-    cluster_info = pn.widgets.TooltipIcon(
-        value="""
-        Using left-censored QC data.
-        Results may differ from
-        analysis of processed data.
-        Multidimensional Scaling uses
-        correlation distances.
-        """,
-        margin=(-475,0,0,-80),
-        styles={"z-index":"10"},
-    )
-
-    clustering_pane = pn.Row(
-        pn.pane.Markdown("##   Clustering", styles={"flex": "0.15", "z-index": "10"}),
-        cluster_info,
-        pca_pane,
-        make_vr(),
-        pn.Spacer(width=60),
-        umap_pane,
-        make_vr(),
-        height=530,
-        margin=(0, 0, 0, 20),
-        sizing_mode="stretch_width",
-        styles={"border-radius": "15px", "box-shadow": "3px 3px 5px #bcbcbc", "width": "98vw"},
+    clustering_pane = make_clustering_pane(
+        adata=state.adata,
+        plot_pca_2d=plot_pca_2d,
+        plot_mds_2d=plot_mds_2d,
+        plot_umap_2d=plot_umap_2d,
     )
 
     # Volcanoes 
@@ -445,69 +399,42 @@ def overview_tab_phospho(state: SessionState):
     color_options = ["Significance"] + (["Raw LogFC", "Adj. LogFC", "FT LogFC"] if has_cov else [])
     color_by = pn.widgets.Select(name="Color by", options=color_options, value=color_options[0], width=120)
 
-    def _update_toggle_labels(_=None):
-        grp1, grp2 = contrast_sel.value.split("_vs_")
-        show_imp_cond1.name = f"▲ Fully Imputed in {grp1}"
-        show_imp_cond2.name = f"▼ Fully Imputed in {grp2}"
+    make_toggle_label_updater(
+        contrast_sel=contrast_sel,
+        show_imp_cond1=show_imp_cond1,
+        show_imp_cond2=show_imp_cond2,
+    )
 
-    _update_toggle_labels()
-    contrast_sel.param.watch(_update_toggle_labels, "value")
-
-    # Non-imputed datapoints per condition filter
-    def _min_max_reps_for_contrast(contrast: str) -> int:
-        grp1, grp2 = contrast.split("_vs_")
-        n1 = int((adata.obs["CONDITION"] == grp1).sum())
-        n2 = int((adata.obs["CONDITION"] == grp2).sum())
-        return min(n1,n2), max(n1, n2)
-
-    def _mk_min_meas_options(max_reps: int) -> dict[str, int]:
-        # labels "≥1", "≥2", ... mapped to int values
-        return {f"≥{i}": i for i in range(1, max_reps + 1)}
-
-    def _mk_min_meas_ft_options(max_reps: int) -> dict[str, int]:
-        # FT can legitimately be 0
-        return {f"≥{i}": i for i in range(0, max_reps + 1)}
-
-    # initialize from the first contrast
-    _init_min, _init_max = _min_max_reps_for_contrast(contrast_sel.value)
-    min_meas_options = _mk_min_meas_options(_init_max)
-    min_meas_ft_options = _mk_min_meas_ft_options(_init_max)
-
-    min_meas_sel = pn.widgets.Select(name="Min / condition",
-                                     options=list(min_meas_options.keys()),
-                                     value=f"≥{_init_min}",
-                                     width=80)
-
-    def _min_meas_value(label: str) -> int:
-        return min_meas_options[label]
-
-    def _min_meas_ft_value(label: str) -> int:
-        # same option mapping as min_meas_sel;
-        return min_meas_ft_options[label]
+    min_meas_sel, _min_meas_value = make_min_meas_select(
+        adata=adata,
+        contrast_sel=contrast_sel,
+        allow_zero=False,
+        name="Min / condition",
+        width=80,
+        default_value_label=None,  # preserve original: ≥min(reps)
+    )
 
     # Flowthrough non-imputed datapoints per condition filter (only meaningful when has_cov)
-    ft_min_meas_sel = pn.widgets.Select(
+    ft_min_meas_sel, _min_meas_ft_value = make_min_meas_select(
+        adata=adata,
+        contrast_sel=contrast_sel,
+        allow_zero=True,            # FT can be 0
         name="Min / FT condition",
-        options=list(min_meas_ft_options.keys()),
-        value=f"≥{_init_max}",
         width=90,
-        disabled=(not has_cov),
+        default_value_label=None,   # preserve original: default to ≥max(reps)
     )
+    ft_min_meas_sel.disabled = (not has_cov)
+
 
     # Min numb. precursors options
     max_prec_options = 6 if analysis_type == "DIA" else 4
-    min_prec_options = {f"≥{i}": i for i in range(0, max_prec_options)}
     min_prec_title = "pep" if analysis_type == "DIA" else "prec"
-
-    min_prec_sel = pn.widgets.Select(
-        name=f"Consistent {min_prec_title}",
-        options=list(min_prec_options.keys()),
-        value="≥0",
+    min_prec_sel, _min_prec_value = make_min_precursor_select(
+        max_prec_options=max_prec_options,
+        title_token=min_prec_title,
         width=80,
+        default_label="≥0",
     )
-
-    def _min_prec_value(label: str) -> int:
-        return min_prec_options[label]
 
     search_input = pn.widgets.AutocompleteInput(
         name="Search Phosphosite",
@@ -518,24 +445,6 @@ def overview_tab_phospho(state: SessionState):
     clear_search = pn.widgets.Button(name="Clear", width=80)
     clear_search.on_click(lambda _e: setattr(search_input, "value", ""))
 
-    def _refresh_min_meas_widgets(event=None) -> None:
-        # Keep option ranges aligned to the currently selected contrast
-        _mn, mx = _min_max_reps_for_contrast(contrast_sel.value)
-        nonlocal min_meas_options
-        min_meas_options = _mk_min_meas_options(mx)
-        nonlocal min_meas_ft_options
-        min_meas_ft_options = _mk_min_meas_ft_options(mx)
-
-        # Update both selects (phospho + FT) with the new option set
-        opts_main = list(min_meas_options.keys())
-        opts_ft   = list(min_meas_ft_options.keys())
-        min_meas_sel.options = opts_main
-        ft_min_meas_sel.options = opts_ft
-
-        # Default both to max reps (consistent with current behavior)
-        min_meas_sel.value = f"≥{mx}"
-        ft_min_meas_sel.value = f"≥{mx}"
-
     def _update_ft_filter_enable(_=None) -> None:
         # FT filter is a no-op in raw volcano mode; disable it so UI matches semantics
         if not has_cov:
@@ -543,7 +452,6 @@ def overview_tab_phospho(state: SessionState):
             return
         ft_min_meas_sel.disabled = (volcano_src_sel.value == "Phospho (raw)")
 
-    contrast_sel.param.watch(_refresh_min_meas_widgets, "value")
     volcano_src_sel.param.watch(_update_ft_filter_enable, "value")
     _update_ft_filter_enable()
 
@@ -566,121 +474,27 @@ def overview_tab_phospho(state: SessionState):
             warnings.warn("Phospho overview: FASTA headers not found in adata.var; pattern search on FASTA will return 0 matches.")
             adata.var["FASTA_HEADERS"] = ""
 
-    search_field_sel = pn.widgets.Select(
-        name="Search Field",
-        options=["FASTA headers", "Gene names", "UniProt IDs"],
-        value="Gene names",
-        width=130,
-        styles={"z-index": "10"},
-        margin=(2, 0, 0, 0),
+    (
+        search_field_sel,
+        search_input_group,
+        file_holder,
+        clear_all,
+        status_pane,
+        group_ids_selected,
+        _file_text,
+        cohort_filename,
+    ) = make_cohort_inspector_widgets(
+        adata=adata,
+        search_field_options=["FASTA headers", "Gene names", "UniProt IDs"],
+        search_field_default="Gene names",
+        pattern_placeholder="ECOLI or ^gene[0-9]$",
+        status_margin=(-10, 0, 0, 0),
+        clear_btn_width=80,
+        file_btn_width=200,
+        pattern_width=200,
+        field_width=130,
+        field_margin=(2, 0, 0, 0),
     )
-
-    # Pattern search input (same semantics as non-phospho overview_tab: simple substring / wildcard style)
-    search_input_group = pn.widgets.TextInput(
-        name="Pattern or File",
-        placeholder="*_ECOLI* or PROX1",
-        width=200,
-        styles={"z-index": "10"},
-    )
-
-    def _group_ids(pattern, field):
-        try:
-            return sorted(resolve_pattern_to_uniprot_ids(adata, field, pattern))
-        except Exception:
-            return []
-
-    group_ids_dmap = pn.bind(_group_ids, search_input_group, search_field_sel)
-
-    # Cohort via FileInput, with robust reset & single status line
-    _file_text = pn.widgets.TextAreaInput(visible=False)  # reactive bind target
-    cohort_filename = pn.widgets.StaticText(name="", value="")
-    file_holder = pn.Column()
-
-    def _new_file_input():
-        fi = pn.widgets.FileInput(accept=".txt,.csv,.tsv", multiple=False, width=200)
-        def _on_change(event):
-            b = event.new or b""
-            try:
-                txt = b.decode("utf-8", errors="ignore")
-            except Exception:
-                txt = ""
-            _file_text.value = txt
-            cohort_filename.value = fi.filename or ""
-            # EITHER-OR: if a file is provided, clear any existing pattern
-            if txt.strip():
-                try:
-                    search_input_group.value = ""
-                    if hasattr(search_input_group, "value_input"):
-                        search_input_group.value_input = ""
-                except Exception:
-                    pass
-        fi.param.watch(_on_change, "value")
-        return fi
-
-    file_upload = _new_file_input()
-    file_holder.objects = [file_upload]
-
-    def _parse_file_text(text: str) -> list[str]:
-        if not text:
-            return []
-        tokens = re.split(r"[,\t;\r\n\s]+", text)
-        return sorted({t.strip() for t in tokens if t and not t.isspace()})
-
-    def _file_ids(file_text: str, field: str):
-        items = _parse_file_text(file_text or "")
-        try:
-            return sorted(resolve_exact_list_to_uniprot_ids(adata, field, items))
-        except Exception:
-            return []
-
-    group_file_ids_dmap = pn.bind(_file_ids, _file_text, search_field_sel)
-
-    def _either(ids_pat, ids_file, pat_text, file_text):
-        use_file = bool((file_text or "").strip())
-        return ids_file if use_file else ids_pat
-
-    group_ids_selected = pn.bind(_either, group_ids_dmap, group_file_ids_dmap, search_input_group, _file_text)
-
-    def _fmt_status(ids_pat, ids_file, fname, pat_text, file_text):
-        if not (pat_text and str(pat_text).strip()) and not (file_text and str(file_text).strip()):
-            return ""
-        active_from_file = bool((file_text or "").strip())
-        n = len(ids_file or []) if active_from_file else len(ids_pat or [])
-        label = "match" if n == 1 else "matches"
-        _ = os.path.basename(str(fname)) if (active_from_file and fname) else ""
-        return f"**{n} {label}**"
-
-    status_md = pn.bind(_fmt_status, group_ids_dmap, group_file_ids_dmap, cohort_filename, search_input_group, _file_text)
-    status_pane = pn.pane.Markdown(status_md, margin=(-10, 0, 0, 0), align="center")
-
-    def _has_query(pat_text, file_text):
-        return bool((pat_text or "").strip()) or bool((file_text or "").strip())
-
-    status_pane.visible = pn.bind(_has_query, search_input_group, _file_text)
-
-    clear_all = pn.widgets.Button(name="Clear", width=80)
-    def _on_clear_all(_event):
-        search_input_group.value = ""
-        _file_text.value = ""
-        cohort_filename.value = ""
-        # recreate FileInput to ensure browsers fire change for same file
-        new_file = _new_file_input()
-        file_holder.objects = [new_file]
-        nonlocal file_upload
-        file_upload = new_file
-    clear_all.on_click(_on_clear_all)
-
-    # EITHER-OR: if user types a non-empty pattern, clear any uploaded file
-    def _on_pattern_change(event):
-        val = event.new or ""
-        if str(val).strip():
-            _file_text.value = ""
-            cohort_filename.value = ""
-            new_file = _new_file_input()
-            file_holder.objects = [new_file]
-            nonlocal file_upload
-            file_upload = new_file
-    search_input_group.param.watch(_on_pattern_change, "value")
 
     volcano_dmap = pn.bind(
         plot_volcanoes_wrapper,
@@ -707,11 +521,7 @@ def overview_tab_phospho(state: SessionState):
             gene = click["points"][0]["text"]
             search_input.value = gene
 
-    def _with_uirevision(fig, contrast):
-        fig.update_layout(uirevision=f"volcano-{contrast}")
-        return fig
-
-    volcano_dmap_wrapped = pn.bind(_with_uirevision, volcano_dmap, contrast_sel)
+    volcano_dmap_wrapped = bind_uirevision(volcano_dmap, contrast_sel, prefix="volcano")
 
     volcano_plot = pn.pane.Plotly(
         volcano_dmap_wrapped,
@@ -737,14 +547,51 @@ def overview_tab_phospho(state: SessionState):
     volcano_plot.param.watch(lambda e: _on_volcano_selected_data(e.new), "selected_data")
     volcano_plot.param.watch(lambda e: _on_volcano_click_data(e.new), "click_data")
 
-    def _push_cohort_ids(_=None) -> None:
-        _on_cohort_ids(list(group_ids_selected() or []))
-
     # Cohort changes must update the export state immediately (priority: click > cohort > lasso).
-    search_input_group.param.watch(_push_cohort_ids, "value")
-    search_field_sel.param.watch(_push_cohort_ids, "value")
-    _file_text.param.watch(_push_cohort_ids, "value")
-    clear_all.on_click(lambda _e: _push_cohort_ids())
+    wire_cohort_export_updates(
+        group_ids_selected=group_ids_selected,
+        on_cohort_ids=_on_cohort_ids,
+        search_input_group=search_input_group,
+        file_text_widget=_file_text,
+        clear_btn=clear_all,
+        search_field_sel=search_field_sel,
+    )
+
+    # Cohort Violin View (same semantics as non-phospho overview)
+    def _cohort_violin(ids, contrast, sm, s1, s2, min_nonimp_per_cond, min_consistent_peptides):
+        if not ids:
+            return pn.Spacer(height=0)  # collapses cleanly when no cohort
+        fig = plot_group_violin_for_volcano(
+            state=state,
+            contrast=contrast,
+            min_nonimp_per_cond=min_nonimp_per_cond,
+            min_consistent_peptides=min_consistent_peptides,
+            highlight_group=ids,
+            show_measured=sm,
+            show_imp_cond1=s1,
+            show_imp_cond2=s2,
+            width=1200,
+            height=100,
+        )
+        return pn.pane.Plotly(
+            fig,
+            height=150,
+            margin=(-10, 0, 10, 20),
+            sizing_mode="stretch_width",
+            config={"responsive": True},
+            styles={"border-radius": "8px", "box-shadow": "3px 3px 5px #bcbcbc"},
+        )
+
+    cohort_violin_view = pn.bind(
+        _cohort_violin,
+        group_ids_selected,
+        contrast_sel,
+        show_measured,
+        show_imp_cond1,
+        show_imp_cond2,
+        min_nonimp_per_cond=pn.bind(_min_meas_value, min_meas_sel),
+        min_consistent_peptides=pn.bind(_min_prec_value, min_prec_sel),
+    )
 
     # Clear exporter click state when phosphosite is cleared.
     search_input.param.watch(_on_site_cleared, "value")
@@ -777,18 +624,16 @@ def overview_tab_phospho(state: SessionState):
         pn.Column(
             main_info_holder,
             pn.Spacer(height=20),
-            pn.Row(cov_info_holder, pn.Spacer(width=20, visible=has_cov), pep_table_holder, sizing_mode="fixed", width=800),
+            pn.Row(cov_info_holder, pn.Spacer(width=20, visible=has_cov), pep_table_holder, width=800),
             pn.Spacer(height=45),
             main_bar_holder,
             pn.Spacer(height=20),
             cov_bar_holder,
             pn.Spacer(height=20),
             prec_trend_holder,
-            sizing_mode="fixed",
             width=840,
         ),
         margin=(0, 0, 0, 0),
-        sizing_mode="fixed",
         styles={"margin-left": "auto"},
     )
 
@@ -1042,12 +887,13 @@ def overview_tab_phospho(state: SessionState):
             return pn.Spacer(width=300, height=120)
 
         df = pd.DataFrame(index=siblings)
-        df["Site"] = [_pn_only(s) for s in siblings]
+        df["Site"] = [_site_token_after_pipe(s) for s in siblings]
         df["Log2FC"] = df_fc.loc[siblings, contrast].astype(float).values
         df["Q"]      = df_q.loc[siblings, contrast].astype(float).values
 
         df["site_id"] = df.index
-        df["__pnum__"] = pd.to_numeric(df["Site"].str.extract(r"(\d+)")[0], errors="coerce")
+        # Sort by the first numeric position encountered (works for "S42" and "S42,S53").
+        df["__pnum__"] = pd.to_numeric(df["Site"].astype(str).str.extract(r"(\d+)")[0], errors="coerce")
         if df["__pnum__"].isna().any():
             bad = df.loc[df["__pnum__"].isna(), "site_id"].astype(str).tolist()[:10]
             raise ValueError(
@@ -1100,7 +946,7 @@ def overview_tab_phospho(state: SessionState):
             disabled=True,
             height=table_h,
             width=300,
-            widths={"Site": 55},
+            widths={"Site": 75 if multisite_mode == "keep" else 55},
             configuration={
                 "rowHeight": row_h,
                 "columnHeaderVertAlign": "bottom",
@@ -1133,8 +979,9 @@ def overview_tab_phospho(state: SessionState):
             margin=(5, 10, 0, 0),
         )
 
+        header_label = "**Adjacent Sites**" if multisite_mode != "keep" else "**Adjacent Phosphopeptides**"
         header = pn.Row(
-                    pn.pane.Markdown("**Adjacent Sites**",
+                    pn.pane.Markdown(header_label,
                                   styles={"font-size": "16px", "padding": "0", "line-height": "0px"}),
                     pn.Spacer(sizing_mode="stretch_width"),
                     download_adjacent,
@@ -1235,6 +1082,7 @@ def overview_tab_phospho(state: SessionState):
     volcano_and_detail = pn.Row(
         pn.Column(
             volcano_plot,
+            cohort_violin_view,
             sizing_mode="stretch_width",
             styles={"flex": "1", "min-width": "600px"},
         ),
@@ -1270,7 +1118,10 @@ def overview_tab_phospho(state: SessionState):
             pn.Spacer(width=10),
             make_vr(),
             pn.Spacer(width=20),
-            pn.Column(search_field_sel),
+            pn.Column(
+                pn.pane.Markdown("**Cohort Inspector**", align="start", margin=(-20,0,0,10)),
+                search_field_sel,
+            ),
             pn.Spacer(width=10),
             pn.Column(
                 search_input_group,
@@ -1298,6 +1149,10 @@ def overview_tab_phospho(state: SessionState):
         sizing_mode="stretch_width",
         styles={"border-radius": "15px", "box-shadow": "3px 3px 5px #bcbcbc", "width": "98vw"},
     )
+
+
+    # Expand container when cohort violin is visible (prevents clipping)
+    volcano_pane.height = pn.bind(lambda ids: 1460 if ids else 1310, group_ids_selected)
 
     # Final layout 
     layout = pn.Column(

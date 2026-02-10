@@ -1,6 +1,7 @@
 import os
 import re
 import panel as pn
+import textwrap
 from functools import lru_cache
 from utils.session_state import SessionState
 from components.overview_plots import (
@@ -10,8 +11,6 @@ from components.overview_plots import (
     plot_intensity_by_protein,
     get_protein_info,
     plot_peptide_trends_centered,
-    resolve_pattern_to_uniprot_ids,
-    resolve_exact_list_to_uniprot_ids,
     plot_group_violin_for_volcano,
 )
 from components.selection_export import (
@@ -24,19 +23,32 @@ from components.texts import (
     log_transform_text
 )
 from components.string_links import get_string_link
-from utils.layout_utils import plotly_section, make_vr, make_hr, make_section, make_row, FRAME_STYLES, FRAME_STYLES_TALL, FRAME_STYLES_SHORT
+from tabs.overview_shared import (
+    make_id_sort_toggle,
+    sort_arg,
+    fmt_files_list,
+    make_intro_pane,
+    make_min_meas_select,
+    make_min_precursor_select,
+    make_toggle_label_updater,
+    make_cohort_inspector_widgets,
+    make_metrics_pane,
+    make_clustering_pane,
+    bind_uirevision,
+    wire_cohort_export_updates,
+)
+from utils.layout_utils import (
+    plotly_section,
+    make_vr,
+    make_hr,
+    make_section,
+    make_row,
+    FRAME_STYLES,
+    FRAME_STYLES_TALL,
+    FRAME_STYLES_SHORT
+)
 from utils.utils import logger, log_time
-import textwrap
 
-def _fmt_files_list(files, max_items=6):
-    """Return bullet lines for files, truncated to max_items with a '+N more' line."""
-    if not files:
-        return []
-    short = [f"  - {os.path.basename(str(f))}" for f in files[:max_items]]
-    rest = max(0, len(files) - max_items)
-    if rest:
-        short.append(f"  - … (+{rest} more)")
-    return short
 
 def _fmt_tags_list(tags):
     """Format tags as 'a, b, c' (no brackets/quotes)."""
@@ -126,6 +138,7 @@ def overview_tab(state: SessionState):
 
     # Imputation condensation
     imp_method = imputation.get("method", "")
+    extras = []
     if "knn" in imp_method:
         extras = []
         if "knn_k" in imputation:
@@ -139,11 +152,13 @@ def overview_tab(state: SessionState):
         rf_max_iter = preproc_cfg.get("imputation").get("rf_max_iter")
         imp_method += f", rf_max_iter={rf_max_iter}"
 
-    if "lc_conmed" in imp_method:
+    if "lc_conmed" in imp_method and "lc_conmed_lod_k" in imputation:
         lc_conmed_lod_k = preproc_cfg.get("imputation").get("lc_conmed_lod_k", "NA")
         lc_conmed_min_obs = preproc_cfg.get("imputation").get("lc_conmed_in_min_obs", "1")
-        imp_method += f", lod_k={lc_conmed_lod_k}"
-        imp_method += f", min_obs={lc_conmed_min_obs}"
+        extras.append(f"lod_k={lc_conmed_lod_k}")
+        extras.append(f"min_obs={lc_conmed_min_obs}")
+    if extras:
+        imp_method = f"{imp_method} ({', '.join(extras)})"
 
     # build a single Markdown string
     summary_md = textwrap.dedent(f"""
@@ -181,19 +196,7 @@ def overview_tab(state: SessionState):
         }
     )
 
-    id_sort_toggle = pn.widgets.RadioButtonGroup(
-        name="Order",
-        options=["By condition", "By sample"],
-        value="By condition",
-        button_type="default",
-        width=170,
-        margin=(20, 0, 0, 20),
-        styles={"z-index": "10"},
-    )
-
-    # translate widget -> function arg
-    def _sort_arg(mode: str) -> str:
-        return "condition" if mode == "By condition" else "sample"
+    id_sort_toggle = make_id_sort_toggle(margin=(20, 0, 0, 20), width=170)
 
     barplot_title = "Protein IDs by Sample and Category"
     if peptidomics_mode:
@@ -204,7 +207,7 @@ def overview_tab(state: SessionState):
     hist_ID_dmap = pn.bind(
         plot_barplot_proteins_per_sample,
         adata=adata,
-        sort_by=pn.bind(_sort_arg, id_sort_toggle),
+        sort_by=pn.bind(sort_arg, id_sort_toggle),
         title=barplot_title,
     )
 
@@ -215,99 +218,24 @@ def overview_tab(state: SessionState):
                               }
     )
 
-    intro_pane = pn.Row(
-        pn.Column(
-            pn.pane.Markdown("##   Summary"),
-            summary_pane,
-            styles={"flex":"0.32", "min-width": "0"}
-        ),
-        make_vr(),
-        pn.Spacer(width=20),
-        id_sort_toggle,
-        hist_plot_pane,
+    intro_pane = make_intro_pane(
+        summary_pane=summary_pane,
+        id_sort_toggle=id_sort_toggle,
+        hist_plot_pane=hist_plot_pane,
+        hist_plot_margin=(0, 20, 0, -190),
         height=530,
-        margin=(0, 0, 0, 20),
-        sizing_mode="stretch_width",
-        styles={
-            'border-radius':  '15px',
-            'box-shadow':     '3px 3px 5px #bcbcbc',
-            'width': '98vw',
-        }
     )
 
-    ## Metric Violins
+    # Metrics + Clustering
     cv_fig, rmad_fig = plot_violin_cv_rmad_per_condition(adata)
-    rmad_pane = pn.pane.Plotly(rmad_fig, height=500, sizing_mode="stretch_width",
-                               styles={"flex":"1"}, config={'responsive':True},
-                               margin=(0,0,0,-100))
-    cv_pane = pn.pane.Plotly(cv_fig, height=500, sizing_mode="stretch_width",
-                               styles={"flex":"1"}, config={'responsive':True})
+    metrics_pane = make_metrics_pane(cv_fig=cv_fig, rmad_fig=rmad_fig)
 
-    metrics_pane = pn.Row(
-        pn.pane.Markdown("##   Metrics", styles={"flex":"0.1", "z-index": "10"}),
-        rmad_pane,
-        pn.Spacer(width=25),
-        make_vr(),
-        pn.Spacer(width=25),
-        cv_pane,
-        pn.Spacer(width=50),
-        height=530,
-        margin=(0, 0, 0, 20),
-        sizing_mode="stretch_width",
-        styles={
-            'border-radius':  '15px',
-            'box-shadow':     '3px 3px 5px #bcbcbc',
-            'width': '98vw',
-        },
+    clustering_pane = make_clustering_pane(
+        adata=state.adata,
+        plot_pca_2d=plot_pca_2d,
+        plot_mds_2d=plot_mds_2d,
+        plot_umap_2d=plot_umap_2d,
     )
-    ## UMAP and PCA
-    pca_pane = pn.pane.Plotly(plot_pca_2d(state.adata),
-                              height=500,
-                              sizing_mode="stretch_width",
-                              styles={"flex":"1"},
-                              margin=(0,0,0,-100),
-                              )
-    # Prefer MDS when present; fall back to UMAP for backward compatibility.
-    if "X_mds" in state.adata.obsm:
-        emb_fig = plot_mds_2d(state.adata, title="MDS")
-    else:
-        emb_fig = plot_umap_2d(state.adata, title="UMAP")
-
-    umap_pane = pn.pane.Plotly(
-        emb_fig,
-        height=500,
-        sizing_mode="stretch_width",
-        styles={"flex":"1"},
-    )
-
-    cluster_info = pn.widgets.TooltipIcon(
-        value="""
-        Using left-censored QC data.
-        Results may differ from
-        analysis of processed data.
-        Multidimensional Scaling uses
-        correlation distances.
-        """,
-        margin=(-475,0,0,-80),
-        styles={"z-index":"10"},
-    )
-    clustering_pane = pn.Row(
-            pn.pane.Markdown("##   Clustering", styles={"flex": "0.15", "z-index": "10"}),
-            cluster_info,
-            pca_pane,
-            make_vr(),
-            pn.Spacer(width=60),
-            umap_pane,
-            make_vr(),
-            height=530,
-            margin=(0, 0, 0, 20),
-            sizing_mode="stretch_width",
-            styles={
-                'border-radius':  '15px',
-                'box-shadow':     '3px 3px 5px #bcbcbc',
-                'width': '98vw',
-            }
-        )
 
     ## Volcanoes
     # Contrast selector
@@ -325,7 +253,9 @@ def overview_tab(state: SessionState):
     show_imp_cond2 = pn.widgets.Checkbox(name=f"", value=True)
 
     # Color selector
-    color_options = ["Significance", "Avg Intensity", "Avg IBAQ"]
+    color_options = ["Significance", "Avg Intensity"]
+    if "ibaq" in state.adata.layers:
+        color_options.append("Avg IBAQ")
 
     color_by = pn.widgets.Select(
         name="Color by",
@@ -333,70 +263,31 @@ def overview_tab(state: SessionState):
         value=color_options[0],
         width=150,
     )
-    # Function to update toggle labels whenever contrast changes
-    def _update_toggle_labels(event=None):
-        grp1, grp2 = contrast_sel.value.split("_vs_")
-        show_imp_cond1.name = f"▲ Fully Imputed in {grp1}"
-        show_imp_cond2.name = f"▼ Fully Imputed in {grp2}"
 
-    # initialize labels and watch for changes
-    _update_toggle_labels()
-
-    contrast_sel.param.watch(_update_toggle_labels, "value")
-
-    # Non-imputed datapoints per condition filter
-    def _min_max_reps_for_contrast(contrast: str) -> int:
-        grp1, grp2 = contrast.split("_vs_")
-        n1 = int((adata.obs["CONDITION"] == grp1).sum())
-        n2 = int((adata.obs["CONDITION"] == grp2).sum())
-        return min(n1, n2), max(n1,n2)
-
-    def _mk_min_meas_options(max_reps: int) -> dict[str, int]:
-        # labels "≥1", "≥2", ... mapped to int values
-        return {f"≥{i}": i for i in range(1, max_reps + 1)}
-
-    # initialize from the first contrast
-    _init_min, _init_max = _min_max_reps_for_contrast(contrast_sel.value)
-    min_meas_options = _mk_min_meas_options(_init_max)
-
-    min_meas_sel = pn.widgets.Select(
-        name="Min / condition",
-        options=list(min_meas_options.keys()),
-        value=f"≥{_init_min}",
-        width=80,
+    make_toggle_label_updater(
+        contrast_sel=contrast_sel,
+        show_imp_cond1=show_imp_cond1,
+        show_imp_cond2=show_imp_cond2,
     )
 
-    def _min_meas_value(label: str) -> int:
-        # look up the *current* mapping (it will be rebuilt on contrast change)
-        return min_meas_options.get(label, 1)
-
-    # when the contrast changes, rebuild options (and clamp current value if needed)
-    def _on_contrast_change(event):
-        nonlocal min_meas_options
-        _mn, max_reps = _min_max_reps_for_contrast(event.new)
-        min_meas_options = _mk_min_meas_options(max_reps)
-        # keep the same label if still valid, otherwise fall back to the largest allowed
-        current = min_meas_sel.value or "≥1"
-        min_meas_sel.options = list(min_meas_options.keys())
-        if current not in min_meas_options:
-            min_meas_sel.value = f"≥{min(max_reps, int(current.lstrip('≥') or 1))}"
-
-    contrast_sel.param.watch(_on_contrast_change, "value")
+    min_meas_sel, _min_meas_value = make_min_meas_select(
+        adata=adata,
+        contrast_sel=contrast_sel,
+        allow_zero=False,
+        name="Min / condition",
+        width=80,
+        default_value_label=None,  # preserve original: ≥min(reps)
+    )
 
     # Min numb. precursors options
     max_prec_options = 6 if proteomics_mode else 4
-    min_prec_options = {f"≥{i}": i for i in range(0, max_prec_options)}
     min_prec_title = "pep" if proteomics_mode else "prec"
-
-    min_prec_sel = pn.widgets.Select(
-        name=f"Consistent {min_prec_title}",
-        options=list(min_prec_options.keys()),
-        value="≥0",
+    min_prec_sel, _min_prec_value = make_min_precursor_select(
+        max_prec_options=max_prec_options,
+        title_token=min_prec_title,
         width=80,
+        default_label="≥0",
     )
-
-    def _min_prec_value(label: str) -> int:
-        return min_prec_options[label]
 
     # search widget
     def _ensure_gene(token: str) -> str | None:
@@ -461,126 +352,31 @@ def overview_tab(state: SessionState):
     )
 
     search_input_group = pn.widgets.TextInput(
-        name="Pattern or File", placeholder="*_ECOLI+ or ^gene[0-9]$",
+        name="Pattern or File", placeholder="ECOLI or ^gene[0-9]$",
         width=200, styles={"z-index": "10"}
     )
 
-    # Turn (pattern, field) -> sorted list of UniProt IDs using the shared helper
-    def _group_ids(pattern, field):
-        try:
-            ids = resolve_pattern_to_uniprot_ids(state.adata, field, pattern)
-            return sorted(ids)
-        except Exception:
-            return []
-
-    group_ids_dmap = pn.bind(_group_ids, search_input_group, search_field_sel)
-
-    # Cohort via FileInput
-    # Hidden text holder (reactive bind target) and filename label
-    _file_text = pn.widgets.TextAreaInput(visible=False)
-    cohort_filename = pn.widgets.StaticText(name="", value="")
-
-    # FileInput holder to allow hot-swapping (lets users reselect same file after clear)
-    file_holder = pn.Column()
-
-    def _new_file_input():
-        fi = pn.widgets.FileInput(accept=".txt,.csv,.tsv", multiple=False, width=200)
-        def _on_change(event):
-            b = event.new or b""
-            try:
-                txt = b.decode("utf-8", errors="ignore")
-            except Exception:
-                txt = ""
-            _file_text.value = txt
-            cohort_filename.value = fi.filename or ""
-            # EITHER-OR: if a file is provided, clear any existing pattern
-            if txt.strip():
-                # Clear pattern *visually* as well
-                try:
-                    search_input_group.value = ""
-                    # also clear raw text to guarantee UI empties immediately
-                    if hasattr(search_input_group, "value_input"):
-                        search_input_group.value_input = ""
-                except Exception:
-                    pass
-        fi.param.watch(_on_change, "value")
-        return fi
-
-    file_upload = _new_file_input()
-    file_holder.objects = [file_upload]
-
-    def _parse_file_text(text: str) -> list[str]:
-        if not text:
-            return []
-        tokens = re.split(r"[,\t;\r\n\s]+", text)
-        return sorted({t.strip() for t in tokens if t and not t.isspace()})
-
-    def _file_ids(file_text: str, field: str):
-        items = _parse_file_text(file_text or "")
-        try:
-            return sorted(resolve_exact_list_to_uniprot_ids(state.adata, field, items))
-        except Exception:
-            return []
-
-    group_file_ids_dmap = pn.bind(_file_ids, _file_text, search_field_sel)
-
-    def _either(ids_pat, ids_file, pat_text, file_text):
-        use_file = bool((file_text or "").strip())
-        return ids_file if use_file else ids_pat
-    group_ids_selected = pn.bind(_either, group_ids_dmap, group_file_ids_dmap, search_input_group, _file_text)
-
-    def _fmt_status(ids_pat, ids_file, fname, pat_text, file_text):
-        # Hide when nothing searched; otherwise show 0/1/N matches (singular/plural)
-        if not (pat_text and pat_text.strip()) and not (file_text and file_text.strip()):
-            return ""
-        # pick the active set (either-or)
-        active_from_file = bool((file_text or "").strip())
-        n = len(ids_file or []) if active_from_file else len(ids_pat or [])
-        label = "match" if n == 1 else "matches"
-        name = os.path.basename(str(fname)) if (active_from_file and fname) else ""
-        return f"**{n} {label}**"
-
-    status_md = pn.bind(_fmt_status, group_ids_dmap, group_file_ids_dmap, cohort_filename, search_input_group, _file_text)
-    status_pane = pn.pane.Markdown(status_md, margin=(-10, 0, 0, 0), align="center")
-    # Also toggle visibility: invisible when no query; visible for any query (even if 0 matches)
-    def _has_query(pat_text, file_text):
-        return bool((pat_text or "").strip()) or bool((file_text or "").strip())
-    status_pane.visible = pn.bind(_has_query, search_input_group, _file_text)
-
-    # One CLEAR for both pattern + file, and guarantee same-file reselect works
-    clear_all = pn.widgets.Button(name="Clear", width=90)
-    def _on_clear_all(event):
-        # reset pattern
-        search_input_group.value = ""
-        # reset file state
-        _file_text.value = ""
-        cohort_filename.value = ""
-        # recreate FileInput to ensure browsers fire change for same file
-        new_file = _new_file_input()
-        file_holder.objects = [new_file]
-        nonlocal file_upload
-        file_upload = new_file
-
-
-    clear_all.on_click(_on_clear_all)
-
-    # EITHER-OR: if user types a non-empty pattern, clear any uploaded file
-    def _on_pattern_change(event):
-        val = event.new or ""
-        if val.strip():
-            _file_text.value = ""
-            cohort_filename.value = ""
-            # hard reset FileInput so the same file can be picked again later
-            new_file = _new_file_input()
-            file_holder.objects = [new_file]
-            nonlocal file_upload
-            file_upload = new_file
-        elif (event.old or "").strip() and not val.strip():
-            # if user cleared the pattern manually, keep things consistent:
-            # status will auto-hide via existing binding; nothing else needed.
-            pass
-
-    search_input_group.param.watch(_on_pattern_change, "value")
+    (
+        search_field_sel,
+        search_input_group,
+        file_holder,
+        clear_all,
+        status_pane,
+        group_ids_selected,
+        _file_text,
+        cohort_filename,
+    ) = make_cohort_inspector_widgets(
+        adata=state.adata,
+        search_field_options=["FASTA headers", "Gene names", "UniProt IDs"],
+        search_field_default="FASTA headers",
+        pattern_placeholder="*_ECOLI+ or ^gene[0-9]$",
+        status_margin=(-10, 0, 0, 0),
+        clear_btn_width=90,
+        file_btn_width=200,
+        pattern_width=200,
+        field_width=130,
+        field_margin=(2, 0, 0, -2),
+    )
 
     volcano_dmap = pn.bind(
         plot_volcanoes_wrapper,
@@ -613,11 +409,8 @@ def overview_tab(state: SessionState):
             else:
                 search_input.value = str(cd[0] if isinstance(cd, (list, tuple)) and len(cd) else pt.get("text", ""))
 
-    def _with_uirevision(fig, contrast):
-        fig.update_layout(uirevision=f"volcano-{contrast}")
-        return fig
 
-    volcano_dmap_wrapped = pn.bind(_with_uirevision, volcano_dmap, contrast_sel)
+    volcano_dmap_wrapped = bind_uirevision(volcano_dmap, contrast_sel, prefix="volcano")
 
     volcano_plot = pn.pane.Plotly(
         volcano_dmap_wrapped,
@@ -646,14 +439,15 @@ def overview_tab(state: SessionState):
     volcano_plot.param.watch(lambda e: _on_volcano_selected_data(e.new), "selected_data")
     volcano_plot.param.watch(lambda e: _on_volcano_click_data(e.new), "click_data")
 
-    def _push_cohort_ids(_=None) -> None:
-        # group_ids_selected is a pn.bind; calling it evaluates the current cohort ids.
-        _on_cohort_ids(list(group_ids_selected() or []))
-
     # Cohort changes must update the export state immediately (priority: click > cohort > lasso).
-    search_input_group.param.watch(_push_cohort_ids, "value")
-    _file_text.param.watch(_push_cohort_ids, "value")
-    clear_all.on_click(lambda event: _push_cohort_ids())
+    wire_cohort_export_updates(
+        group_ids_selected=group_ids_selected,
+        on_cohort_ids=_on_cohort_ids,
+        search_input_group=search_input_group,
+        file_text_widget=_file_text,
+        clear_btn=clear_all,
+        search_field_sel=search_field_sel,
+    )
 
     # Cohort Violin View
     def _cohort_violin(ids, contrast, sm, s1, s2, min_nonimp_per_cond, min_consistent_peptides):

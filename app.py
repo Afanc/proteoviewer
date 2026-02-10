@@ -317,10 +317,10 @@ def _build_header(area_center, version: str, dev_flag: bool) -> pn.Column:
     facility_logo_path = os.environ.get("PV_FACILITY_LOGO_RESOURCE",
                                         "Biozentrum_Logo_2011.png")
     facility_logo = _resource_bytes(facility_logo_path)
-    facility_logo_pane = pn.pane.PNG(facility_logo, width=FACILITY_WIDTH, height=90, sizing_mode="fixed", margin=(0, 10, 6, -15))
+    facility_logo_pane = pn.pane.PNG(facility_logo, width=FACILITY_WIDTH, height=90, margin=(0, 10, 6, -15))
     right_top_row = pn.Row(facility_logo_pane,
                            pn.Spacer(width=50),
-                           sizing_mode="fixed", height=90, align="center")
+                           height=90, align="center")
     right_block = pn.Column(right_top_row,
                             width=FACILITY_WIDTH, sizing_mode="fixed", height=90)
 
@@ -546,7 +546,7 @@ def build_app():
         try:
             from anndata import read_h5ad
             adata = read_h5ad("data/proteoflux_results_phospho.h5ad")
-            #adata = read_h5ad("proteoflux_results.h5ad")
+            #adata = read_h5ad("data/proteoflux_results.h5ad")
             _load(adata, "proteoflux_results.h5ad")
             logging.info("DEV autoload successful.")
         except Exception:
