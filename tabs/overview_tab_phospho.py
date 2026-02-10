@@ -946,7 +946,7 @@ def overview_tab_phospho(state: SessionState):
             disabled=True,
             height=table_h,
             width=300,
-            widths={"Site": 75 if multisite_mode == "keep" else 55},
+            widths={"Site": 75 if multisite_mode == "retain" else 55},
             configuration={
                 "rowHeight": row_h,
                 "columnHeaderVertAlign": "bottom",
@@ -979,7 +979,7 @@ def overview_tab_phospho(state: SessionState):
             margin=(5, 10, 0, 0),
         )
 
-        header_label = "**Adjacent Sites**" if multisite_mode != "keep" else "**Adjacent Phosphopeptides**"
+        header_label = "**Adjacent Sites**" if multisite_mode != "retain" else "**Adjacent Phosphopeptides**"
         header = pn.Row(
                     pn.pane.Markdown(header_label,
                                   styles={"font-size": "16px", "padding": "0", "line-height": "0px"}),
