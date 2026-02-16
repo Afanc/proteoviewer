@@ -37,7 +37,7 @@ DEV = os.getenv("PV_DEV", "0") == "1"
 FROZEN = bool(getattr(sys, "frozen", False))
 DESKTOP = (sys.platform == "win32") and FROZEN
 
-APP_VERSION_DESKTOP = "1.8.3"
+APP_VERSION_DESKTOP = "1.8.5"
 
 def _resource_file(name: str) -> Path:
     """
@@ -288,7 +288,7 @@ def _build_header(area_center, version: str, dev_flag: bool) -> pn.Column:
     Proteomics Core Facility
     Biozentrum - University of Basel
     dariush.mollet@unibas.ch
-    [DOI pending]
+    https://doi.org/10.5281/zenodo.18640999
         """,
         margin=(0,0,0,-125),
     )
