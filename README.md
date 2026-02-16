@@ -99,11 +99,16 @@ Edit this file to adjust:
 
 ---
 
-## Windows executable (no Python required)
+## Windows executable
 
-ProteoViewer can be distributed as a standalone Windows executable built with **PyInstaller**.
+### GitHub Actions builds
 
-### Building locally
+This repository includes a GitHub Actions workflow that automatically builds a Windows executable
+on each release. The resulting `.zip` file can be downloaded directly from the release page.
+
+### Building locally with PyInstaller
+
+Proteoviewer can also be customized and compiled on Windows as a standalone Windows executable with **PyInstaller**.
 
 ```bash
 cd Proteoviewer
@@ -116,11 +121,6 @@ The executable will be created under:
 ```text
 dist/proteoviewer/
 ```
-
-### GitHub Actions builds
-
-This repository includes a GitHub Actions workflow that automatically builds a Windows executable
-on each release. The resulting `.zip` file can be downloaded directly from the GitHub Actions artifacts.
 
 ---
 
