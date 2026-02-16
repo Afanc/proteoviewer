@@ -288,7 +288,7 @@ def _build_header(area_center, version: str, dev_flag: bool) -> pn.Column:
     Proteomics Core Facility
     Biozentrum - University of Basel
     dariush.mollet@unibas.ch
-    https://doi.org/10.5281/zenodo.18640999
+    DOI: 10.5281/zenodo.18640999
         """,
         margin=(0,0,0,-125),
     )
