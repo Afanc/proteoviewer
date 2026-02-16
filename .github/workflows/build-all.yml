@@ -6,6 +6,10 @@ on:
       - "v*"
   workflow_dispatch:
 
+permissions:
+  contents: write
+
+
 jobs:
   build-windows:
     runs-on: windows-latest
@@ -37,6 +41,8 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: proteoviewer-windows.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
