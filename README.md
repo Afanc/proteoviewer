@@ -19,9 +19,7 @@ ProteoViewer can be used:
 - No recomputation: all results are rendered from precomputed values
 
 <p align="center">
-  <a href="assets/proteoviewer_demo.mp4">
-    <img src="assets/proteoviewer_screenshot.png" width="900">
-  </a>
+  <img src="assets/proteoviewer_demo.gif" width="900">
 </p>
 
 ---
