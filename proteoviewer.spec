@@ -1,5 +1,11 @@
 # -*- mode: python -*-
 
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent
+RTHOOK_LOGGING = ROOT / "utils" / "rthook_logging.py"
+RESOURCES_DIR = ROOT / "resources"
+
 block_cipher = None
 
 VERSION = "1.8.5" #until we properly package this
@@ -37,7 +43,7 @@ a = Analysis(
         'skmisc',
     ],
     hookspath=[],
-    runtime_hooks=['rthook_logging.py'],
+    runtime_hooks=[str(RTHOOK_LOGGING)],
     excludes=[],
     cipher=block_cipher,
 )
