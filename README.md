@@ -28,6 +28,13 @@ ProteoViewer can be used:
 
 ProteoViewer is a Python application built on Panel, Bokeh, and the scientific Python ecosystem.
 
+### Clone the repository
+
+```bash
+git clone https://github.com/Afanc/proteoviewer.git
+cd proteoviewer
+```
+
 ### Recommended: Conda / Mamba
 
 ```bash
