@@ -24,7 +24,7 @@ ProteoViewer can be used:
 
 ---
 
-## Installation (Python environment)
+## Installation
 
 ProteoViewer is a Python application built on Panel, Bokeh, and the scientific Python ecosystem.
 
