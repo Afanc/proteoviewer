@@ -24,11 +24,20 @@ ProteoViewer can be used:
 
 ---
 
-## Installation (Python environment)
+## Installation
 
 ProteoViewer is a Python application built on Panel, Bokeh, and the scientific Python ecosystem.
 
-### Recommended: Conda / Mamba
+### 1. Clone the repository
+
+```bash
+git clone https://github.com/Afanc/proteoviewer.git
+cd proteoviewer
+```
+
+### 2. Create a Python environment and install
+
+#### Recommended: Conda / Mamba
 
 ```bash
 conda create -n proteoviewer python=3.13
@@ -36,7 +45,7 @@ conda activate proteoviewer
 pip install -r requirements.txt
 ```
 
-### Alternative: virtualenv
+#### Alternative: virtualenv
 
 ```bash
 python -m venv venv
