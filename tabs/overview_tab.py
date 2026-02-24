@@ -612,6 +612,7 @@ def overview_tab(state: SessionState):
 
         gene = _ensure_gene(protein)
         uid  = protein_info["uniprot_id"]
+        parent_uid_for_link = ""
         if peptido_mode:
             # In peptido, "Uniprot ID" is the peptide sequence.
             peptide_md = pn.pane.Markdown(f"**Peptide**: {uniprot_id}",
@@ -664,6 +665,7 @@ def overview_tab(state: SessionState):
             if parent_uid is None:
                 parent_uid = _safe_var("UNIPROT", default=None)
             parent_uid = _first_token(str(parent_uid)) if parent_uid is not None else "n/a"
+            parent_uid_for_link = parent_uid if parent_uid != "n/a" else ""
 
             pep_prec = _safe_var("PRECURSORS_USED", default=None)
             if pep_prec is None:
@@ -690,12 +692,25 @@ def overview_tab(state: SessionState):
             "<span style='font-size: 12px;'>" + " &nbsp;|&nbsp; ".join(left_bits) + "</span>"
         )
 
-        footer_right = pn.pane.HTML("") if peptido_mode else pn.pane.HTML(
-            f"<span style='font-size: 12px;'>"
-            f"🔗 <a href='https://www.uniprot.org/uniprotkb/{uid_for_link}/entry' target='_blank' rel='noopener'>UniProt Entry</a>"
-            f" &nbsp;|&nbsp; "
-            f"<a href='{string_link}' target='_blank' rel='noopener'>STRING Entry</a>"
-            f"</span>"
+        # Link target:
+        # - proteo/phospho: feature UniProt ID (uid_for_link)
+        # - peptido: parent protein UniProt ID (parent_uid_for_link)
+        link_uid = parent_uid_for_link if peptido_mode else (uid_for_link or "")
+        string_link_for_footer = _cached_string_link(link_uid) if link_uid else ""
+
+        footer_right = pn.pane.HTML(
+            "" if not link_uid else
+            (
+                f"<span style='font-size: 12px;'>"
+                f"🔗 <a href='https://www.uniprot.org/uniprotkb/{link_uid}/entry' target='_blank' rel='noopener'>UniProt Entry</a>"
+                + (
+                    f" &nbsp;|&nbsp; "
+                    f"<a href='{string_link_for_footer}' target='_blank' rel='noopener'>STRING Entry</a>"
+                    if string_link_for_footer else
+                    ""
+                )
+                + f"</span>"
+            )
         )
 
         footer_links = pn.Row(
