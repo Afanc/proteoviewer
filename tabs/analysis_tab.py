@@ -3,6 +3,7 @@ import plotly.graph_objects as go
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 from types import SimpleNamespace
+import traceback
 from contextlib import contextmanager
 
 from components.analysis_plots import (
@@ -193,17 +194,45 @@ def analysis_tab(state):
             heatmap_holder.loading = True
 
         def worker():
-            fig = _normalize_plotly(_render_heatmap(mode))
+            try:
+                fig = _normalize_plotly(_render_heatmap(mode))
 
-            def finish():
-                _heatmap_cache[mode] = fig
-                if show_after_build:
-                    _apply_figure(fig)
-                    # Clear the overlay regardless of other background work
+                def finish():
+                    _heatmap_cache[mode] = fig
+                    if show_after_build:
+                        _apply_figure(fig)
+                        heatmap_holder.loading = False
+                    _building.discard(mode)
+
+                bokeh_doc.add_next_tick_callback(finish)
+            except Exception as exc:
+                err_msg = str(exc)
+                tb = traceback.format_exc()
+
+                def fail():
+                    heatmap_holder[:] = [
+                        pn.pane.Alert(
+                            f"Failed to build hierarchical clustering heatmap for mode={mode}:\n\n{err_msg}\n\n{tb}",
+                            alert_type="danger",
+                            sizing_mode="stretch_width",
+                        )
+                    ]
                     heatmap_holder.loading = False
-                _building.discard(mode)
+                    _building.discard(mode)
 
-            bokeh_doc.add_next_tick_callback(finish)
+                bokeh_doc.add_next_tick_callback(fail)
+
+            #fig = _normalize_plotly(_render_heatmap(mode))
+
+            #def finish():
+            #    _heatmap_cache[mode] = fig
+            #    if show_after_build:
+            #        _apply_figure(fig)
+            #        # Clear the overlay regardless of other background work
+            #        heatmap_holder.loading = False
+            #    _building.discard(mode)
+
+            #bokeh_doc.add_next_tick_callback(finish)
 
         _executor.submit(worker)
 

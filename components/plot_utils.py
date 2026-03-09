@@ -10,6 +10,7 @@ import plotly.graph_objects as go
 import plotly.figure_factory as ff
 from plotly.subplots import make_subplots
 from scipy.spatial.distance import pdist, squareform
+from scipy.stats import chi2
 import plotly.express as px
 from typing import List, Sequence, Optional, Dict, Tuple, Union, Literal
 from anndata import AnnData
@@ -61,6 +62,74 @@ def color_ticks_by_condition(fig, samples, cond_series, cmap):
     fig.update_yaxes(tickmode="array", tickvals=tickvals,
                      ticktext=[f"<span style='color:{c}'>{s}</span>" for s, c in zip(short, colors)])
     return fig
+
+
+def _ellipse_points(mean: np.ndarray, cov: np.ndarray, n_pts: int = 120, conf: float = 0.95) -> np.ndarray:
+    """
+    Return an (n_pts, 2) array approximating the confidence ellipse defined by
+    a 2D mean/covariance pair.
+    """
+    cov = np.asarray(cov, dtype=float)
+    if cov.shape != (2, 2) or not np.isfinite(cov).all():
+        raise ValueError("Invalid 2D covariance matrix.")
+
+    # Numerical guard for small / nearly collinear groups.
+    cov = 0.5 * (cov + cov.T)
+    cov = cov + np.eye(2) * 1e-10
+
+    vals, vecs = np.linalg.eigh(cov)
+    vals = np.clip(vals, 0.0, None)
+    r2 = chi2.ppf(conf, df=2)
+    axes = np.sqrt(vals * r2)
+    theta = np.linspace(0.0, 2.0 * np.pi, n_pts)
+    circle = np.stack([np.cos(theta), np.sin(theta)], axis=0)
+    pts = (vecs @ (np.diag(axes) @ circle)).T + mean
+    return pts
+
+
+def _add_group_ellipses(
+    fig: go.Figure,
+    df: pd.DataFrame,
+    *,
+    xcol: str,
+    ycol: str,
+    group_col: str,
+    color_map: Dict[str, str],
+    conf: float = 0.95,
+) -> None:
+    """
+    Add filled per-group confidence ellipses to an existing 2D scatter figure.
+    Ellipses are attached to the same legendgroup as their points, but do not
+    create separate legend entries.
+    """
+    for group in sorted(df[group_col].astype(str).unique().tolist()):
+        sub = df[df[group_col].astype(str) == str(group)][[xcol, ycol]].dropna()
+        if sub.shape[0] < 3:
+            continue
+        cov = np.cov(sub.to_numpy().T)
+        if cov.shape != (2, 2):
+            continue
+        try:
+            pts = _ellipse_points(
+                mean=sub.mean(axis=0).to_numpy(dtype=float),
+                cov=cov,
+                conf=conf,
+            )
+        except ValueError:
+            continue
+
+        fig.add_trace(go.Scatter(
+            x=pts[:, 0],
+            y=pts[:, 1],
+            mode="lines",
+            fill="toself",
+            hoverinfo="skip",
+            line=dict(color=color_map[group], width=1),
+            fillcolor=color_map[group],
+            opacity=0.18,
+            showlegend=False,
+            legendgroup=str(group),
+        ))
 
 def get_volcano_classification_masks(adata, contrast: str, min_nonimp_per_cond: int, min_consistent_peptides: int):
     """
@@ -550,6 +619,18 @@ def plot_violins(
     fig.update_yaxes(showline=True, linewidth=1, linecolor="black", mirror=True)
     return fig
 
+def _padded_range(vals, pad_frac=0.08):
+    vals = np.asarray(vals, dtype=float)
+    vals = vals[np.isfinite(vals)]
+    if vals.size == 0:
+        return None
+    vmin = float(vals.min())
+    vmax = float(vals.max())
+    if vmax == vmin:
+        pad = 1.0
+    else:
+        pad = (vmax - vmin) * pad_frac
+    return [vmin - pad, vmax + pad]
 
 @log_time("Plotting PCA")
 def plot_pca_2d(
@@ -560,6 +641,7 @@ def plot_pca_2d(
     title: str = "PCA",
     width: int = 900,
     height: int = 500,
+    show_ellipses: bool = True,
     annotate: bool = False,
 ) -> go.Figure:
     """
@@ -576,6 +658,10 @@ def plot_pca_2d(
     palette = get_color_map(levels, px.colors.qualitative.Plotly)
 
     fig = go.Figure()
+
+    if show_ellipses:
+        _add_group_ellipses(fig, df, xcol=f"PC{pc[0]}", ycol=f"PC{pc[1]}", group_col=color_key, color_map=palette)
+
     for lv in levels:
         sub = df[df[color_key] == lv]
         fig.add_trace(go.Scatter(
@@ -585,6 +671,7 @@ def plot_pca_2d(
             text=sub.index.to_list(),
             textposition="top center",
             name=lv,
+            legendgroup=str(lv),
             marker=dict(color=palette[lv], size=8, line=dict(width=1, color="black")),
             hovertemplate = (f"Sample: %{{text}}")
         ))
@@ -592,7 +679,7 @@ def plot_pca_2d(
     var = adata.uns["pca"]["variance_ratio"]
     fig.update_layout(
         title=dict(text=title, x=0.5),
-        width=width, height=height,
+        height=height,
         template="plotly_white",
         xaxis=dict(title=f"PC{pc[0]} ({var[pc[0]-1]*100:.1f}% var)"),
         yaxis=dict(title=f"PC{pc[1]} ({var[pc[1]-1]*100:.1f}% var)"),
@@ -601,11 +688,14 @@ def plot_pca_2d(
             bordercolor="black",
             borderwidth=1,
             x=1.02, y=1,
-            xanchor="left", yanchor="top"
+            xanchor="left", yanchor="top",
+            groupclick="togglegroup",
         )
     )
-    fig.update_xaxes(showline=True, mirror=True, linecolor="black")
-    fig.update_yaxes(showline=True, mirror=True, linecolor="black")
+    x_range = _padded_range(df[f"PC{pc[0]}"])
+    y_range = _padded_range(df[f"PC{pc[1]}"])
+    fig.update_xaxes(showline=True, mirror=True, linecolor="black", automargin=False, range=x_range)
+    fig.update_yaxes(showline=True, mirror=True, linecolor="black", automargin=False, range=y_range)
     return fig
 
 
@@ -666,7 +756,7 @@ def plot_umap_2d(
         )
     fig.update_layout(
         title=dict(text=title, x=0.5),
-        width=width, height=height,
+        height=height,
         template="plotly_white",
         xaxis=dict(title="UMAP1"),
         yaxis=dict(title="UMAP2"),
@@ -690,6 +780,7 @@ def plot_mds_2d(
     title: str = "MDS",
     width: int = 900,
     height: int = 500,
+    show_ellipses: bool = False,
     annotate: bool = False,
 ) -> go.Figure:
     """
@@ -700,7 +791,7 @@ def plot_mds_2d(
         fig = go.Figure()
         fig.update_layout(
             title=dict(text=f"{title} (not available)", x=0.5),
-            width=width, height=height,
+            height=height,
             template="plotly_white",
             xaxis=dict(visible=False),
             yaxis=dict(visible=False),
@@ -724,6 +815,9 @@ def plot_mds_2d(
     palette = get_color_map(levels, px.colors.qualitative.Plotly)
 
     fig = go.Figure()
+    if show_ellipses:
+        _add_group_ellipses(fig, df, xcol="MDS1", ycol="MDS2", group_col=color_key, color_map=palette)
+
     for lv in levels:
         sub = df[df[color_key] == lv]
         fig.add_trace(go.Scatter(
@@ -733,6 +827,7 @@ def plot_mds_2d(
             text=sub.index.to_list(),
             textposition="top center",
             name=lv,
+            legendgroup=str(lv),
             marker=dict(color=palette[lv], size=8, line=dict(width=1, color="black")),
             hovertemplate="Sample: %{text}",
         ))
@@ -748,7 +843,7 @@ def plot_mds_2d(
 
     fig.update_layout(
         title=dict(text=title_txt, x=0.5),
-        width=width, height=height,
+        height=height,
         template="plotly_white",
         xaxis=dict(title="MDS1"),
         yaxis=dict(title="MDS2"),
@@ -758,10 +853,13 @@ def plot_mds_2d(
             borderwidth=1,
             x=1.02, y=1,
             xanchor="left", yanchor="top",
+            groupclick="togglegroup",
         ),
     )
-    fig.update_xaxes(showline=True, mirror=True, linecolor="black")
-    fig.update_yaxes(showline=True, mirror=True, linecolor="black")
+    x_range = _padded_range(df[f"MDS1"])
+    y_range = _padded_range(df[f"MDS2"])
+    fig.update_xaxes(showline=True, mirror=True, linecolor="black", range=x_range)
+    fig.update_yaxes(showline=True, mirror=True, linecolor="black", range=y_range)
     return fig
 
 # tried to use this for caching, doesn't work !
@@ -935,8 +1033,9 @@ def plot_cluster_heatmap_plotly(
             mode="markers",
             marker=dict(color=cmap[lvl], size=10),
             name=str(lvl),
+            legendgroup=str(lvl),
             showlegend=True,
-            hoverinfo="none"
+            hoverinfo="none",
         ))
 
     for tr in fig.data:
@@ -949,7 +1048,8 @@ def plot_cluster_heatmap_plotly(
         title="Condition",
         orientation="v",
         x=-0.0, y=1,
-        xanchor="left", yanchor="top"
+        xanchor="left", yanchor="top",
+        groupclick="togglegroup",
     ))
 
     # Tidy up layout

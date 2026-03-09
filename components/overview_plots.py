@@ -32,6 +32,59 @@ def _shorten_labels(labels, head=6, tail=4, sep="…"):
                 seen[s] = 0
     return out
 
+def _resolve_protein_col_idx(ad, protein: str) -> int:
+    """
+    Resolve a clicked/searched protein token to a single column index in ad.var.
+
+    Resolution order:
+      1) exact var_names match
+      2) exact GENE_NAMES match
+      3) token match within grouped var_names  (split on ; , whitespace)
+      4) token match within grouped GENE_NAMES (split on ; , whitespace)
+
+    Raises KeyError with a clear message if no match is found.
+    """
+    token = str(protein).strip()
+    if not token:
+        raise KeyError("Empty protein token.")
+
+    ids = ad.var_names.astype(str)
+
+    # 1) exact UniProt / var_names match
+    try:
+        return int(ids.get_loc(token))
+    except KeyError:
+        pass
+
+    if "GENE_NAMES" in ad.var.columns:
+        names = ad.var["GENE_NAMES"].astype(str)
+
+        # 2) exact gene-group match
+        exact = np.flatnonzero(names.to_numpy() == token)
+        if len(exact):
+            return int(exact[0])
+
+        splitter = re.compile(r"[;,\s]+")
+
+        def _has_token(s: str) -> bool:
+            return token in [x for x in splitter.split(str(s)) if x]
+
+        # 3) tokenized var_names match
+        id_hits = np.flatnonzero(
+            np.fromiter((_has_token(s) for s in ids.to_numpy()), dtype=bool, count=ad.n_vars)
+        )
+        if len(id_hits):
+            return int(id_hits[0])
+
+        # 4) tokenized gene-group match
+        gene_hits = np.flatnonzero(
+            np.fromiter((_has_token(s) for s in names.to_numpy()), dtype=bool, count=ad.n_vars)
+        )
+        if len(gene_hits):
+            return int(gene_hits[0])
+
+    raise KeyError(f"Protein not found in overview detail lookup: {token}")
+
 @log_time("Plotting barplot proteins per sample")
 def plot_barplot_proteins_per_sample(
     adata,
@@ -148,7 +201,7 @@ def plot_intensity_by_protein(state, contrast, protein, layer):
         title_txt = "Peptide Expression"
 
     if proteomics_mode:
-        col = list(ad.var["GENE_NAMES"].astype(str)).index(str(protein))
+        col = _resolve_protein_col_idx(ad, str(protein))
     else:
         col = list(map(str, ad.var_names)).index(str(protein))
 
@@ -259,10 +312,12 @@ def get_protein_info(state, contrast, protein, layer):
     proteomics_mode = (mode in {"dia", "dda", "proteomics"})
 
     if proteomics_mode:
-        names = ad.var["GENE_NAMES"].astype(str)
-        mask  = names == protein
-        uniprot_id = ad.var_names[mask][0]
-        col_idx = list(names).index(str(protein))
+        #names = ad.var["GENE_NAMES"].astype(str)
+        #mask  = names == protein
+        #uniprot_id = ad.var_names[mask][0]
+        #col_idx = list(names).index(str(protein))
+        col_idx = _resolve_protein_col_idx(ad, str(protein))
+        uniprot_id = str(ad.var_names[col_idx])
     else:
         uniprot_id = str(protein)
         col_idx = list(map(str, ad.var_names)).index(uniprot_id)

@@ -36,6 +36,7 @@ from tabs.overview_shared import (
     make_clustering_pane,
     bind_uirevision,
     wire_cohort_export_updates,
+    filter_feature_ids_to_visible_volcano,
 )
 from utils.layout_utils import (
     plotly_section,
@@ -289,32 +290,6 @@ def overview_tab(state: SessionState):
         default_label="≥0",
     )
 
-    # search widget
-    def _ensure_gene(token: str) -> str | None:
-        """
-        Return a gene symbol for `token`.
-        - If `token` is already a gene in adata.var["GENE_NAMES"], return it.
-        - Else, if `token` matches a UniProt ID (var_names), map it to its gene (first token before ';').
-        - Else, return the original token (so downstream error handling can show 'No match').
-        """
-        if not token:
-            return None
-        ad = state.adata
-        names = ad.var["GENE_NAMES"].astype(str)
-        t = str(token)
-
-        # fast path: exact gene match
-        if t in set(names):
-            return t
-
-        # fallback: UniProt -> gene
-        try:
-            idx = ad.var_names.get_loc(t)
-            gene = names.iloc[idx]
-            return gene.split(";", 1)[0].strip() if isinstance(gene, str) else str(gene)
-        except KeyError:
-            return t
-
     search_input_name = "Search Protein"
     placeholder_txt="Gene name or Uniprot ID"
     options_list=list(state.adata.var["GENE_NAMES"]) + list(state.adata.var_names)
@@ -443,10 +418,28 @@ def overview_tab(state: SessionState):
     wire_cohort_export_updates(
         group_ids_selected=group_ids_selected,
         on_cohort_ids=_on_cohort_ids,
+        transform_ids=lambda ids: filter_feature_ids_to_visible_volcano(
+            adata=state.adata,
+            contrast=str(contrast_sel.value),
+            min_nonimp_per_cond=int(_min_meas_value(min_meas_sel.value)),
+            min_consistent_peptides=int(_min_prec_value(min_prec_sel.value)),
+            show_measured=bool(show_measured.value),
+            show_imp_cond1=bool(show_imp_cond1.value),
+            show_imp_cond2=bool(show_imp_cond2.value),
+            feature_ids=list(ids or []),
+         ),
         search_input_group=search_input_group,
         file_text_widget=_file_text,
         clear_btn=clear_all,
         search_field_sel=search_field_sel,
+        refresh_controls=[
+            (contrast_sel, "value"),
+            (show_measured, "value"),
+            (show_imp_cond1, "value"),
+            (show_imp_cond2, "value"),
+            (min_meas_sel, "value"),
+            (min_prec_sel, "value"),
+        ],
     )
 
     # Cohort Violin View
@@ -523,7 +516,7 @@ def overview_tab(state: SessionState):
             return pn.Spacer(width=800, height=170)
 
         # pull values that do not depend on the "layer" toggle
-        key = _ensure_gene(protein) if proteomics_mode else str(protein)
+        key = str(protein)
         protein_info = get_protein_info(state, contrast, key, layers_sel)
 
         uniprot_id   = protein_info['uniprot_id']
@@ -598,9 +591,12 @@ def overview_tab(state: SessionState):
             "font-size": f"{size}px",
             "margin": "0px",
             "padding": f"{top_padding}px 0px 0px 0px",
-            "line-height": "0px",
+            "line-height": "1.2",
             "flex": "1",
             "min-width": "0",
+            "max-width": "100%",
+            "word-break": "break-word",
+            "overflow-wrap": "anywhere",
         }
         sep_styles = {
             **item_styles,
@@ -610,7 +606,7 @@ def overview_tab(state: SessionState):
         mode = str(state.adata.uns.get("preprocessing", {}).get("analysis_type", "")).lower()
         peptido_mode = (mode in {"peptido", "peptidomics"})
 
-        gene = _ensure_gene(protein)
+        gene = protein_info.get("gene_names") or str(protein)
         uid  = protein_info["uniprot_id"]
         parent_uid_for_link = ""
         if peptido_mode:
@@ -631,20 +627,25 @@ def overview_tab(state: SessionState):
                 }
             )
         else:
-            gene_md = pn.pane.Markdown(f"**Gene(s)**: {gene}", styles=item_styles)
-            sep1    = pn.pane.Markdown("|", styles=sep_styles)
-            uid_md  = pn.pane.Markdown(f"**Uniprot ID**: {uniprot_id}", styles=item_styles)
-            sep2    = pn.pane.Markdown("|", styles=sep_styles)
-            idx_md  = pn.pane.Markdown(f"**Protein Index**: {protein_info['index']+1}",
-                                       styles=item_styles)
+            gene_md = pn.pane.HTML(f"<b>Gene(s)</b>: {gene}", styles=item_styles)
+            sep1    = pn.pane.HTML("|", styles=sep_styles)
+            uid_md  = pn.pane.HTML(f"<b>UniProt ID</b>: {uniprot_id}", styles=item_styles)
+            sep2    = pn.pane.HTML("|", styles=sep_styles)
+            idx_md  = pn.pane.HTML(
+                f"<b>Protein Index</b>: {protein_info['index']+1}",
+                styles=item_styles,
+            )
+
             header = pn.Row(
                 gene_md, sep1, uid_md, sep2, idx_md,
                 sizing_mode="stretch_width",
-                height=50,
+                min_height=50,
                 styles={
                     "display":         "flex",
-                    "align-items":     "space-evenly",
+                    "align-items":     "center",
                     "justify-content": "space-evenly",
+                    "flex-wrap":       "wrap",
+                    "row-gap":         "4px",
                     "background":      "#f9f9f9",
                     "margin": "0px",
                     "padding": "0px",
@@ -759,7 +760,7 @@ def overview_tab(state: SessionState):
             return pn.Spacer(width=800, height=500, margin=(-30, 0, 0, 0))
 
         # bar plot
-        key = _ensure_gene(protein) if proteomics_mode else str(protein)
+        key = str(protein)
         fig = plot_intensity_by_protein(state, contrast, key, layers_sel)
         protein_info = get_protein_info(state, contrast, key, layers_sel)
 
@@ -821,7 +822,7 @@ def overview_tab(state: SessionState):
         token = search_input.value
         if not token:
             return None
-        key = _ensure_gene(token) if proteomics_mode else str(token)
+        key = str(token)
         info = get_protein_info(state, contrast_sel.value, key, layers_sel)
         return info["uniprot_id"]
 
@@ -905,7 +906,7 @@ def overview_tab(state: SessionState):
     )
 
     volcano_pane = pn.Column(
-        pn.pane.Markdown("##   Volcano plots"),
+        pn.pane.Markdown("##   Volcano plots", disable_anchors=True),
         pn.Row(
             contrast_sel,
             pn.Spacer(width=20),

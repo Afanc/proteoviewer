@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 import re
-from typing import Callable, Iterable, Optional
+from typing import Callable, Iterable, Optional, Sequence
 
 import panel as pn
 
@@ -10,6 +10,7 @@ from components.overview_plots import (
     resolve_pattern_to_uniprot_ids,
     resolve_exact_list_to_uniprot_ids,
 )
+from components.plot_utils import get_volcano_classification_masks
 from utils.layout_utils import make_vr
 
 
@@ -54,7 +55,7 @@ def make_intro_pane(
 
     return pn.Row(
         pn.Column(
-            pn.pane.Markdown("##   Summary"),
+            pn.pane.Markdown("##   Summary", disable_anchors=True),
             summary_pane,
             styles={"flex": "0.32", "min-width": "0"},
         ),
@@ -298,6 +299,44 @@ def make_cohort_inspector_widgets(
     )
 
 
+def filter_feature_ids_to_visible_volcano(
+    *,
+    adata,
+    contrast: str,
+    min_nonimp_per_cond: int,
+    min_consistent_peptides: int,
+    show_measured: bool,
+    show_imp_cond1: bool,
+    show_imp_cond2: bool,
+    feature_ids: list[str],
+) -> list[str]:
+    """
+    Restrict an exported cohort/ID list to the subset currently visible in the volcano plot.
+
+    Visibility is defined by:
+      - post-test missingness classification (Observed/Imputed grp1/Imputed grp2)
+      - min_nonimp_per_cond threshold
+      - consistent pep/prec threshold
+      - the three visibility toggles (show_measured/show_imp_cond1/show_imp_cond2)
+
+    This uses the same classification logic as plot_volcanoes() via get_volcano_classification_masks().
+    """
+    if not feature_ids:
+        return []
+
+    measured, imp1, imp2 = get_volcano_classification_masks(
+        adata=adata,
+        contrast=str(contrast),
+        min_nonimp_per_cond=int(min_nonimp_per_cond or 0),
+        min_consistent_peptides=int(min_consistent_peptides or 0),
+    )
+
+    visible = (measured & bool(show_measured)) | (imp1 & bool(show_imp_cond1)) | (imp2 & bool(show_imp_cond2))
+    visible_ids = set(adata.var_names[visible].astype(str).tolist())
+
+    # Preserve caller order
+    return [str(x) for x in feature_ids if str(x) in visible_ids]
+
 
 def make_metrics_pane(
     *,
@@ -328,7 +367,7 @@ def make_metrics_pane(
     )
 
     return pn.Row(
-        pn.pane.Markdown("##   Metrics", styles={"flex": "0.1", "z-index": "10"}),
+        pn.pane.Markdown("##   Metrics", styles={"flex": "0.1", "z-index": "10"}, disable_anchors=True),
         rmad_pane,
         pn.Spacer(width=25),
         make_vr(),
@@ -352,7 +391,8 @@ def make_clustering_pane(
     plot_pca_2d,
     plot_mds_2d,
     plot_umap_2d,
-    height: int = 530,
+    height: int = 570,
+    plot_height: int = 500,
     margin=(0, 0, 0, 20),
     width_style: str = "98vw",
     tooltip_margin=(-475, 0, 0, -80),
@@ -361,23 +401,75 @@ def make_clustering_pane(
     Shared Clustering pane (PCA + MDS/UMAP) with identical layout/styling.
     MDS is used when 'X_mds' is present in adata.obsm; otherwise UMAP.
     """
-    pca_pane = pn.pane.Plotly(
-        plot_pca_2d(adata),
-        height=500,
-        sizing_mode="stretch_width",
-        styles={"flex": "1"},
-        margin=(0, 0, 0, -100),
+    pca_pc_sel = pn.widgets.Select(
+        name="PCA axes",
+        options={
+            "PC1 vs PC2": (1, 2),
+            "PC1 vs PC3": (1, 3),
+            "PC2 vs PC3": (2, 3),
+        },
+        value=(1, 2),
+        width=110,
+        margin=(0, 0, 0, 10),
+        styles={"z-index": "10"},
+    )
+    show_pca_ellipses = pn.widgets.Checkbox(
+        name="PCA 95% CI",
+        value=True,
+        margin=(0, 0, 0, 10),
+        styles={"z-index": "10"},
+    )
+    show_mds_ellipses = pn.widgets.Checkbox(
+        name="MDS 95% CI",
+        value=True,
+        margin=(0, 0, 0, 10),
+        visible=("X_mds" in adata.obsm),
+        styles={"z-index": "10"},
     )
 
-    if "X_mds" in adata.obsm:
-        emb_fig = plot_mds_2d(adata, title="MDS")
-    else:
-        emb_fig = plot_umap_2d(adata, title="UMAP")
+    def _pca_fig(pc, show_ellipses):
+        return plot_pca_2d(
+            adata=adata,
+            pc=tuple(pc),
+            show_ellipses=bool(show_ellipses),
+            width=None,
+            height=plot_height,
+        )
 
-    umap_pane = pn.pane.Plotly(
-        emb_fig,
-        height=500,
+    pca_fig = pn.bind(_pca_fig, pca_pc_sel, show_pca_ellipses)
+
+    pca_pane = pn.pane.Plotly(
+        pca_fig,
         sizing_mode="stretch_width",
+        styles={"flex": "1"},
+        margin=(0, 0, 0, 0),
+        config={"responsive": True},
+    )
+
+    def _emb_fig(show_ellipses):
+        if "X_mds" in adata.obsm:
+            return plot_mds_2d(
+                adata=adata,
+                title="MDS",
+                show_ellipses=bool(show_ellipses),
+                width=None,
+                height=plot_height,
+            )
+        else:
+            return plot_umap_2d(
+                adata=adata,
+                title="UMAP",
+                width=None,
+                height=plot_height,
+            )
+
+    emb_fig = pn.bind(_emb_fig, show_mds_ellipses)
+
+    emb_pane = pn.pane.Plotly(
+        emb_fig,
+        sizing_mode="stretch_width",
+        margin=(0,0,0,0),
+        config={"responsive": True},
         styles={"flex": "1"},
     )
 
@@ -388,19 +480,74 @@ def make_clustering_pane(
         analysis of processed data.
         Multidimensional Scaling uses
         correlation distances.
+        Ellipses show the 95% confidence
+        of each condition in the embedding.
         """,
-        margin=tooltip_margin,
+        margin=0,
         styles={"z-index": "10"},
+        stylesheets=[
+            """
+            :host {
+                width: 18px !important;
+                min-width: 18px !important;
+                max-width: 18px !important;
+                height: 18px !important;
+                min-height: 18px !important;
+                max-height: 18px !important;
+                margin: 0 !important;
+                padding: 0 !important;
+                position: static !important;
+            }
+            """
+        ],
+    )
+    cluster_info_box = pn.Column(
+        cluster_info,
+        width=18,
+        height=18,
+        min_width=18,
+        min_height=18,
+        margin=(10, 0, 0, 0),
+        styles={
+            "flex": "0 0 18px",
+            "padding": "0",
+            "margin": "0",
+            "overflow": "visible",
+            "align-self": "flex-start",
+            "justify-content": "flex-start",
+            "position": "relative",
+            "top": "18px",
+        },
     )
 
-    return pn.Row(
-        pn.pane.Markdown("##   Clustering", styles={"flex": "0.15", "z-index": "10"}),
-        cluster_info,
-        pca_pane,
-        make_vr(),
-        pn.Spacer(width=60),
-        umap_pane,
-        make_vr(),
+    return pn.Column(
+        pn.Row(
+            pn.pane.Markdown("##   Clustering", styles={"flex": "1", "z-index": "10"}, disable_anchors=True),
+            cluster_info_box,
+        ),
+        pn.Spacer(height=10),
+        pn.Row(
+            pca_pc_sel,
+            pn.Spacer(width=30),
+            pn.Column(
+                show_pca_ellipses,
+                pn.Spacer(height=10),
+                show_mds_ellipses,
+                margin=(10,0,0,0),
+            ),
+            margin=(0,0,0,10),
+        ),
+        pn.Row(
+            pca_pane,
+            pn.Spacer(width=30),
+            make_vr(),
+            pn.Spacer(width=30),
+            emb_pane,
+            #margin=(0,0,0,0),
+            margin=(-60, 0, 0, 20),
+            sizing_mode="stretch_width",
+            styles={"flex": "1", "align-items": "stretch"},
+        ),
         height=height,
         margin=margin,
         sizing_mode="stretch_width",
@@ -453,6 +600,8 @@ def wire_cohort_export_updates(
     file_text_widget: pn.widgets.TextAreaInput,
     clear_btn: pn.widgets.Button,
     search_field_sel: Optional[pn.widgets.Select] = None,
+    transform_ids: Optional[Callable[[list[str]], list[str]]] = None,
+    refresh_controls: Optional[Sequence[tuple[object, str]]] = None,
 ) -> Callable[[], None]:
     """
     Ensure cohort changes update selection exporter state immediately.
@@ -461,14 +610,23 @@ def wire_cohort_export_updates(
       - file text holder (file_text_widget.value)
       - optional search field selector (search_field_sel.value)
       - clear button click
+      - optional additional controls affecting visible export rows
     Returns the push function for manual calls if needed.
     """
     def _push(_=None) -> None:
-        on_cohort_ids(list(group_ids_selected() or []))
+        #on_cohort_ids(list(group_ids_selected() or []))
+        ids = list(group_ids_selected() or [])
+        if transform_ids is not None:
+            ids = list(transform_ids(ids) or [])
+        on_cohort_ids(ids)
 
     search_input_group.param.watch(_push, "value")
     file_text_widget.param.watch(_push, "value")
     if search_field_sel is not None:
         search_field_sel.param.watch(_push, "value")
     clear_btn.on_click(lambda _e: _push())
+
+    for obj, param_name in (refresh_controls or []):
+        obj.param.watch(_push, param_name)
+
     return _push

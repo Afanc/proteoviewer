@@ -43,6 +43,7 @@ from tabs.overview_shared import (
     fmt_files_list,
     bind_uirevision,
     wire_cohort_export_updates,
+    filter_feature_ids_to_visible_volcano,
 )
 from components.plot_utils import plot_pca_2d, plot_umap_2d, plot_mds_2d
 from components.string_links import get_string_link
@@ -550,7 +551,18 @@ def overview_tab_phospho(state: SessionState):
     # Cohort changes must update the export state immediately (priority: click > cohort > lasso).
     wire_cohort_export_updates(
         group_ids_selected=group_ids_selected,
-        on_cohort_ids=_on_cohort_ids,
+        on_cohort_ids=lambda ids: _on_cohort_ids(
+            filter_feature_ids_to_visible_volcano(
+                adata=state.adata,
+                contrast=str(contrast_sel.value),
+                min_nonimp_per_cond=int(_min_meas_value(min_meas_sel.value)),
+                min_consistent_peptides=int(_min_prec_value(min_prec_sel.value)),
+                show_measured=bool(show_measured.value),
+                show_imp_cond1=bool(show_imp_cond1.value),
+                show_imp_cond2=bool(show_imp_cond2.value),
+                feature_ids=list(ids or []),
+            )
+        ),
         search_input_group=search_input_group,
         file_text_widget=_file_text,
         clear_btn=clear_all,
@@ -1094,7 +1106,7 @@ def overview_tab_phospho(state: SessionState):
     )
 
     volcano_pane = pn.Column(
-        pn.pane.Markdown("##   Volcano plots"),
+        pn.pane.Markdown("##   Volcano plots", disable_anchors=True),
         pn.Row(
             contrast_sel,
             pn.Spacer(width=10),
