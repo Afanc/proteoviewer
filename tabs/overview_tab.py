@@ -72,6 +72,50 @@ def overview_tab(state: SessionState):
     # Plots
     adata = state.adata
 
+    # Normalize protein/gene names
+    def _build_search_options(ad):
+        ids = list(map(str, ad.var_names))
+
+        if "GENE_NAMES" not in ad.var.columns:
+            return ids
+
+        genes = ad.var["GENE_NAMES"].astype(str).tolist()
+
+        counts = {}
+        for g in genes:
+            g = str(g).strip()
+            if not g or g.lower() == "nan":
+                continue
+            counts[g] = counts.get(g, 0) + 1
+
+        opts = []
+        seen = set()
+
+        for gene, uid in zip(genes, ids):
+            gene = str(gene).strip()
+            uid = str(uid).strip()
+
+            if gene and gene.lower() != "nan":
+                label = f"{gene} | {uid}" if counts.get(gene, 0) > 1 else gene
+                if label not in seen:
+                    opts.append(label)
+                    seen.add(label)
+
+        for uid in ids:
+            if uid not in seen:
+                opts.append(uid)
+                seen.add(uid)
+
+        return opts
+
+    def _normalize_search_token(token: str) -> str:
+        s = str(token or "").strip()
+        if not s:
+            return s
+        if " | " in s:
+            return s.rsplit(" | ", 1)[1].strip()
+        return s
+
     ## Config Pane
     # Texts
     preproc_cfg = adata.uns["preprocessing"]
@@ -290,9 +334,10 @@ def overview_tab(state: SessionState):
         default_label="≥0",
     )
 
-    search_input_name = "Search Protein"
-    placeholder_txt="Gene name or Uniprot ID"
-    options_list=list(state.adata.var["GENE_NAMES"]) + list(state.adata.var_names)
+    search_input_name = "Search Protein/Gene"
+    placeholder_txt="Gene name or UniProt ID"
+    options_list = _build_search_options(state.adata)
+    #options_list=list(state.adata.var["GENE_NAMES"]) + list(state.adata.var_names)
     if peptidomics_mode:
         search_input_name = "Search Peptide"
         placeholder_txt = "Peptide Sequence"
@@ -363,7 +408,7 @@ def overview_tab(state: SessionState):
         show_imp_cond2=show_imp_cond2,
         min_nonimp_per_cond=pn.bind(_min_meas_value, min_meas_sel),
         min_precursors=pn.bind(_min_prec_value, min_prec_sel),
-        highlight=search_input,
+        highlight=pn.bind(_normalize_search_token, search_input),
         highlight_group=group_ids_selected,
         sign_threshold=0.05,
         width=None,
@@ -380,7 +425,9 @@ def overview_tab(state: SessionState):
             proteomics_mode = (mode in {"dia", "dda", "proteomics"})
 
             if proteomics_mode:
-                search_input.value = str(pt.get("text", ""))
+                # Use the unique feature id from customdata, not the gene label in 'text'.
+                # Gene names are not guaranteed to be unique.
+                search_input.value = str(cd[0] if isinstance(cd, (list, tuple)) and len(cd) else pt.get("text", ""))
             else:
                 search_input.value = str(cd[0] if isinstance(cd, (list, tuple)) and len(cd) else pt.get("text", ""))
 
@@ -516,7 +563,7 @@ def overview_tab(state: SessionState):
             return pn.Spacer(width=800, height=170)
 
         # pull values that do not depend on the "layer" toggle
-        key = str(protein)
+        key = _normalize_search_token(protein)
         protein_info = get_protein_info(state, contrast, key, layers_sel)
 
         uniprot_id   = protein_info['uniprot_id']
@@ -760,7 +807,7 @@ def overview_tab(state: SessionState):
             return pn.Spacer(width=800, height=500, margin=(-30, 0, 0, 0))
 
         # bar plot
-        key = str(protein)
+        key = _normalize_search_token(protein)
         fig = plot_intensity_by_protein(state, contrast, key, layers_sel)
         protein_info = get_protein_info(state, contrast, key, layers_sel)
 
@@ -822,7 +869,7 @@ def overview_tab(state: SessionState):
         token = search_input.value
         if not token:
             return None
-        key = str(token)
+        key = _normalize_search_token(token)
         info = get_protein_info(state, contrast_sel.value, key, layers_sel)
         return info["uniprot_id"]
 

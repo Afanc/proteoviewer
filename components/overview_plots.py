@@ -312,15 +312,21 @@ def get_protein_info(state, contrast, protein, layer):
     proteomics_mode = (mode in {"dia", "dda", "proteomics"})
 
     if proteomics_mode:
-        #names = ad.var["GENE_NAMES"].astype(str)
-        #mask  = names == protein
-        #uniprot_id = ad.var_names[mask][0]
-        #col_idx = list(names).index(str(protein))
         col_idx = _resolve_protein_col_idx(ad, str(protein))
         uniprot_id = str(ad.var_names[col_idx])
+        gene_names = (
+            str(ad.var["GENE_NAMES"].iloc[col_idx])
+            if "GENE_NAMES" in ad.var.columns
+            else ""
+        )
     else:
         uniprot_id = str(protein)
         col_idx = list(map(str, ad.var_names)).index(uniprot_id)
+        gene_names = (
+            str(ad.var["GENE_NAMES"].iloc[col_idx])
+            if "GENE_NAMES" in ad.var.columns
+            else ""
+        )
 
     layer_data = ad.X
     if layer.value == "Raw":
@@ -363,6 +369,7 @@ def get_protein_info(state, contrast, protein, layer):
 
     protein_info = {
         'uniprot_id': uniprot_id,
+        'gene_names': gene_names,
         'qval': qval,
         'logfc': logfc,
         'avg_int': avg_int,
