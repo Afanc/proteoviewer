@@ -298,11 +298,13 @@ def overview_tab(state: SessionState):
     show_imp_cond2 = pn.widgets.Checkbox(name=f"", value=True)
 
     # Color selector
-    color_options = ["Significance", "Avg Intensity"]
+    color_options = ["Significance"]
     if "nrsc" in state.adata.varm:
         color_options.append("Norm. rel. SC")
+    color_options.append("Avg Intensity")
     if "ibaq" in state.adata.layers:
         color_options.append("Avg IBAQ")
+
 
     color_by = pn.widgets.Select(
         name="Color by",
