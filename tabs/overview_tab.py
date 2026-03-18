@@ -299,6 +299,8 @@ def overview_tab(state: SessionState):
 
     # Color selector
     color_options = ["Significance", "Avg Intensity"]
+    if "nrsc" in state.adata.varm:
+        color_options.append("nrSC")
     if "ibaq" in state.adata.layers:
         color_options.append("Avg IBAQ")
 
@@ -620,6 +622,22 @@ def overview_tab(state: SessionState):
             font_size="14pt",
             styles={'flex': '1'}
         )
+        nrsc_ind = pn.Spacer(height=0)
+        if "nrsc" in adata.varm:
+            try:
+                contrast_names = list(map(str, adata.uns["contrast_names"]))
+                j = contrast_names.index(str(contrast))
+                nrsc_val = float(adata.varm["nrsc"][idx, j])
+                nrsc_ind = Number(
+                    name="nrSC",
+                    value=nrsc_val,
+                    format="{value:.3f}",
+                    default_color="darkorange",
+                    font_size="14pt",
+                    styles={'flex': '1'}
+                )
+            except Exception:
+                nrsc_ind = pn.Spacer(height=0)
 
         _intensity_slot[:] = [pn.Spacer(height=0)]
 
@@ -788,7 +806,7 @@ def overview_tab(state: SessionState):
 
         card = pn.Card(
             header,
-            pn.Row(q_ind, lfc_ind, _intensity_slot, sizing_mode="stretch_width"),
+            pn.Row(q_ind, lfc_ind, nrsc_ind, _intensity_slot, sizing_mode="stretch_width"),
             hr,
             footer_links,
             width=800,
@@ -823,7 +841,7 @@ def overview_tab(state: SessionState):
         )
 
         # intensity Number
-        intensity_scale = "Avg Log Intensity" if layer != "Raw" else "Avg Intensity"
+        intensity_scale = "Avg Log Int." if layer != "Raw" else "Avg Int."
 
         prot_avg_val = protein_info["avg_int"]
         prot_avg_val = f"{prot_avg_val:.3f}" if prot_avg_val <= 100 else f"{prot_avg_val:.0f}"
@@ -833,7 +851,7 @@ def overview_tab(state: SessionState):
             name=intensity_scale,
             value=protein_info["avg_int"],
             format=prot_avg_val,
-            default_color="darkorange",
+            default_color="dimgray",
             font_size="16pt",
             styles={'flex': '1'}
         )

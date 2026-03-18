@@ -1394,6 +1394,26 @@ def plot_volcanoes(
         avg_ibaq = np.log10(np.nanmean(ibaq+1, axis=0))
         color_vals = avg_ibaq
         colorbar = dict(title="Avg log(IBAQ)", len=0.5)
+    elif color_by == "nrSC":
+        nrsc = adata.varm["nrsc"]
+        df_nrsc = pd.DataFrame(
+            nrsc,
+            index=adata.var_names,
+            columns=adata.uns["contrast_names"],
+        )
+        color_vals = df_nrsc[contrast].reindex(protids).to_numpy()
+        colorscale = [ #same as sign but with grey in between
+            [0.00, "#0000ff"],
+            [0.10, "#1f4fff"],
+            [0.22, "#4f8fff"],
+            [0.38, "#7f7f7f"],
+            [0.50, "#969696"],
+            [0.62, "#b07f7f"],
+            [0.78, "#ff6a6a"],
+            [0.90, "#ff2a2a"],
+            [1.00, "#ff0000"],
+        ]
+        colorbar = dict(title="nrSC", len=0.5)
     elif color_by == "Raw LogFC":
         raw = adata.varm["raw_log2fc"]
         df_raw = pd.DataFrame(raw, index=adata.var_names, columns=adata.uns["contrast_names"])
@@ -1434,7 +1454,7 @@ def plot_volcanoes(
         v = v[np.isfinite(v)]
         if v.size == 0:
             vmin, vmax, cmid = 0.0, 1.0, None
-        elif "LogFC" in color_by:  # center FC scales on 0
+        elif ("LogFC" in color_by) or (color_by == "nrSC"):
             vmax = float(np.nanmax(np.abs(v)))
             vmin, vmax, cmid = -vmax, vmax, 0.0
         else:

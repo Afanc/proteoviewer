@@ -4,9 +4,7 @@ import os
 import re
 from typing import Callable, Iterable, Optional, Sequence
 
-import numpy as np
 import panel as pn
-import plotly.graph_objects as go
 
 from components.overview_plots import (
     resolve_pattern_to_uniprot_ids,
@@ -474,117 +472,6 @@ def make_clustering_pane(
         config={"responsive": True},
         styles={"flex": "1"},
     )
-
-    def _padded_range(vals, pad_frac=0.08):
-        vals = np.asarray(vals, dtype=float)
-        vals = vals[np.isfinite(vals)]
-        if vals.size == 0:
-            return None
-        vmin = float(vals.min())
-        vmax = float(vals.max())
-        pad = 1.0 if vmax == vmin else (vmax - vmin) * pad_frac
-        return [vmin - pad, vmax + pad]
-
-    def _trace_is_visible(tr) -> bool:
-        vis = getattr(tr, "visible", True)
-        return vis not in (False, "legendonly")
-
-    def _trace_has_markers(tr) -> bool:
-        mode = str(getattr(tr, "mode", "") or "")
-        return "markers" in mode
-
-    def _finite_numeric(seq):
-        out = []
-        if seq is None:
-            return out
-        if np.isscalar(seq):
-            seq = [seq]
-        for v in seq:
-            try:
-                fv = float(v)
-            except Exception:
-                continue
-            if np.isfinite(fv):
-                out.append(fv)
-        return out
-
-    def _apply_restyle_visibility(fig: go.Figure, restyle_data):
-        """
-        Patch fig.data[*].visible from Plotly's restyle payload.
-        restyle_data is typically: [edits_dict, trace_indices]
-        """
-        if not restyle_data:
-            return fig
-        if not isinstance(restyle_data, (list, tuple)) or len(restyle_data) != 2:
-            return fig
-
-        edits, trace_idxs = restyle_data
-        if not isinstance(edits, dict) or "visible" not in edits:
-            return fig
-
-        vals = edits["visible"]
-        if not isinstance(trace_idxs, (list, tuple)):
-            trace_idxs = [trace_idxs]
-        if not isinstance(vals, (list, tuple)):
-            vals = [vals]
-        if len(vals) == 1 and len(trace_idxs) > 1:
-            vals = list(vals) * len(trace_idxs)
-
-        for idx, val in zip(trace_idxs, vals):
-            try:
-                fig.data[int(idx)].visible = val
-            except Exception:
-                pass
-        return fig
-
-    def _autorange_visible_markers(pane: pn.pane.Plotly):
-        fig = pane.object
-        if fig is None:
-            return
-
-        xs, ys = [], []
-        for tr in fig.data:
-            if not _trace_is_visible(tr):
-                continue
-            if not _trace_has_markers(tr):
-                continue
-            xs.extend(_finite_numeric(getattr(tr, "x", [])))
-            ys.extend(_finite_numeric(getattr(tr, "y", [])))
-
-        x_range = _padded_range(xs)
-        y_range = _padded_range(ys)
-        if x_range is None or y_range is None:
-            return
-
-        new_fig = go.Figure(fig)
-        new_fig.update_xaxes(range=x_range)
-        new_fig.update_yaxes(range=y_range)
-        pane.object = new_fig
-
-    def _wire_marker_only_autorange(pane: pn.pane.Plotly):
-        _busy = {"value": False}
-
-        def _on_restyle(event):
-            if _busy["value"]:
-                return
-            if not event.new:
-                return
-            if pane.object is None:
-                return
-
-            _busy["value"] = True
-            try:
-                fig = go.Figure(pane.object)
-                fig = _apply_restyle_visibility(fig, event.new)
-                pane.object = fig
-                _autorange_visible_markers(pane)
-            finally:
-                _busy["value"] = False
-
-        pane.param.watch(_on_restyle, "restyle_data")
-
-    _wire_marker_only_autorange(pca_pane)
-    _wire_marker_only_autorange(emb_pane)
 
     cluster_info = pn.widgets.TooltipIcon(
         value="""
