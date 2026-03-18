@@ -548,14 +548,6 @@ def overview_tab(state: SessionState):
     search_input.param.watch(_toggle_layers_visibility, "value")
     layers_sel.visible = bool(search_input.value)
 
-    _intensity_slot = pn.Column(
-        sizing_mode="stretch_width",
-        styles={
-            'flex': '1',
-            'min-width': '0',
-        }
-    )
-
     @lru_cache(maxsize=4096)
     def _cached_string_link(uniprot_id: str) -> str:
         # Cache ONLY the URL string (safe). If the call fails, return "".
@@ -570,8 +562,8 @@ def overview_tab(state: SessionState):
             # Reserve the card’s area when nothing is selected
             return pn.Spacer(width=800, height=170)
 
-        # pull values that do not depend on the "layer" toggle
         key = _normalize_search_token(protein)
+        layer = layers_sel.value
         protein_info = get_protein_info(state, contrast, key, layers_sel)
 
         uniprot_id   = protein_info['uniprot_id']
@@ -611,6 +603,19 @@ def overview_tab(state: SessionState):
 
         Number = pn.indicators.Number
 
+        # intensity Number
+        intensity_scale = "Avg Log Int." if layer != "Raw" else "Avg Int."
+        prot_avg_num = float(protein_info["avg_int"])
+        prot_avg_fmt = "{value:.3f}" if prot_avg_num <= 100 else "{value:.0f}"
+        int_ind = Number(
+            name=intensity_scale,
+            value=prot_avg_num,
+            format=prot_avg_fmt,
+            default_color="dimgray",
+            font_size="16pt",
+            styles={'flex': '1'}
+        )
+
         # q-value and log2FC never depend on layer, keep these fixed in the card
         q_ind = Number(
             name="q-value",
@@ -646,8 +651,7 @@ def overview_tab(state: SessionState):
             except Exception:
                 pass
 
-        _intensity_slot[:] = [pn.Spacer(height=0)]
-        metrics_row_items.append(_intensity_slot)
+        metrics_row_items.append(int_ind)
 
         # header 
         base_size = 18
@@ -828,8 +832,6 @@ def overview_tab(state: SessionState):
     @pn.depends(protein=search_input, contrast=contrast_sel, layer=layers_sel)
     def bar_and_intensity(protein, contrast, layer):
         if not protein:
-            # Reserve space for the bar plot when nothing is selected
-            _intensity_slot[:] = [pn.Spacer(height=0)]
             return pn.Spacer(width=800, height=500, margin=(-30, 0, 0, 0))
 
         # bar plot
@@ -847,25 +849,6 @@ def overview_tab(state: SessionState):
                 'box-shadow':     '3px 3px 5px #bcbcbc',
             }
         )
-
-        # intensity Number
-        intensity_scale = "Avg Log Int." if layer != "Raw" else "Avg Int."
-
-        prot_avg_val = protein_info["avg_int"]
-        prot_avg_val = f"{prot_avg_val:.3f}" if prot_avg_val <= 100 else f"{prot_avg_val:.0f}"
-
-        Number = pn.indicators.Number
-        int_ind = Number(
-            name=intensity_scale,
-            value=protein_info["avg_int"],
-            format=prot_avg_val,
-            default_color="dimgray",
-            font_size="16pt",
-            styles={'flex': '1'}
-        )
-
-        # Inject intensity Number into the card without rebuilding the card itself
-        _intensity_slot[:] = [int_ind]
 
         return barplot_pane
 
@@ -927,8 +910,6 @@ def overview_tab(state: SessionState):
     def _update_bar(_=None):
         protein = search_input.value
         if not protein:
-            # No protein selected -> no spinner, show placeholder and clear intensity slot
-            _intensity_slot[:] = [pn.Spacer(height=0)]
             bar_holder.loading = False
             bar_holder[:] = [pn.Spacer(width=800, height=500, margin=(-30, 0, 0, 0))]
             return
@@ -954,7 +935,7 @@ def overview_tab(state: SessionState):
     # Wire events:
     search_input.param.watch(lambda e: (_update_info(), _update_bar(), _update_pep()), "value")
     contrast_sel.param.watch(lambda e: (_update_info(), _update_bar(), _update_pep()), "value")
-    layers_sel.param.watch(lambda e: _update_bar(), "value")
+    layers_sel.param.watch(lambda e: (_update_info(), _update_bar()), "value")
 
     # Initial fill (after the page paints so we don’t see a flash)
     bokeh_doc.add_next_tick_callback(lambda: (_update_info(), _update_bar(), _update_pep()))
