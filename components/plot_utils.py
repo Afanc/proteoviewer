@@ -1394,7 +1394,7 @@ def plot_volcanoes(
         avg_ibaq = np.log10(np.nanmean(ibaq+1, axis=0))
         color_vals = avg_ibaq
         colorbar = dict(title="Avg log(IBAQ)", len=0.5)
-    elif color_by == "nrSC":
+    elif color_by == "Norm. rel. SC":
         nrsc = adata.varm["nrsc"]
         df_nrsc = pd.DataFrame(
             nrsc,

@@ -300,7 +300,7 @@ def overview_tab(state: SessionState):
     # Color selector
     color_options = ["Significance", "Avg Intensity"]
     if "nrsc" in state.adata.varm:
-        color_options.append("nrSC")
+        color_options.append("Norm. rel. SC")
     if "ibaq" in state.adata.layers:
         color_options.append("Avg IBAQ")
 
@@ -548,7 +548,13 @@ def overview_tab(state: SessionState):
     search_input.param.watch(_toggle_layers_visibility, "value")
     layers_sel.visible = bool(search_input.value)
 
-    _intensity_slot = pn.Column(styles={'flex': '1'})
+    _intensity_slot = pn.Column(
+        sizing_mode="stretch_width",
+        styles={
+            'flex': '1',
+            'min-width': '0',
+        }
+    )
 
     @lru_cache(maxsize=4096)
     def _cached_string_link(uniprot_id: str) -> str:
@@ -622,7 +628,7 @@ def overview_tab(state: SessionState):
             font_size="14pt",
             styles={'flex': '1'}
         )
-        nrsc_ind = pn.Spacer(height=0)
+        metrics_row_items = [q_ind, lfc_ind]
         if "nrsc" in adata.varm:
             try:
                 contrast_names = list(map(str, adata.uns["contrast_names"]))
@@ -636,10 +642,12 @@ def overview_tab(state: SessionState):
                     font_size="14pt",
                     styles={'flex': '1'}
                 )
+                metrics_row_items.append(nrsc_ind)
             except Exception:
-                nrsc_ind = pn.Spacer(height=0)
+                pass
 
         _intensity_slot[:] = [pn.Spacer(height=0)]
+        metrics_row_items.append(_intensity_slot)
 
         # header 
         base_size = 18
@@ -806,7 +814,7 @@ def overview_tab(state: SessionState):
 
         card = pn.Card(
             header,
-            pn.Row(q_ind, lfc_ind, nrsc_ind, _intensity_slot, sizing_mode="stretch_width"),
+            pn.Row(*metrics_row_items, sizing_mode="stretch_width"),
             hr,
             footer_links,
             width=800,
