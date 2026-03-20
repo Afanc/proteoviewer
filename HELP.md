@@ -23,6 +23,18 @@ This page provides a concise reference for interpreting results in ProteoViewer.
 
 ---
 
+## Plots (interactive)
+
+All plots are interactive (Plotly):
+
+- Zoom / pan / select points
+- Hover for details
+- Export as **PNG** using the camera icon (first top right)
+
+Avoid screenshots - use the built-in export :)
+
+---
+
 ## Metrics
 
 ### CV (Coefficient of Variation)
