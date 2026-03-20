@@ -10,11 +10,11 @@ This page provides a concise reference for interpreting results in ProteoViewer.
   - Identification counts
   - CV and rMAD distributions
   - PCA / MDS visualizations
-  - Volcano plot
+  - Volcano plot and data exploration
 
 - **Preprocessing**
-  - Quality control before/after filtering
-  - Effects of filtering and normalization
+  - Quality control
+  - Effects of filtering, normalization and imputation
 
 - **Analysis**
   - Log2FC distribution
@@ -69,6 +69,17 @@ Volcano plots display differential expression results for a selected contrast.
 
 ---
 
+### Coloring
+
+Points can be colored by:
+
+- **Significance** (default)
+- **nrSC** (see below)
+- **Average intensity**
+- **Average IBAQ** (if available, see below)
+
+---
+
 ### Filters
 
 #### Minimum / condition
@@ -101,18 +112,7 @@ Used for highlighting and export.
 
 ---
 
-### Coloring
-
-Points can be colored by:
-
-- **Significance** (default)
-- **nrSC**
-- **Average intensity**
-- **Average IBAQ** (if available)
-
----
-
-## Data Views (right panel)
+### Data Views (right panel)
 
 These affect the **barplot and detailed views**, not the volcano itself:
 
