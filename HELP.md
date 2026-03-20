@@ -4,6 +4,15 @@ This page provides a concise reference for interpreting results in ProteoViewer.
 
 ---
 
+## Display
+
+If the layout does not fit your screen, adjust browser zoom:
+
+- Zoom in/out: `Ctrl +` / `Ctrl -`
+- Reset: `Ctrl 0`
+
+---
+
 ## Tabs Overview
 
 - **Overview**
