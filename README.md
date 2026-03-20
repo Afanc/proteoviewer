@@ -24,6 +24,14 @@ ProteoViewer can be used:
 
 ---
 
+## Help / FAQ
+
+A small guide to using ProteoViewer:
+
+[ProteoViewer Help / FAQ](HELP.md)
+
+---
+
 ## Installation
 
 ProteoViewer is a Python application built on Panel, Bokeh, and the scientific Python ecosystem.
