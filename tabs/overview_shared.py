@@ -305,6 +305,7 @@ def filter_feature_ids_to_visible_volcano(
     contrast: str,
     min_nonimp_per_cond: int,
     min_consistent_peptides: int,
+    min_nrsc_alignment: float,
     show_measured: bool,
     show_imp_cond1: bool,
     show_imp_cond2: bool,
@@ -330,6 +331,15 @@ def filter_feature_ids_to_visible_volcano(
         min_nonimp_per_cond=int(min_nonimp_per_cond or 0),
         min_consistent_peptides=int(min_consistent_peptides or 0),
     )
+
+    align_keep = get_nrsc_alignment_mask(
+        adata=adata,
+        contrast=str(contrast),
+        min_nrsc_alignment=float(min_nrsc_alignment or 0.0),
+    )
+    measured &= align_keep
+    imp1 &= align_keep
+    imp2 &= align_keep
 
     visible = (measured & bool(show_measured)) | (imp1 & bool(show_imp_cond1)) | (imp2 & bool(show_imp_cond2))
     visible_ids = set(adata.var_names[visible].astype(str).tolist())

@@ -337,6 +337,16 @@ def overview_tab(state: SessionState):
         width=80,
         default_label="≥0",
     )
+    nrsc_alignment_sel = pn.widgets.FloatSlider(
+        name="Max nrSC misalign.",
+        start=0.0,
+        end=2.0,
+        step=0.05,
+        value=1.40,
+        width=130,
+        bar_color="blue",
+        visible=("nrsc_misalignment" in state.adata.varm),
+    )
 
     search_input_name = "Search Protein/Gene"
     placeholder_txt="Gene name or UniProt ID"
@@ -412,6 +422,7 @@ def overview_tab(state: SessionState):
         show_imp_cond2=show_imp_cond2,
         min_nonimp_per_cond=pn.bind(_min_meas_value, min_meas_sel),
         min_precursors=pn.bind(_min_prec_value, min_prec_sel),
+        min_nrsc_alignment=nrsc_alignment_sel,
         highlight=pn.bind(_normalize_search_token, search_input),
         highlight_group=group_ids_selected,
         sign_threshold=0.05,
@@ -474,6 +485,7 @@ def overview_tab(state: SessionState):
             contrast=str(contrast_sel.value),
             min_nonimp_per_cond=int(_min_meas_value(min_meas_sel.value)),
             min_consistent_peptides=int(_min_prec_value(min_prec_sel.value)),
+            min_nrsc_alignment=float(nrsc_alignment_sel.value),
             show_measured=bool(show_measured.value),
             show_imp_cond1=bool(show_imp_cond1.value),
             show_imp_cond2=bool(show_imp_cond2.value),
@@ -490,6 +502,7 @@ def overview_tab(state: SessionState):
             (show_imp_cond2, "value"),
             (min_meas_sel, "value"),
             (min_prec_sel, "value"),
+            (nrsc_alignment_sel, "value"),
         ],
     )
 
@@ -982,7 +995,8 @@ def overview_tab(state: SessionState):
                 min_prec_sel,
                 margin=(-30,0,0,0),
             ),
-            pn.Spacer(width=20),
+            nrsc_alignment_sel,
+            pn.Spacer(width=10),
             make_vr(),
             pn.Spacer(width=20),
             pn.Column(
