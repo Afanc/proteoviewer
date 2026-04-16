@@ -128,6 +128,7 @@ def overview_tab(state: SessionState):
     peptidomics_mode = analysis_type in {"peptido", "peptidomics"}
     phospho_mode = analysis_type in {"phospho", "phosphoproteomics"}
     ebayes_method  = analysis_cfg.get("ebayes_method", "limma")
+    batch_cols = analysis_cfg.get("batch_effect_columns", None)
     input_layout  = preproc_cfg.get("input_layout", "")
 
     num_samples = len(adata.obs.index.unique())
@@ -205,6 +206,14 @@ def overview_tab(state: SessionState):
     if extras:
         imp_method = f"{imp_method} ({', '.join(extras)})"
 
+    # format batch info (single line, appended to DE line)
+    batch_txt = ""
+    if batch_cols:
+        if isinstance(batch_cols, (list, tuple)):
+            batch_txt = f" (batch effect columns: {', '.join(map(str, batch_cols))})"
+        else:
+            batch_txt = f" (batch effect column: {batch_cols})"
+
     # build a single Markdown string
     summary_md = textwrap.dedent(f"""
 
@@ -224,7 +233,7 @@ def overview_tab(state: SessionState):
         - **Quantification**: {quant_method}
         - **Normalization**: {norm_methods}
         - **Imputation**: {imp_method}
-        - **Differential expression**: eBayes via {ebayes_method}
+        - **Differential expression**: eBayes via {ebayes_method}{batch_txt}
 
         **Proteoflux Version** {pf_version}
     """).strip()

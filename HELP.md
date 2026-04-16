@@ -118,6 +118,11 @@ Ensures the protein signal is supported by multiple independent measurements.
 
 ---
 
+#### Max nrSC misalignment
+Maximum allowed nrSC misalignment per protein, keeps proteins with nrSC misalignment ≤ threshold (see below).
+
+---
+
 ### Cohort Inspector
 
 Define and explore groups of proteins.
@@ -190,6 +195,20 @@ Properties:
 Important:
 - Not a statistical metric
 - Strict filtering may discard valid signal
+
+#### nrSC misalignment
+
+Computed from nrSC and Log2FC:
+
+nrSC_misalignment = 1 − sign(Log2FC) * nrSC
+
+Properties:
+- Range: [0, 2]
+- Low values: consistent signal (intensity and spectral support agree)
+- High values: potential inconsistencies (e.g. low support, noise, or single hits in one condition)
+
+Important:
+- Sensitive to low-effect sizes (small Log2FC may flip sign)
 
 ---
 
