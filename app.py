@@ -285,7 +285,7 @@ def _build_header(area_center, version: str, dev_flag: bool) -> pn.Column:
     help_link = pn.pane.HTML(
         '<a href="https://github.com/Afanc/proteoviewer/blob/main/HELP.md" target="_blank">Help</a>',
         width=20,
-        margin=(0, 0, 0, -15),
+        margin=(0, 0, 0, 10),
     )
 
     info = pn.widgets.TooltipIcon(
@@ -296,7 +296,7 @@ def _build_header(area_center, version: str, dev_flag: bool) -> pn.Column:
     dariush.mollet@unibas.ch
     DOI: 10.5281/zenodo.18640998
         """,
-        margin=(0,0,0,25),
+        margin=(0,0,0,-20),
     )
 
     # Left side: title on top, then the existing controls/status column underneath
@@ -305,7 +305,7 @@ def _build_header(area_center, version: str, dev_flag: bool) -> pn.Column:
                      pn.Spacer(width=10),
                      pn.Column(
                          pn.Spacer(height=25),
-                         pn.Row(help_link, info),
+                         pn.Row(info, help_link),
                          pn.Spacer(height=5),
                          pv_ver,
                          width=100,
