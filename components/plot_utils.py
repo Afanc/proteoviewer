@@ -185,7 +185,7 @@ def get_volcano_classification_masks(adata, contrast: str, min_nonimp_per_cond: 
 
     return measured, imp1, imp2
 
-def get_nrsc_alignment_mask(adata, contrast: str, min_nrsc_alignment: float = 1.40) -> np.ndarray:
+def get_nrsc_alignment_mask(adata, contrast: str, min_nrsc_alignment: float = 1.50) -> np.ndarray:
     """
     Return a per-feature boolean mask for nrSC alignment thresholding.
 
@@ -1203,7 +1203,7 @@ def plot_volcanoes(
     min_nonimp_per_cond: int = 0,
     min_nonimp_ft_per_cond: int = 0,
     min_precursors: int = 1,
-    min_nrsc_alignment: float = 1.40,
+    min_nrsc_alignment: float = 1.50,
     highlight: str = None,
     highlight_group: Optional[Sequence[str]] = None,
     color_by: str = "Significance",

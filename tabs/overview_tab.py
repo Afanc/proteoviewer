@@ -351,7 +351,7 @@ def overview_tab(state: SessionState):
         start=0.0,
         end=2.0,
         step=0.05,
-        value=1.40,
+        value=1.50,
         width=130,
         bar_color="blue",
         visible=("nrsc_misalignment" in state.adata.varm),

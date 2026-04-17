@@ -165,7 +165,7 @@ def plot_volcanoes_wrapper(
     min_nonimp_per_cond: int=0,
     min_nonimp_ft_per_cond: int=0,
     min_precursors: int=1,
-    min_nrsc_alignment: float=1.40,
+    min_nrsc_alignment: float=1.50,
     highlight: str = None,
     highlight_group: str = None,
     color_by: str = None,
