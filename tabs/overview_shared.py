@@ -10,7 +10,10 @@ from components.overview_plots import (
     resolve_pattern_to_uniprot_ids,
     resolve_exact_list_to_uniprot_ids,
 )
-from components.plot_utils import get_volcano_classification_masks
+from components.plot_utils import (
+    get_volcano_classification_masks,
+    get_nrsc_alignment_mask,
+)
 from utils.layout_utils import make_vr
 
 
