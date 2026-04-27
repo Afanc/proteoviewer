@@ -586,9 +586,10 @@ def build_app():
 
                 adata = read_h5ad(upload_path)
                 _load(adata, fname)
-                upload_widget.upload_path = ""
 
                 # clear widget state (important for large files + cleaner UI)
+                upload_widget.is_uploading = False
+                upload_widget.progress_class = "pv-progress-hidden"
                 upload_widget.upload_path = ""
 
             except Exception as e:

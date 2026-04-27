@@ -8,12 +8,22 @@ class HttpUploadWidget(pn.reactive.ReactiveHTML):
 
     upload_path = param.String(default="")
     filename = param.String(default="")
-    message = param.String(default="")
     progress = param.Integer(default=0)
     is_uploading = param.Boolean(default=False)
+    progress_class = param.String(default="pv-progress-hidden")
+    error = param.String(default="")
 
     _template = """
-    <div style="display:flex; align-items:center; gap:10px; width:100%;">
+    <div style="display:flex; flex-direction:column; align-items:flex-start; gap:6px; width:100%;">
+      <style>
+        .pv-progress-hidden {
+          display: none;
+        }
+        .pv-progress-hidden.visible {
+          display: inline-block;
+        }
+      </style>
+
       <input
         id="file_input"
         type="file"
@@ -43,10 +53,11 @@ class HttpUploadWidget(pn.reactive.ReactiveHTML):
         id="progress_bar"
         value="${progress}"
         max="100"
-        style="width:220px; display:none;"
+        class="${progress_class}"
+        style="width:260px;"
       ></progress>
 
-      <span id="message" style="font-size:13px;">${message}</span>
+      <span id="error" style="font-size:13px; color:#a33;">${error}</span>
     </div>
     """
 
@@ -63,19 +74,17 @@ class HttpUploadWidget(pn.reactive.ReactiveHTML):
             }
 
             if (!file.name.endsWith(".h5ad")) {
-                data.message = "Only .h5ad files are accepted.";
+                data.error = "Only .h5ad files are accepted.";
                 file_input.value = "";
                 return;
             }
 
-            data.is_uploading = true;
+            data.error = "";
             data.progress = 0;
+            data.progress_class = "pv-progress-visible";
             data.upload_path = "";
             data.filename = "";
-            data.message = "Uploading " + file.name + "...";
-
-            progress_bar.style.display = "inline-block";
-            progress_bar.value = 0;
+            data.is_uploading = true;
 
             const formData = new FormData();
             formData.append("file", file);
@@ -85,9 +94,7 @@ class HttpUploadWidget(pn.reactive.ReactiveHTML):
 
             xhr.upload.onprogress = function(event) {
                 if (event.lengthComputable) {
-                    const pct = Math.round((event.loaded / event.total) * 100);
-                    data.progress = pct;
-                    progress_bar.value = pct;
+                    data.progress = Math.round((event.loaded / event.total) * 100);
                 }
             };
 
@@ -97,26 +104,24 @@ class HttpUploadWidget(pn.reactive.ReactiveHTML):
 
                     if (resp.ok) {
                         data.progress = 100;
-                        progress_bar.value = 100;
                         data.filename = resp.filename;
                         data.upload_path = resp.path;
-                        data.message = "";
                     } else {
-                        data.message = "Upload failed: " + (resp.error || "unknown error");
+                        data.error = "Upload failed: " + (resp.error || "unknown error");
                     }
                 } else {
-                    data.message = "Upload failed: HTTP " + xhr.status;
+                    data.error = "Upload failed: HTTP " + xhr.status;
                 }
 
                 data.is_uploading = false;
-                progress_bar.style.display = "none";
+                data.progress_class = "pv-progress-hidden";
                 file_input.value = "";
             };
 
             xhr.onerror = function() {
+                data.error = "Upload failed.";
                 data.is_uploading = false;
-                data.message = "Upload failed.";
-                progress_bar.style.display = "none";
+                data.progress_class = "pv-progress-hidden";
                 file_input.value = "";
             };
 
