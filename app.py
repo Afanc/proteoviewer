@@ -566,6 +566,12 @@ def build_app():
             sizing_mode="stretch_width",
         )
 
+        def _on_uploading(event):
+            if event.new:
+                status.object = ""
+
+        upload_widget.param.watch(_on_uploading, "is_uploading")
+
         def _on_uploaded_path(event):
             if not event.new:
                 return
@@ -580,6 +586,10 @@ def build_app():
 
                 adata = read_h5ad(upload_path)
                 _load(adata, fname)
+                upload_widget.upload_path = ""
+
+                # clear widget state (important for large files + cleaner UI)
+                upload_widget.upload_path = ""
 
             except Exception as e:
                 import traceback

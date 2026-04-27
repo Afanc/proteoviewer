@@ -10,26 +10,10 @@ class HttpUploadWidget(pn.reactive.ReactiveHTML):
     filename = param.String(default="")
     message = param.String(default="")
     progress = param.Integer(default=0)
-    busy = param.Boolean(default=False)
+    is_uploading = param.Boolean(default=False)
 
     _template = """
     <div style="display:flex; align-items:center; gap:10px; width:100%;">
-      <label
-        for="file_input"
-        style="
-          background:#0d6efd;
-          color:white;
-          padding:6px 12px;
-          border-radius:4px;
-          cursor:pointer;
-          font-size:13px;
-          font-weight:500;
-          white-space:nowrap;
-        "
-      >
-        Browse .h5ad file
-      </label>
-
       <input
         id="file_input"
         type="file"
@@ -38,11 +22,28 @@ class HttpUploadWidget(pn.reactive.ReactiveHTML):
         style="display:none;"
       />
 
+      <button
+        id="browse_button"
+        onclick="${script('choose_file')}"
+        style="
+          background:#0d6efd;
+          color:white;
+          border:none;
+          border-radius:4px;
+          padding:6px 12px;
+          cursor:pointer;
+          font-size:13px;
+          font-weight:500;
+        "
+      >
+        Browse .h5ad file
+      </button>
+
       <progress
         id="progress_bar"
         value="${progress}"
         max="100"
-        style="width:220px; display:${busy ? 'inline-block' : 'none'};"
+        style="width:220px; display:none;"
       ></progress>
 
       <span id="message" style="font-size:13px;">${message}</span>
@@ -50,24 +51,31 @@ class HttpUploadWidget(pn.reactive.ReactiveHTML):
     """
 
     _scripts = {
+        "choose_file": """
+            file_input.click();
+        """,
+
         "upload": """
             const file = file_input.files[0];
 
             if (!file) {
-                data.message = "";
                 return;
             }
 
             if (!file.name.endsWith(".h5ad")) {
                 data.message = "Only .h5ad files are accepted.";
+                file_input.value = "";
                 return;
             }
 
-            data.busy = true;
+            data.is_uploading = true;
             data.progress = 0;
             data.upload_path = "";
             data.filename = "";
             data.message = "Uploading " + file.name + "...";
+
+            progress_bar.style.display = "inline-block";
+            progress_bar.value = 0;
 
             const formData = new FormData();
             formData.append("file", file);
@@ -77,20 +85,21 @@ class HttpUploadWidget(pn.reactive.ReactiveHTML):
 
             xhr.upload.onprogress = function(event) {
                 if (event.lengthComputable) {
-                    data.progress = Math.round((event.loaded / event.total) * 100);
+                    const pct = Math.round((event.loaded / event.total) * 100);
+                    data.progress = pct;
+                    progress_bar.value = pct;
                 }
             };
 
             xhr.onload = function() {
-                data.busy = false;
-
                 if (xhr.status === 200) {
                     const resp = JSON.parse(xhr.responseText);
 
                     if (resp.ok) {
-                        data.upload_path = resp.path;
-                        data.filename = resp.filename;
                         data.progress = 100;
+                        progress_bar.value = 100;
+                        data.filename = resp.filename;
+                        data.upload_path = resp.path;
                         data.message = "";
                     } else {
                         data.message = "Upload failed: " + (resp.error || "unknown error");
@@ -99,12 +108,15 @@ class HttpUploadWidget(pn.reactive.ReactiveHTML):
                     data.message = "Upload failed: HTTP " + xhr.status;
                 }
 
+                data.is_uploading = false;
+                progress_bar.style.display = "none";
                 file_input.value = "";
             };
 
             xhr.onerror = function() {
-                data.busy = false;
+                data.is_uploading = false;
                 data.message = "Upload failed.";
+                progress_bar.style.display = "none";
                 file_input.value = "";
             };
 
