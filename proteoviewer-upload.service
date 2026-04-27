@@ -1,0 +1,15 @@
+[Unit]
+Description=ProteoViewer Upload Server
+After=network.target
+
+[Service]
+Type=simple
+User=pcfuser
+WorkingDirectory=/opt/Proteoviewer
+EnvironmentFile=/opt/Proteoviewer/proteoviewer.env
+ExecStart=/opt/miniforge3/envs/proteoviewer/bin/python /opt/Proteoviewer/upload_server.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
