@@ -36,11 +36,12 @@ class HttpUploadWidget(pn.reactive.ReactiveHTML):
         id="browse_button"
         onclick="${script('choose_file')}"
         style="
-          background:#0d6efd;
+          background:#688fd1;
           color:white;
           border:none;
           border-radius:4px;
           padding:6px 12px;
+          margin-left: 9px;
           cursor:pointer;
           font-size:13px;
           font-weight:500;
@@ -54,7 +55,8 @@ class HttpUploadWidget(pn.reactive.ReactiveHTML):
         value="${progress}"
         max="100"
         class="${progress_class}"
-        style="width:260px;"
+        style="width:260px;margin-left:8px;"
+        margin-top: 6px;
       ></progress>
 
       <span id="error" style="font-size:13px; color:#a33;">${error}</span>
