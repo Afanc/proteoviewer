@@ -185,6 +185,25 @@ def get_volcano_classification_masks(adata, contrast: str, min_nonimp_per_cond: 
 
     return measured, imp1, imp2
 
+def get_nrsc_alignment_mask(adata, contrast: str, min_nrsc_alignment: float = 1.50) -> np.ndarray:
+    """
+    Return a per-feature boolean mask for nrSC alignment thresholding.
+
+    If nrsc_misalignment is not present, fail open (all True), so older files
+    remain fully viewable/exportable.
+    """
+    thr = float(min_nrsc_alignment or 0.0)
+    if ("nrsc_misalignment" not in adata.varm):
+        return np.ones(adata.n_vars, dtype=bool)
+
+    df_align = pd.DataFrame(
+        adata.varm["nrsc_misalignment"],
+        index=adata.var_names,
+        columns=adata.uns["contrast_names"],
+    )
+    vals = pd.to_numeric(df_align[contrast], errors="coerce").to_numpy(dtype=float)
+    return np.isfinite(vals) & (vals <= thr)
+
 def categorize_proteins_by_run_count(df: pd.DataFrame) -> pd.Series:
     """
     Given a DataFrame of shape (samples × proteins), returns a Series
@@ -1184,6 +1203,7 @@ def plot_volcanoes(
     min_nonimp_per_cond: int = 0,
     min_nonimp_ft_per_cond: int = 0,
     min_precursors: int = 1,
+    min_nrsc_alignment: float = 1.50,
     highlight: str = None,
     highlight_group: Optional[Sequence[str]] = None,
     color_by: str = "Significance",
@@ -1346,6 +1366,16 @@ def plot_volcanoes(
         adata, contrast, min_nonimp_per_cond, min_precursors
     )
 
+    # nrSC-alignment filter
+    align_keep = get_nrsc_alignment_mask(
+        adata=adata,
+        contrast=contrast,
+        min_nrsc_alignment=min_nrsc_alignment,
+    )
+    measured_mask &= align_keep
+    imp1_mask     &= align_keep
+    imp2_mask     &= align_keep
+
     # Optional: Flowthrough (covariate) consistency filter
     # Applies ONLY for adjusted + flowthrough volcanoes.
     # In raw phospho volcano mode, this is a no-op by design.
@@ -1454,7 +1484,7 @@ def plot_volcanoes(
         v = v[np.isfinite(v)]
         if v.size == 0:
             vmin, vmax, cmid = 0.0, 1.0, None
-        elif ("LogFC" in color_by) or (color_by == "nrSC"):
+        elif ("LogFC" in color_by) or (color_by == "Norm. rel. SC"):
             vmax = float(np.nanmax(np.abs(v)))
             vmin, vmax, cmid = -vmax, vmax, 0.0
         else:

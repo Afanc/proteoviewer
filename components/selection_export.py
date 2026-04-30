@@ -174,6 +174,10 @@ def build_volcano_selection_df(
     df_p_adj = pd.DataFrame(adata.varm["p_ebayes"], index=adata.var_names, columns=contrasts)
     df_q_adj = pd.DataFrame(adata.varm["q_ebayes"], index=adata.var_names, columns=contrasts)
     df_nrsc = pd.DataFrame(adata.varm["nrsc"], index=adata.var_names, columns=contrasts) if "nrsc" in adata.varm else None
+    df_nrsc_alignment = (
+        pd.DataFrame(adata.varm["nrsc_misalignment"], index=adata.var_names, columns=contrasts)
+        if "nrsc_misalignment" in adata.varm else None
+    )
 
     # Optional: phospho raw statistics (falls back to adjusted for non-covariate runs)
     df_fc_raw = df_p_raw = df_q_raw = None
@@ -285,7 +289,8 @@ def build_volcano_selection_df(
         df[f"QVALUE_{ctag}"] = df_q_adj.loc[df.index, contrast].astype(float).values
         if df_nrsc is not None:
             df[f"NRSC_{ctag}"] = df_nrsc.loc[df.index, contrast].astype(float).values
-
+        if df_nrsc_alignment is not None:
+            df[f"NRSC_ALIGNMENT_{ctag}"] = df_nrsc_alignment.loc[df.index, contrast].astype(float).values
 
     # Optional: phospho flowthrough intensities (covariate matrices)
     if phospho_mode and ("processed_covariate" in adata.layers) and ("raw_covariate" in adata.layers):

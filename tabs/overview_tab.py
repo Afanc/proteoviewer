@@ -128,6 +128,7 @@ def overview_tab(state: SessionState):
     peptidomics_mode = analysis_type in {"peptido", "peptidomics"}
     phospho_mode = analysis_type in {"phospho", "phosphoproteomics"}
     ebayes_method  = analysis_cfg.get("ebayes_method", "limma")
+    batch_cols = analysis_cfg.get("batch_effect_columns", None)
     input_layout  = preproc_cfg.get("input_layout", "")
 
     num_samples = len(adata.obs.index.unique())
@@ -205,6 +206,14 @@ def overview_tab(state: SessionState):
     if extras:
         imp_method = f"{imp_method} ({', '.join(extras)})"
 
+    # format batch info (single line, appended to DE line)
+    batch_txt = ""
+    if batch_cols:
+        if isinstance(batch_cols, (list, tuple)):
+            batch_txt = f" (batch effect columns: {', '.join(map(str, batch_cols))})"
+        else:
+            batch_txt = f" (batch effect column: {batch_cols})"
+
     # build a single Markdown string
     summary_md = textwrap.dedent(f"""
 
@@ -224,7 +233,7 @@ def overview_tab(state: SessionState):
         - **Quantification**: {quant_method}
         - **Normalization**: {norm_methods}
         - **Imputation**: {imp_method}
-        - **Differential expression**: eBayes via {ebayes_method}
+        - **Differential expression**: eBayes via {ebayes_method}{batch_txt}
 
         **Proteoflux Version** {pf_version}
     """).strip()
@@ -337,6 +346,16 @@ def overview_tab(state: SessionState):
         width=80,
         default_label="≥0",
     )
+    nrsc_alignment_sel = pn.widgets.FloatSlider(
+        name="Max nrSC misalign.",
+        start=0.0,
+        end=2.0,
+        step=0.05,
+        value=1.50,
+        width=130,
+        bar_color="blue",
+        visible=("nrsc_misalignment" in state.adata.varm),
+    )
 
     search_input_name = "Search Protein/Gene"
     placeholder_txt="Gene name or UniProt ID"
@@ -412,6 +431,7 @@ def overview_tab(state: SessionState):
         show_imp_cond2=show_imp_cond2,
         min_nonimp_per_cond=pn.bind(_min_meas_value, min_meas_sel),
         min_precursors=pn.bind(_min_prec_value, min_prec_sel),
+        min_nrsc_alignment=nrsc_alignment_sel,
         highlight=pn.bind(_normalize_search_token, search_input),
         highlight_group=group_ids_selected,
         sign_threshold=0.05,
@@ -474,6 +494,7 @@ def overview_tab(state: SessionState):
             contrast=str(contrast_sel.value),
             min_nonimp_per_cond=int(_min_meas_value(min_meas_sel.value)),
             min_consistent_peptides=int(_min_prec_value(min_prec_sel.value)),
+            min_nrsc_alignment=float(nrsc_alignment_sel.value),
             show_measured=bool(show_measured.value),
             show_imp_cond1=bool(show_imp_cond1.value),
             show_imp_cond2=bool(show_imp_cond2.value),
@@ -490,6 +511,7 @@ def overview_tab(state: SessionState):
             (show_imp_cond2, "value"),
             (min_meas_sel, "value"),
             (min_prec_sel, "value"),
+            (nrsc_alignment_sel, "value"),
         ],
     )
 
@@ -982,7 +1004,8 @@ def overview_tab(state: SessionState):
                 min_prec_sel,
                 margin=(-30,0,0,0),
             ),
-            pn.Spacer(width=20),
+            nrsc_alignment_sel,
+            pn.Spacer(width=10),
             make_vr(),
             pn.Spacer(width=20),
             pn.Column(
