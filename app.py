@@ -11,6 +11,7 @@ from tabs.overview_tab_phospho import overview_tab_phospho
 from tabs.preprocessing_tab import preprocessing_tab
 from tabs.analysis_tab import analysis_tab
 
+from utils.http_upload_widget import HttpUploadWidget
 from utils.layout_utils import make_vr, make_hr
 from utils.utils import logger, log_time, logging
 
@@ -560,38 +561,85 @@ def build_app():
 
     # ---- SERVER UI ----
     else:
-        # Use Panel's FileInput and copy to /path.../<session>/ before loading
-        file_in = pn.widgets.FileInput(accept='.h5ad', multiple=False)
+        upload_widget = HttpUploadWidget(
+            upload_url=os.environ.get("PV_UPLOAD_ENDPOINT", "/upload"),
+            sizing_mode="stretch_width",
+        )
 
-        def _on_file_in(event):
-            if not file_in.value:
+        def _on_uploading(event):
+            if event.new:
+                status.object = ""
+
+        upload_widget.param.watch(_on_uploading, "is_uploading")
+
+        def _on_uploaded_path(event):
+            if not event.new:
                 return
+
             from anndata import read_h5ad
             try:
-                status.object = "Uploading…"
-                sid = _session_id()
-                dest_dir = os.path.join(UPROOT, sid)
-                os.makedirs(dest_dir, exist_ok=True)
-                fname = file_in.filename or "upload.h5ad"
-                dest_path = os.path.join(dest_dir, fname)
-                with open(dest_path, "wb") as f:
-                    f.write(file_in.value)
-                status.object = f"Loading…"
-                adata = read_h5ad(dest_path)
+                upload_path = Path(event.new).resolve()
+                fname = upload_widget.filename or upload_path.name
+
+                status.object = f"Loading `{fname}`…"
+                logging.info("Loading uploaded h5ad: %s", upload_path)
+
+                adata = read_h5ad(upload_path)
                 _load(adata, fname)
+
+                # clear widget state (important for large files + cleaner UI)
+                upload_widget.is_uploading = False
+                upload_widget.progress_class = "pv-progress-hidden"
+                upload_widget.upload_path = ""
+
             except Exception as e:
                 import traceback
-                status.object = f"**Upload error:** {e}"
-                print("[server FileInput] EXCEPTION:", e, "\n", traceback.format_exc(), flush=True)
+                status.object = f"**Upload/load error:** {e}"
+                print("[server HTTP upload] EXCEPTION:", e, "\n", traceback.format_exc(), flush=True)
 
-        file_in.param.watch(_on_file_in, 'value')
+        upload_widget.param.watch(_on_uploaded_path, "upload_path")
 
         controls = pn.Column(
             pn.Spacer(height=10),
-            pn.Row(file_in, sizing_mode="stretch_width"),
+            pn.Row(upload_widget, sizing_mode="stretch_width"),
             pn.Row(status, sizing_mode="stretch_width", css_classes=["pv-status"]),
             sizing_mode="stretch_width",
         )
+
+    # ---- SERVER UI ----
+    #else:
+    #    # Use Panel's FileInput and copy to /path.../<session>/ before loading
+    #    file_in = pn.widgets.FileInput(accept='.h5ad', multiple=False)
+
+    #    def _on_file_in(event):
+    #        if not file_in.value:
+    #            return
+    #        from anndata import read_h5ad
+    #        try:
+    #            status.object = "Uploading…"
+    #            sid = _session_id()
+    #            dest_dir = os.path.join(UPROOT, sid)
+    #            os.makedirs(dest_dir, exist_ok=True)
+    #            fname = file_in.filename or "upload.h5ad"
+    #            dest_path = os.path.join(dest_dir, fname)
+    #            with open(dest_path, "wb") as f:
+    #                f.write(file_in.value)
+    #            status.object = f"Loading…"
+    #            adata = read_h5ad(dest_path)
+    #            _load(adata, fname)
+    #        except Exception as e:
+    #            import traceback
+    #            status.object = f"**Upload error:** {e}"
+    #            print("[server FileInput] EXCEPTION:", e, "\n", traceback.format_exc(), flush=True)
+
+    #    file_in.param.watch(_on_file_in, 'value')
+
+    #    controls = pn.Column(
+    #        pn.Spacer(height=10),
+    #        pn.Row(file_in, sizing_mode="stretch_width"),
+    #        pn.Row(status, sizing_mode="stretch_width", css_classes=["pv-status"]),
+    #        sizing_mode="stretch_width",
+    #    )
 
     # Build colored header with version + facility tag
     version = _get_app_version()
@@ -693,4 +741,5 @@ if __name__ == "__main__":
             http_server_kwargs={"max_buffer_size": 2_000 * 1024 * 1024},
             allow_websocket_origin=_default_allow_origins(port),
             num_procs=num_procs,
+            session_token_expiration=3600,
          )

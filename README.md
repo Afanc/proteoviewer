@@ -114,6 +114,37 @@ Edit this file to adjust:
 - Host/port settings
 - Number of workers
 
+## HTTP Upload Support
+
+ProteoViewer includes an optional HTTP-based file upload interface for large datasets.
+
+This is designed for deployments where:
+- users access ProteoViewer remotely
+- direct filesystem access is not available
+- large `.h5ad` files need to be transferred reliably
+
+#### Overview
+
+- Uploads are handled via a dedicated HTTP service (Flask-based), separate from the main ProteoViewer app
+- The service exposes a simple `/upload` endpoint accepting `.h5ad` files
+- Each upload is stored in a unique directory and can then be loaded into the viewer
+- Typically deployed behind a reverse proxy (e.g. Apache or Nginx)
+
+#### Service deployment
+
+A minimal systemd unit file is provided in `proteoviewer-upload.service`.
+
+Example:
+
+```ini
+[Service]
+User=youruser
+WorkingDirectory=/opt/ProteoViewer
+EnvironmentFile=/opt/Proteoviewer/proteoviewer.env
+ExecStart=/opt/conda/envs/proteoviewer/bin/python /opt/ProteoViewer/upload_server.py
+Restart=always
+```
+
 ---
 
 ## Windows executable
