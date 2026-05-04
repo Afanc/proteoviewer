@@ -19,7 +19,7 @@ class HttpUploadWidget(pn.reactive.ReactiveHTML):
         .pv-progress-hidden {
           display: none;
         }
-        .pv-progress-hidden.visible {
+        .pv-progress-visible {
           display: inline-block;
         }
       </style>
@@ -55,8 +55,7 @@ class HttpUploadWidget(pn.reactive.ReactiveHTML):
         value="${progress}"
         max="100"
         class="${progress_class}"
-        style="width:260px;margin-left:8px;"
-        margin-top: 6px;
+        style="width:260px; margin-left:8px; margin-top:6px;"
       ></progress>
 
       <span id="error" style="font-size:13px; color:#a33;">${error}</span>
