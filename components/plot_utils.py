@@ -22,6 +22,34 @@ from functools import lru_cache
 def _abbr(s, head=12, tail=6):
     return s if len(s) <= head+tail+1 else f"{s[:head]}…{s[-tail:]}"
 
+def _label_as_str(x) -> str:
+    """Stable display key for categorical plotting labels."""
+    try:
+        v = float(x)
+        if np.isfinite(v):
+            return f"{v:g}"
+    except Exception:
+        pass
+    return str(x)
+
+def _sort_labels_numeric_aware(labels: Sequence) -> list[str]:
+    """Sort categorical labels numerically when all non-Total labels are numeric."""
+    labels_s = [_label_as_str(x) for x in labels]
+    head = [x for x in labels_s if x == "Total"]
+    rest = [x for x in labels_s if x != "Total"]
+    numeric = []
+    for x in rest:
+        try:
+            numeric.append((float(x), x))
+        except Exception:
+            numeric = []
+            break
+    if numeric and len(numeric) == len(rest):
+        rest = [x for _, x in sorted(numeric, key=lambda t: t[0])]
+    else:
+        rest = sorted(rest)
+    return head + rest
+
 def get_color_map(
     labels: List[str],
     palette: List[str] = None,
@@ -234,7 +262,10 @@ def plot_stacked_proteins_by_category(
     width: int = 1200,
     height: int = 500,
     title: str = "Protein IDs by Sample and Category",
-    sort_by: Literal["condition","sample"] = "sample",   # <-- NEW
+    sort_by: Literal["condition","sample","group"] = "sample",
+    group_key: str = "CONDITION",
+    group_label: str = "Condition",
+
 ) -> go.Figure:
 
     samples = adata.obs.index.tolist()
@@ -257,11 +288,13 @@ def plot_stacked_proteins_by_category(
          for cat in cats},
         index=samples
     )
-    sample_conditions = adata.obs["CONDITION"]
-    unique_conds      = sorted(sample_conditions.unique().tolist())
-    cond_palette      = px.colors.qualitative.Plotly
-    cond_color_map    = get_color_map(unique_conds, px.colors.qualitative.Plotly)
-    edge_colors       = [cond_color_map[sample_conditions[s]] for s in samples]
+    if group_key not in adata.obs.columns:
+        raise KeyError(f"Missing adata.obs[{group_key!r}] required for ID barplot grouping.")
+
+    sample_groups = adata.obs[group_key].astype(str)
+    unique_groups = sorted(sample_groups.unique().tolist())
+    group_color_map = get_color_map(unique_groups, px.colors.qualitative.Plotly)
+
 
     # default fills
     if category_colors is None:
@@ -272,12 +305,13 @@ def plot_stacked_proteins_by_category(
             "unique"  : "red",
         }
 
-    if sort_by == "condition":
+    if sort_by in {"condition", "group"}:
         # group by condition (A,B,C...), then sort samples by name within each
         ordered_samples = []
-        for cond in unique_conds:  # alphabetical condition order
-            group = [s for s in samples if sample_conditions[s] == cond]
-            ordered_samples.extend(sorted(group))
+        for group in unique_groups:
+            group_samples = [s for s in samples if sample_groups[s] == group]
+            ordered_samples.extend(sorted(group_samples))
+
     elif sort_by == "sample":
         ordered_samples = sorted(samples)
     else:
@@ -289,8 +323,8 @@ def plot_stacked_proteins_by_category(
 
     # actual bar traces (no legend entries)
     for cat in cats:
-        for cond in unique_conds:
-            xs = [s for s in ordered_samples if sample_conditions[s] == cond]
+        for group in unique_groups:
+            xs = [s for s in ordered_samples if sample_groups[s] == group]
             if not xs:
                 continue
             ys = pivot.loc[xs, cat].tolist()
@@ -298,13 +332,14 @@ def plot_stacked_proteins_by_category(
                 x=xs,
                 y=ys,
                 marker_color=category_colors[cat],
-                marker_line_color=[cond_color_map[cond]] * len(xs),
+                marker_line_color=[group_color_map[group]] * len(xs),
                 marker_line_width=2,
                 showlegend=False,                    # controlled by dummy legend items below
-                legendgroup=f"COND::{cond}",
-                customdata=np.array(xs, dtype=object),
+                legendgroup=f"GROUP::{group}",
+                customdata=np.c_[np.array(xs, dtype=object), np.full(len(xs), group, dtype=object)],
                 hovertemplate=(f"Category: {cat.capitalize()}<br>"
-                               "Sample: %{customdata}<br>"
+                               "Sample: %{customdata[0]}<br>"
+                               f"{group_label}: %{{customdata[1]}}<br>"
                                "Count: %{y}<extra></extra>"),
             ))
 
@@ -379,20 +414,20 @@ def plot_stacked_proteins_by_category(
         )
 
     # Conditions legend
-    for j, cond in enumerate(unique_conds):
+    for j, group in enumerate(unique_groups):
         fig.add_trace(go.Scatter(
             x=[None], y=[None],
             mode="markers",
-            name=cond,
+            name=group,
             marker=dict(
                 symbol="square",
                 size=12,
                 color="white",
-                line=dict(color=cond_color_map[cond], width=2),
+                line=dict(color=group_color_map[group], width=2),
             ),
             showlegend=True,
-            legendgroup=f"COND::{cond}",            # links to bar+annotation traces
-            legendgrouptitle_text=("Condition" if j == 0 else None),
+            legendgroup=f"GROUP::{group}",
+            legendgrouptitle_text=(group_label if j == 0 else None),
             hoverinfo="skip",
         ))
 
@@ -418,13 +453,14 @@ def plot_stacked_proteins_by_category(
     fig.update_layout(
         meta=dict(
             ordered_samples=ordered_samples,
-            sample2cond={s: str(sample_conditions[s]) for s in ordered_samples},
-            conditions=unique_conds,
+            sample2group={s: str(sample_groups[s]) for s in ordered_samples},
+            group_key=group_key,
+            groups=unique_groups,
         )
     )
     tickvals = ordered_samples  # categorical axis: use the category names
     ticktext = [
-        f"<span style='color:{cond_color_map[sample_conditions[s]]}'>{_abbr(s)}</span>"
+        f"<span style='color:{group_color_map[sample_groups[s]]}'>{_abbr(s)}</span>"
         for s in ordered_samples
     ]
     fig.update_xaxes(
@@ -500,7 +536,8 @@ def compute_metric_by_condition(
         index=adata.obs_names,      # samples
         columns=adata.var_names,    # proteins
     )
-    conditions = adata.obs[cond_key]
+    #conditions = adata.obs[cond_key]
+    conditions = adata.obs[cond_key].map(_label_as_str).reindex(df.index)
 
     # choose the right function (operate on axis=0 for proteins)
     def _cv(x: np.ndarray) -> np.ndarray:
@@ -545,9 +582,15 @@ def compute_metric_by_condition(
     # Global (“Total”)
     out["Total"] = compute_fn(df.values)
 
+    # Per group.  Force string keys so Plotly treats numeric concentrations
+    # as categorical labels instead of positioning them on a linear x-axis.
+    for group in _sort_labels_numeric_aware(conditions.dropna().unique().tolist()):
+        subdf = df.loc[conditions == group]
+        out[group] = compute_fn(subdf.values)
+
     # Per‐condition
-    for cond, subdf in df.groupby(by=conditions, observed=False):
-        out[cond] = compute_fn(subdf.values)
+    #for cond, subdf in df.groupby(by=conditions, observed=False):
+    #    out[cond] = compute_fn(subdf.values)
 
     return out
 
@@ -586,7 +629,9 @@ def plot_violins(
     - data: {label: array_of_values}
     - colors: optional mapping label→color (falls back to Plotly palette)
     """
-    labels = list(data.keys())
+    #labels = list(data.keys())
+    labels = _sort_labels_numeric_aware(data.keys())
+    data = {_label_as_str(k): np.asarray(v) for k, v in data.items()}
 
     # default palette if not provided
     default_colors = px.colors.qualitative.Plotly
@@ -634,7 +679,17 @@ def plot_violins(
         legend_itemclick=False,
         legend_itemdoubleclick=False,
     )
-    fig.update_xaxes(showline=True, linewidth=1, linecolor="black", mirror=True)
+    #fig.update_xaxes(showline=True, linewidth=1, linecolor="black", mirror=True)
+    fig.update_xaxes(
+        type="category",
+        categoryorder="array",
+        categoryarray=labels,
+        showline=True,
+        linewidth=1,
+        linecolor="black",
+        mirror=True,
+    )
+
     fig.update_yaxes(showline=True, linewidth=1, linecolor="black", mirror=True)
     return fig
 
@@ -703,7 +758,7 @@ def plot_pca_2d(
         xaxis=dict(title=f"PC{pc[0]} ({var[pc[0]-1]*100:.1f}% var)"),
         yaxis=dict(title=f"PC{pc[1]} ({var[pc[1]-1]*100:.1f}% var)"),
         legend=dict(
-            title_text=" Condition",
+            title_text=" {color_key}",
             bordercolor="black",
             borderwidth=1,
             x=1.02, y=1,
@@ -720,13 +775,13 @@ def plot_pca_2d(
 
 @log_time("UMAP")
 def plot_umap_2d(
-    adata: AnnData,
-    color_key: str = "CONDITION",
-    colors: dict[str,str] = None,
-    title: str = "UMAP",
-    width: int = 900,
-    height: int = 500,
-    annotate: bool = False,
+        adata: AnnData,
+        color_key: str = "CONDITION",
+        colors: dict[str,str] = None,
+        title: str = "UMAP",
+        width: int = 900,
+        height: int = 500,
+        annotate: bool = False,
 ) -> go.Figure:
     """
     2D UMAP scatter of samples, colored by adata.obs[color_key].
@@ -780,7 +835,7 @@ def plot_umap_2d(
         xaxis=dict(title="UMAP1"),
         yaxis=dict(title="UMAP2"),
         legend=dict(
-            title_text=" Condition",
+            title_text=" {color_key}",
             bordercolor="black",
             borderwidth=1,
             x=1.02, y=1,
@@ -867,7 +922,7 @@ def plot_mds_2d(
         xaxis=dict(title="MDS1"),
         yaxis=dict(title="MDS2"),
         legend=dict(
-            title_text=" Condition",
+            title_text=" {color_key}",
             bordercolor="black",
             borderwidth=1,
             x=1.02, y=1,

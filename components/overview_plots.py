@@ -10,6 +10,14 @@ from components.plot_utils import plot_stacked_proteins_by_category, plot_violin
 
 from utils.utils import logger, log_time
 
+PELSA_LOCAL_STABILITY_COLORSCALE = [
+    [0.00, "#73d055"],  # threshold entry: viridis-like yellow-green
+    [0.35, "#2a788e"],  # blue-teal
+    [0.70, "#355f8d"],  # blue
+    [1.00, "#440154"],  # dark purple
+]
+PELSA_LOCAL_STABILITY_LOW_COLOR = "#9e9e9e"
+
 def _shorten_labels(labels, head=6, tail=4, sep="…"):
     """
     Shorten strings like 'VERY_LONG_SAMPLE_NAME' -> 'VERY_L…ME'.
@@ -20,6 +28,7 @@ def _shorten_labels(labels, head=6, tail=4, sep="…"):
         if len(s) <= head + tail + 1:
             return s
         return f"{s[:head]}{sep}{s[-tail:]}"
+
     # Make labels unique if shortening collides
     out = [_short(s) for s in labels]
     if len(set(out)) < len(out):
@@ -94,13 +103,22 @@ def plot_barplot_proteins_per_sample(
     width: int = 900,
     height: int = 500,
     sort_by: str = "sample",
+    group_key: str = "CONDITION",
+    group_label: str = "Condition",
 ) -> go.Figure:
     """
     Count proteins per sample and draw as a bar plot using the generic helper.
     """
     # call the generic bar helper
 
-    fig = plot_stacked_proteins_by_category(adata, sort_by=sort_by, title=title)
+    fig = plot_stacked_proteins_by_category(
+        adata,
+        sort_by=sort_by,
+        title=title,
+        group_key=group_key,
+        group_label=group_label,
+    )
+
     return fig
 
 @log_time("Plotting violins metrics per sample")
@@ -110,17 +128,17 @@ def plot_violin_cv_rmad_per_condition(
     title: str = "%CV / rMAD per Condition",
     width: int = 900,
     height: int = 800,
+    group_key: str = "CONDITION",
+    group_label: str = "Condition",
 ) -> list[go.Figure]:
 
-    samples = adata.obs.index.tolist()
-    conditions = adata.obs['CONDITION']
+    if group_key not in adata.obs.columns:
+        raise KeyError(f"Missing adata.obs[{group_key!r}] required for metric grouping.")
 
-    # Vectorized + safe computation
-    cv_dict = compute_metric_by_condition(adata, metric="CV")
-    rmad_dict = compute_metric_by_condition(adata, metric="rMAD")
+    cv_dict = compute_metric_by_condition(adata, cond_key=group_key, metric="CV")
+    rmad_dict = compute_metric_by_condition(adata, cond_key=group_key, metric="rMAD")
 
     # draw grouped violins
-
     labels = list(cv_dict.keys())
     color_map = get_color_map(labels,
                               palette=px.colors.qualitative.Plotly,
@@ -130,10 +148,10 @@ def plot_violin_cv_rmad_per_condition(
     cv_fig = plot_violins(
                  data=cv_dict,
                  colors=color_map,
-                 title="%CV per Condition",
+                 title=f"%CV per {group_label}",
                  width=width,
                  height=height,
-                 x_title="Condition",
+                 x_title=group_label,
                  y_title="%CV",
                  showlegend=False,
                  )
@@ -142,10 +160,8 @@ def plot_violin_cv_rmad_per_condition(
     rmad_fig = plot_violins(
                    data=rmad_dict,
                    colors=color_map,
-                   title="%rMAD per Condition",
-                   #width=width,
-                   #height=height,
-                   x_title="Condition",
+                   title=f"%rMAD per {group_label}",
+                   x_title=group_label,
                    y_title="%rMAD",
                    showlegend=False,
                    )
@@ -972,4 +988,654 @@ def _get_site_stats(adata: AnnData, contrast: str, site_id: str, which: str = "a
         qval=float(qval.get(site, np.nan)),
         pval=float(pval.get(site, np.nan)),
     )
+
+def _pelsa_results_df(adata) -> pd.DataFrame:
+    df = adata.uns.get("pelsa", {}).get("curve_results")
+    if df is None:
+        raise KeyError("Missing adata.uns['pelsa']['curve_results']")
+    return df.copy()
+
+
+def _pelsa_points_df(adata) -> pd.DataFrame:
+    df = adata.uns.get("pelsa", {}).get("curve_points")
+    if df is None:
+        raise KeyError("Missing adata.uns['pelsa']['curve_points']")
+    return df.copy()
+
+
+def _pelsa_four_pl(x, pec50, slope, front, back):
+    x = np.asarray(x, dtype=float)
+    return back + (front - back) / (1.0 + np.power(10.0, slope * (x + pec50)))
+
+def _pelsa_x_tick_labels(sub: pd.DataFrame) -> tuple[list[float], list[str]]:
+    tick_df = sub[["concentration", "log10_concentration"]].copy()
+    tick_df["concentration"] = pd.to_numeric(tick_df["concentration"], errors="coerce")
+    tick_df["log10_concentration"] = pd.to_numeric(
+        tick_df["log10_concentration"],
+        errors="coerce",
+    )
+    tick_df = tick_df.dropna().drop_duplicates().sort_values("log10_concentration")
+
+    tickvals = tick_df["log10_concentration"].to_numpy(dtype=float).tolist()
+    ticktext = [
+        "Control" if conc == 0 else f"{conc:g}"
+        for conc in tick_df["concentration"].to_numpy(dtype=float)
+    ]
+    return tickvals, ticktext
+
+
+def plot_pelsa_volcano(
+    state,
+    highlight: str = None,
+    highlight_group=None,
+    sign_threshold: float = 0.05,
+    hide_zero_neglog10_q: bool = False,
+    max_normalized_rmse: float | None = None,
+    max_pec50_ci_width_norm: float | None = None,
+    width: int = 900,
+    height: int = 900,
+) -> go.Figure:
+    ad = state.adata
+    res = _pelsa_results_df(ad)
+
+    x = pd.to_numeric(res["curve_fold_change_log2"], errors="coerce")
+    q = pd.to_numeric(res["curve_q_value"], errors="coerce")
+    y = pd.to_numeric(res["curve_neglog10_q"], errors="coerce")
+
+    nrmse = pd.to_numeric(res.get("normalized_rmse", np.nan), errors="coerce")
+    pec50_ci = pd.to_numeric(res.get("pEC50_ci_width_norm", np.nan), errors="coerce")
+
+    ids = res["peptide_id"].astype(str).to_numpy()
+    genes = (
+        ad.var["GENE_NAMES"].astype(str).reindex(ids).fillna("").to_numpy()
+        if "GENE_NAMES" in ad.var.columns
+        else np.array([""] * len(ids), dtype=object)
+    )
+
+    fit_success = res["fit_success"].astype(bool).to_numpy()
+    finite = fit_success & np.isfinite(x.to_numpy()) & np.isfinite(y.to_numpy())
+    if hide_zero_neglog10_q:
+        finite &= y.to_numpy(dtype=float) != 0.0
+    if max_normalized_rmse is not None:
+        finite &= np.isfinite(nrmse.to_numpy()) & (nrmse.to_numpy() <= float(max_normalized_rmse))
+    if max_pec50_ci_width_norm is not None:
+        finite &= np.isfinite(pec50_ci.to_numpy()) & (pec50_ci.to_numpy() <= float(max_pec50_ci_width_norm))
+
+    sig = q.to_numpy(dtype=float) < float(sign_threshold)
+    color_vals = np.where(sig & (x.to_numpy() > 0), "red", np.where(sig & (x.to_numpy() < 0), "blue", "gray"))
+
+    token = str(highlight or "").strip()
+    is_high = np.zeros(len(ids), dtype=bool)
+    if token:
+        is_high = (ids == token) | (genes == token)
+
+    group = set(map(str, highlight_group or []))
+    in_group = np.array([(pid in group) or (g in group) for pid, g in zip(ids, genes)], dtype=bool)
+
+    opacity = np.ones(len(ids), dtype=float)
+    if is_high.any() and not in_group.any():
+        opacity = np.where(is_high, 1.0, 0.08)
+    elif in_group.any() and not is_high.any():
+        opacity = np.where(in_group, 1.0, 0.05)
+    elif in_group.any() and is_high.any():
+        opacity = np.where(is_high, 1.0, np.where(in_group, 0.2, 0.05))
+
+    size = np.full(len(ids), 6.0, dtype=float)
+    size = np.where(is_high | in_group, 7.5, size)
+
+    fig = go.Figure()
+    mask = finite
+
+    fig.add_trace(go.Scattergl(
+        x=x[mask],
+        y=y[mask],
+        mode="markers",
+        marker=dict(
+            color=color_vals[mask],
+            size=size[mask],
+            opacity=opacity[mask],
+            line=dict(width=0),
+        ),
+        text=ids[mask],
+        customdata=np.c_[
+            ids[mask],
+            genes[mask],
+            res.loc[mask, "rmse"].to_numpy(),
+            res.loc[mask, "normalized_rmse"].to_numpy(),
+            res.loc[mask, "r2"].to_numpy(),
+            res.loc[mask, "pEC50_ci_width_norm"].to_numpy(),
+            res.loc[mask, "pEC50_inside_range"].to_numpy(),
+        ],
+        hovertemplate=(
+            "Peptide: %{customdata[0]}<br>"
+            "Gene: %{customdata[1]}<br>"
+            "Curve range log₂: %{x:.3f}<br>"
+            "-log10(q): %{y:.2f}<br>"
+            "RMSE: %{customdata[2]:.3g}<br>"
+            "nRMSE: %{customdata[3]:.3g}<br>"
+            "R²: %{customdata[4]:.3f}<br>"
+            "pEC50 CI/range: %{customdata[5]:.3g}<br>"
+            "pEC50_inside_range: %{customdata[6]}<extra></extra>"
+        ),
+        name="PELSA curves",
+    ))
+
+    thr_y = -np.log10(sign_threshold)
+
+    xv = x[mask].to_numpy(dtype=float)
+    yv = y[mask].to_numpy(dtype=float)
+    xmin, xmax = (float(np.nanmin(xv)), float(np.nanmax(xv))) if xv.size else (-1.0, 1.0)
+    ymax = float(np.nanmax(yv)) if yv.size else 1.0
+    xpad = max((xmax - xmin) * 0.05, 0.2)
+
+    # sign marker
+    up = int(np.sum(mask & sig & (x.to_numpy(dtype=float) > 0)))
+    down = int(np.sum(mask & sig & (x.to_numpy(dtype=float) < 0)))
+    rest = int(np.sum(mask) - up - down)
+
+    annos = [
+        dict(x=0.02, y=0.98, xref="paper", yref="paper", opacity=0.7,
+             text=f"<b>{down}</b>", bgcolor="blue", font=dict(color="white"), showarrow=False),
+        dict(x=0.500, y=0.98, xref="paper", yref="paper",
+             text=f"<b>{rest}</b>", bgcolor="lightgrey", font=dict(color="black"), showarrow=False),
+        dict(x=0.98, y=0.98, xref="paper", yref="paper", opacity=0.7,
+             text=f"<b>{up}</b>", bgcolor="red", font=dict(color="white"), showarrow=False),
+    ]
+
+    fig.update_layout(
+        title=dict(text="PELSA pseudo-volcano", x=0.5),
+        annotations=annos,
+        height=height,
+        margin=dict(l=60, r=120, t=60, b=60, autoexpand=False),
+        showlegend=False,
+        shapes=[
+            dict(type="line", x0=xmin - xpad, x1=xmax + xpad, y0=thr_y, y1=thr_y,
+                 line=dict(color="black", dash="dash")),
+            dict(type="line", x0=0, x1=0, y0=0, y1=ymax,
+                 line=dict(color="black", dash="dash")),
+        ],
+        xaxis=dict(title="Curve range log₂ ratio to control"),
+        yaxis=dict(title="-log10(curve q-value)"),
+    )
+    return fig
+
+
+def get_pelsa_info(state, peptide_id: str) -> dict:
+    ad = state.adata
+    peptide_id = str(peptide_id)
+    res = _pelsa_results_df(ad).set_index("peptide_id")
+    if peptide_id not in res.index:
+        raise KeyError(f"PELSA peptide not found: {peptide_id}")
+
+    row = res.loc[peptide_id]
+    idx = list(map(str, ad.var_names)).index(peptide_id)
+
+    return {
+        "peptide_id": peptide_id,
+        "index": idx,
+        "gene_names": str(ad.var["GENE_NAMES"].astype(str).iloc[idx]) if "GENE_NAMES" in ad.var.columns else "",
+        "protein": str(ad.var["FASTA_HEADERS"].astype(str).iloc[idx]) if "FASTA_HEADERS" in ad.var.columns else "",
+        "qval": float(row.get("curve_q_value", np.nan)),
+        "pval": float(row.get("curve_p_value", np.nan)),
+        "f_value": float(row.get("curve_f_value", np.nan)),
+        "range_log2": float(row.get("curve_fold_change_log2", np.nan)),
+        "rmse": float(row.get("rmse", np.nan)),
+        "normalized_rmse": float(row.get("normalized_rmse", np.nan)),
+        "r2": float(row.get("r2", np.nan)),
+        "pec50": float(row.get("pec50", np.nan)),
+        "pec50_ci_width_norm": float(row.get("pEC50_ci_width_norm", np.nan)),
+        "pec50_ci_low": float(row.get("pEC50_ci_low", np.nan)),
+        "pec50_ci_high": float(row.get("pEC50_ci_high", np.nan)),
+        "slope": float(row.get("slope", np.nan)),
+        "front": float(row.get("front", np.nan)),
+        "back": float(row.get("back", np.nan)),
+        "pEC50_inside_range": bool(row.get("pEC50_inside_range", False)),
+    }
+
+
+def plot_pelsa_curve(state, peptide_id: str, width: int = 800, height: int = 400) -> go.Figure:
+    ad = state.adata
+    peptide_id = str(peptide_id)
+
+    pts = _pelsa_points_df(ad)
+    sub = pts[pts["peptide_id"].astype(str) == peptide_id].copy()
+
+    res = _pelsa_results_df(ad).set_index("peptide_id")
+    if peptide_id not in res.index or sub.empty:
+        fig = go.Figure()
+        fig.update_layout(template="plotly_white", height=height, title="PELSA curve")
+        return fig
+
+    row = res.loc[peptide_id]
+
+    x_vals = pd.to_numeric(sub["log10_concentration"], errors="coerce").to_numpy(dtype=float)
+    finite_x = np.isfinite(x_vals)
+    if not np.any(finite_x):
+        fig = go.Figure()
+        fig.update_layout(template="plotly_white", height=height, title="PELSA curve")
+        return fig
+
+    x_min = float(np.nanmin(x_vals[finite_x]))
+    x_max = float(np.nanmax(x_vals[finite_x]))
+    x_grid = np.linspace(x_min, x_max, 100)
+
+    y_grid = _pelsa_four_pl(
+        x_grid,
+        float(row["pec50"]),
+        float(row["slope"]),
+        float(row["front"]),
+        float(row["back"]),
+    )
+
+    fig = go.Figure()
+
+    if "replicate" in sub.columns:
+        sub["replicate_group"] = sub["replicate"].astype(str)
+    elif "REPLICATE" in ad.obs.columns:
+        sample_to_rep = ad.obs["REPLICATE"].astype(str).to_dict()
+        sub["replicate_group"] = sub["sample"].map(sample_to_rep).astype(str)
+    else:
+        raise KeyError("Missing replicate information: expected curve_points['replicate'] or adata.obs['REPLICATE'].")
+
+    reps = sorted(sub["replicate_group"].dropna().astype(str).unique().tolist())
+    cmap = get_color_map(reps, palette=px.colors.qualitative.Plotly)
+
+    for rep, g in sub.groupby("replicate_group", sort=False):
+        g = g.copy()
+        g["plot_ratio"] = pd.to_numeric(g["ratio"], errors="coerce")
+        if "log2_ratio" in g.columns:
+            g["plot_log2_ratio"] = pd.to_numeric(g["log2_ratio"], errors="coerce")
+        else:
+            g["plot_log2_ratio"] = np.log2(g["plot_ratio"])
+
+        fig.add_trace(go.Scatter(
+            x=g["log10_concentration"],
+            y=g["plot_log2_ratio"],
+            mode="markers",
+            name=str(rep),
+            marker=dict(size=8, color=cmap.get(str(rep), "gray"), line=dict(width=1, color="black")),
+            customdata=np.c_[g["sample"], g["replicate_group"], g["plot_ratio"]],
+            hovertemplate=(
+                "Sample: %{customdata[0]}<br>"
+                "Replicate: %{customdata[1]}<br>"
+                "log10 conc: %{x:.3f}<br>"
+                "Ratio: %{customdata[2]:.3f}<extra></extra>"
+            ),
+        ))
+
+    fig.add_trace(go.Scatter(
+        x=x_grid,
+        y=y_grid,
+        mode="lines",
+        name="4PL fit",
+        line=dict(color="black", width=2),
+        customdata=np.c_[np.exp2(y_grid)],
+        hovertemplate=(
+            "log10 conc: %{x:.3f}<br>"
+            "Fitted log₂ ratio: %{y:.3f}<br>"
+            "Fitted ratio: %{customdata[0]:.3f}<extra></extra>"
+        ),
+    ))
+
+    fig.add_hline(y=0.0, line_dash="dot", line_color="black")
+
+    tickvals, ticktext = _pelsa_x_tick_labels(sub)
+
+    fig.update_layout(
+        title=dict(text="PELSA titration curve", x=0.5),
+        template="plotly_white",
+        height=height,
+        width=width,
+        margin=dict(l=60, r=40, t=50, b=60),
+        xaxis_title="Concentration",
+        yaxis_title="log₂ ratio to control",
+        legend_title_text="Replicate",
+    )
+    fig.update_xaxes(tickmode="array", tickvals=tickvals, ticktext=ticktext)
+    return fig
+
+
+def _pelsa_parent_protein(adata, peptide_id: str) -> str:
+    if "PARENT_PROTEIN" not in adata.var.columns:
+        return ""
+    try:
+        parent = adata.var.loc[str(peptide_id), "PARENT_PROTEIN"]
+    except KeyError:
+        raise KeyError(f"PELSA peptide not found in adata.var: {peptide_id}")
+    parent = str(parent).strip()
+    if parent.lower() in {"", "nan", "none"}:
+        return ""
+    return parent
+
+
+def get_pelsa_sister_peptides(state, peptide_id: str, sign_threshold: float = 0.05) -> pd.DataFrame:
+    """Return same-parent PELSA peptides with curve metrics for the detail table."""
+    ad = state.adata
+    peptide_id = str(peptide_id)
+    parent = _pelsa_parent_protein(ad, peptide_id)
+    if not parent:
+        return pd.DataFrame(columns=["peptide_id", "range_log2", "qval", "current"])
+
+    res = _pelsa_results_df(ad).set_index("peptide_id")
+    mask = ad.var["PARENT_PROTEIN"].astype(str) == parent
+    siblings = ad.var_names[mask].astype(str).tolist()
+    siblings = [p for p in siblings if p in res.index]
+    if not siblings:
+        return pd.DataFrame(columns=["peptide_id", "range_log2", "qval", "current"])
+
+    out = pd.DataFrame(index=siblings)
+    out["peptide_id"] = siblings
+    out["range_log2"] = pd.to_numeric(res.loc[siblings, "curve_fold_change_log2"], errors="coerce").to_numpy(dtype=float)
+    out["qval"] = pd.to_numeric(res.loc[siblings, "curve_q_value"], errors="coerce").to_numpy(dtype=float)
+    out["current"] = out["peptide_id"].astype(str) == peptide_id
+    out["__abs_range__"] = np.abs(out["range_log2"].to_numpy(dtype=float))
+    out = out.sort_values(["__abs_range__", "qval", "peptide_id"], ascending=[False, True, True], kind="mergesort")
+    return out.drop(columns=["__abs_range__"]).reset_index(drop=True)
+
+
+def _empty_pelsa_profile(height: int, message: str) -> go.Figure:
+    fig = go.Figure()
+    fig.update_layout(
+        template="plotly_white",
+        height=height,
+        margin=dict(l=55, r=20, t=45, b=45),
+        title=dict(text="Local stability profile", x=0.5),
+        xaxis=dict(visible=False),
+        yaxis=dict(visible=False),
+        annotations=[dict(
+            x=0.5,
+            y=0.5,
+            xref="paper",
+            yref="paper",
+            text=message,
+            showarrow=False,
+            font=dict(size=12, color="black"),
+        )],
+    )
+    return fig
+
+def _pelsa_qvalue_significance_score(qvals: pd.Series) -> np.ndarray:
+    """
+    Convert q-values to a finite -log10(q) significance score for plotting.
+
+    q <= 0 is not a valid q-value but can appear after numerical underflow.
+    For display, clamp it to one order of magnitude above the largest finite
+    positive score so it remains visibly high without crashing the color scale.
+    """
+    q = pd.to_numeric(qvals, errors="coerce").to_numpy(dtype=float)
+    score = np.full(q.shape, np.nan, dtype=float)
+
+    positive = np.isfinite(q) & (q > 0)
+    score[positive] = -np.log10(q[positive])
+
+    finite_score = score[np.isfinite(score)]
+    replacement = float(np.nanmax(finite_score) + 1.0) if finite_score.size else 1.0
+    score[np.isfinite(q) & (q <= 0)] = replacement
+    score[~np.isfinite(score)] = 0.0
+
+    return score
+
+
+def _pelsa_local_stability_color_spec(
+    scores: np.ndarray,
+    *,
+    sign_threshold: float,
+    global_cmax: float,
+) -> tuple[list[str], list[list[float | str]], float, float]:
+    """Return per-peptide colors and the matching thresholded global colorscale."""
+    scores = np.asarray(scores, dtype=float)
+    sign_score = -np.log10(float(sign_threshold))
+    cmax = max(float(global_cmax), sign_score)
+
+    if cmax <= sign_score:
+        colorscale = [
+            [0.0, PELSA_LOCAL_STABILITY_LOW_COLOR],
+            [1.0, PELSA_LOCAL_STABILITY_LOW_COLOR],
+        ]
+    else:
+        threshold_pos = float(np.clip(sign_score / cmax, 0.0, 0.98))
+        span = 1.0 - threshold_pos
+
+        # Start fading out of gray slightly before q=0.05.
+        # This makes q values just above 0.05 visually "near-threshold" rather
+        # than indistinguishable from completely non-significant peptides.
+        pre_threshold = min(0.05, threshold_pos * 0.20)
+        gray_end = max(0.0, threshold_pos - pre_threshold)
+
+        entry_pos = min(threshold_pos + span * 0.10, threshold_pos + span * 0.30)
+
+        colorscale = [
+            [0.0, PELSA_LOCAL_STABILITY_LOW_COLOR],
+            [gray_end, PELSA_LOCAL_STABILITY_LOW_COLOR],
+            [threshold_pos, "#8fb86a"],  # gray-green transition at q=0.05
+            [entry_pos, PELSA_LOCAL_STABILITY_COLORSCALE[0][1]],
+            [threshold_pos + span * 0.42, PELSA_LOCAL_STABILITY_COLORSCALE[1][1]],
+            [threshold_pos + span * 0.72, PELSA_LOCAL_STABILITY_COLORSCALE[2][1]],
+            [1.0, PELSA_LOCAL_STABILITY_COLORSCALE[3][1]],
+        ]
+        #colorscale = [
+        #    [0.0, PELSA_LOCAL_STABILITY_LOW_COLOR],
+        #    [threshold_pos, PELSA_LOCAL_STABILITY_LOW_COLOR],
+        #    [min(threshold_pos + 1e-6, 1.0), PELSA_LOCAL_STABILITY_COLORSCALE[0][1]],
+        #    [threshold_pos + span * 0.35, PELSA_LOCAL_STABILITY_COLORSCALE[1][1]],
+        #    [threshold_pos + span * 0.70, PELSA_LOCAL_STABILITY_COLORSCALE[2][1]],
+        #    [1.0, PELSA_LOCAL_STABILITY_COLORSCALE[3][1]],
+        #]
+
+    norm = np.clip(scores / cmax, 0.0, 1.0)
+    colors = px.colors.sample_colorscale(colorscale, norm)
+    return colors, colorscale, 0.0, cmax
+
+def _pelsa_global_significance_cmax(adata, sign_threshold: float) -> float:
+    """Dataset-level -log10(q) max for consistent local-stability coloring."""
+    res = _pelsa_results_df(adata)
+    if "curve_q_value" not in res.columns:
+        raise KeyError("Missing curve_results['curve_q_value'] required for PELSA local-stability colors.")
+
+    scores = _pelsa_qvalue_significance_score(res["curve_q_value"])
+    scores = scores[np.isfinite(scores)]
+    sign_score = -np.log10(float(sign_threshold))
+
+    if scores.size == 0:
+        return sign_score
+    return max(sign_score, float(np.nanmax(scores)))
+
+def plot_pelsa_local_stability_profile(
+    state,
+    peptide_id: str,
+    sign_threshold: float = 0.05,
+    width: int = 430,
+    height: int = 260,
+) -> go.Figure:
+    """
+    Plot same-parent PELSA peptide ranges along the estimated protein length.
+
+    Optional metadata behavior:
+    - If the exported position/length columns are absent, return an empty profile.
+    - If they are present but malformed for the selected parent, raise ValueError.
+    """
+    ad = state.adata
+    peptide_id = str(peptide_id)
+    required = {"PARENT_PROTEIN", "PEPTIDE_START", "PEPTIDE_END", "PROTEIN_LENGTH_ESTIMATE_AA"}
+    missing = sorted(required - set(ad.var.columns))
+    if missing:
+        return _empty_pelsa_profile(height, "Local stability metadata not available")
+
+    parent = _pelsa_parent_protein(ad, peptide_id)
+    if not parent:
+        return _empty_pelsa_profile(height, "Parent protein not available")
+
+    res = _pelsa_results_df(ad).set_index("peptide_id")
+    mask = ad.var["PARENT_PROTEIN"].astype(str) == parent
+    siblings = ad.var.loc[mask].copy()
+    sibling_ids = siblings.index.astype(str).tolist()
+    sibling_ids = [p for p in sibling_ids if p in res.index]
+    if not sibling_ids:
+        return _empty_pelsa_profile(height, "No sister peptide curve results")
+
+    siblings = siblings.loc[sibling_ids].copy()
+    for col in ["PEPTIDE_START", "PEPTIDE_END", "PROTEIN_LENGTH_ESTIMATE_AA"]:
+        siblings[col] = pd.to_numeric(siblings[col], errors="coerce")
+
+    bad = siblings[["PEPTIDE_START", "PEPTIDE_END"]].isna().any(axis=1)
+    bad |= siblings["PEPTIDE_END"] < siblings["PEPTIDE_START"]
+    if bad.any():
+        examples = siblings.index[bad].astype(str).tolist()[:10]
+        raise ValueError(
+            "Invalid PELSA peptide-position metadata for local stability profile. "
+            f"Examples={examples}"
+        )
+
+    length_vals = siblings["PROTEIN_LENGTH_ESTIMATE_AA"].dropna().astype(float)
+    if length_vals.empty:
+        return _empty_pelsa_profile(height, "Estimated protein length not available")
+    protein_len = int(round(float(length_vals.max())))
+    if protein_len <= 0:
+        raise ValueError(f"Invalid PROTEIN_LENGTH_ESTIMATE_AA for parent {parent!r}: {protein_len}")
+
+    plot_df = pd.DataFrame(index=sibling_ids)
+    plot_df["start"] = siblings["PEPTIDE_START"].astype(float).to_numpy()
+    plot_df["end"] = siblings["PEPTIDE_END"].astype(float).to_numpy()
+    plot_df["range_log2"] = pd.to_numeric(res.loc[sibling_ids, "curve_fold_change_log2"], errors="coerce").to_numpy(dtype=float)
+    plot_df["qval"] = pd.to_numeric(res.loc[sibling_ids, "curve_q_value"], errors="coerce").to_numpy(dtype=float)
+    plot_df["gene"] = (
+        ad.var.loc[sibling_ids, "GENE_NAMES"].astype(str).to_numpy()
+        if "GENE_NAMES" in ad.var.columns
+        else np.array([""] * len(sibling_ids), dtype=object)
+    )
+    plot_df["peptide_id"] = sibling_ids
+    plot_df = plot_df[np.isfinite(plot_df["range_log2"].to_numpy(dtype=float))]
+    if plot_df.empty:
+        return _empty_pelsa_profile(height, "No finite local stability values")
+
+    score = _pelsa_qvalue_significance_score(plot_df["qval"])
+    global_cmax = _pelsa_global_significance_cmax(ad, sign_threshold)
+    colors, colorscale, cmin, cmax = _pelsa_local_stability_color_spec(
+        score,
+        sign_threshold=sign_threshold,
+        global_cmax=global_cmax,
+    )
+
+    fig = go.Figure()
+
+    # Invisible marker trace used only to expose a continuous colorbar.
+    tick_max = int(np.ceil(cmax))
+    tickvals = list(range(0, tick_max + 1))
+    ticktext = [str(x) for x in tickvals]
+    if tickvals:
+        ticktext[-1] = f"≥{tickvals[-1]}"
+
+    fig.add_trace(go.Scatter(
+        x=(plot_df["start"].to_numpy(dtype=float) + plot_df["end"].to_numpy(dtype=float)) / 2.0,
+        y=plot_df["range_log2"].to_numpy(dtype=float),
+        mode="markers",
+        marker=dict(
+            size=0.1,
+            opacity=0.0,
+            color=score,
+            colorscale=colorscale,
+            cmin=cmin,
+            cmax=cmax,
+            showscale=True,
+            colorbar=dict(
+                title="-log<sub>10</sub>(q)",
+                len=1.0,
+                thickness=7,
+                ticks="outside",
+                dtick=1,
+                ticklen=10,
+            ),
+        ),
+        hoverinfo="skip",
+        showlegend=False,
+    ))
+
+    current = plot_df["peptide_id"].astype(str).to_numpy() == peptide_id
+    current_ids = set(plot_df.loc[current, "peptide_id"].astype(str))
+
+    yvals = plot_df["range_log2"].to_numpy(dtype=float)
+    ymax = max(1.0, float(np.nanmax(np.abs(yvals))) * 1.15)
+    peptide_halfheight = max(0.025 * ymax, 0.08)
+
+
+    for (_, row), color in zip(plot_df.iterrows(), colors):
+        peptide = str(row["peptide_id"])
+        is_current = peptide in current_ids
+
+        start = float(row["start"])
+        end = float(row["end"])
+        y = float(row["range_log2"])
+        if end <= start:
+            raise ValueError(
+                "Invalid PELSA peptide-position metadata for local stability profile. "
+                f"Peptide={peptide!r}, start={start}, end={end}."
+            )
+
+        q_score = -np.log10(row["qval"]) if row["qval"] > 0 else np.nan
+        customdata = np.array([[
+            peptide,
+            row["gene"],
+            row["qval"],
+            q_score,
+            start,
+            end,
+        ]] * 5, dtype=object)
+
+        hovertemplate = (
+            "Peptide: %{customdata[0]}<br>"
+            "Gene: %{customdata[1]}<br>"
+            "Position: %{customdata[4]:.0f}–%{customdata[5]:.0f}<br>"
+            "Range log₂: " + f"{y:.3f}" + "<br>"
+            "q-value: %{customdata[2]:.3e}<br>"
+            "-log10(q): %{customdata[3]:.2f}<extra></extra>"
+        )
+
+        # Visual peptide block. Hover/click is handled by the transparent
+        # hitbox trace below because Plotly fill-hover does not reliably
+        # preserve customdata/hovertemplate.
+        fig.add_trace(go.Scatter(
+            x=[start, end, end, start, start],
+            y=[
+                y - peptide_halfheight,
+                y - peptide_halfheight,
+                y + peptide_halfheight,
+                y + peptide_halfheight,
+                y - peptide_halfheight,
+            ],
+            mode="lines",
+            fill="toself",
+            fillcolor=color,
+            line=dict(color="red" if is_current else color, width=2 if is_current else 0),
+            hoverinfo="skip",
+            showlegend=False,
+        ))
+
+        # Interaction hitbox. Sample points across the peptide interval so
+        # hover/click works over the full segment instead of only at vertices.
+        n_hit = max(6, int(np.ceil((end - start) / 4.0)))
+        hit_x = np.linspace(start, end, n_hit)
+        hit_y = np.full(n_hit, y, dtype=float)
+        hit_customdata = np.array([customdata[0]] * n_hit, dtype=object)
+
+        fig.add_trace(go.Scatter(
+            x=hit_x,
+            y=hit_y,
+            mode="lines+markers",
+            line=dict(color="rgba(0,0,0,0)", width=14),
+            marker=dict(size=14, color="rgba(0,0,0,0.001)"),
+            customdata=hit_customdata,
+            hovertemplate=hovertemplate,
+            showlegend=False,
+        ))
+
+    title_parent = parent.split(";", 1)[0]
+    fig.update_layout(
+        title=dict(text=f"Local stability profile", x=0.5),
+        height=height,
+        width=width,
+        margin=dict(l=55, r=20, t=50, b=45),
+        xaxis=dict(title="Protein position (aa)", range=[0, max(protein_len, float(plot_df["end"].max()))]),
+        yaxis=dict(title="Range log₂", range=[-ymax, ymax], zeroline=True, zerolinecolor="black"),
+    )
+    return fig
 

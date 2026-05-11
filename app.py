@@ -8,6 +8,7 @@ import re
 from utils.session_state import SessionState
 from tabs.overview_tab import overview_tab
 from tabs.overview_tab_phospho import overview_tab_phospho
+from tabs.overview_tab_pelsa import overview_tab_pelsa
 from tabs.preprocessing_tab import preprocessing_tab
 from tabs.analysis_tab import analysis_tab
 
@@ -38,7 +39,7 @@ DEV = os.getenv("PV_DEV", "0") == "1"
 FROZEN = bool(getattr(sys, "frozen", False))
 DESKTOP = (sys.platform == "win32") and FROZEN
 
-APP_VERSION_DESKTOP = "1.8.8"
+APP_VERSION_DESKTOP = "1.9.0"
 
 def _resource_file(name: str) -> Path:
     """
@@ -403,7 +404,7 @@ def _check_pf_meta(adata):
     if _parse_semver(pfv) < _parse_semver(MIN_PF_VERSION):
         return (False, f"File written by ProteoFlux {pfv} (Required >= {MIN_PF_VERSION}). Please re-export with a newer ProteoFlux.", meta)
 
-    pilot_study_mode = adata.uns["pilot_study_mode"]
+    pilot_study_mode = adata.uns.get("pilot_study_mode", False)
 
     if pilot_study_mode:
         return (False, "This experiment has at least 1 Condition with only 1 Replicate - Pilot Study Mode. Nothing to show in Proteoviewer.", meta)
@@ -433,11 +434,16 @@ def _lazy_tabs(state):
         ("Preprocessing", lambda: preprocessing_tab(state)),
         ("Analysis",      lambda: analysis_tab(state)),
     ]
-    if state.adata.uns['analysis'].get('analysis_type'.lower(), "DIA") == "phospho":
+    if state.adata.uns['analysis'].get('analysis_type', "DIA") == "phospho":
         specs = [
             ("Overview",      lambda: overview_tab_phospho(state)),
             ("Preprocessing-PO4", lambda: preprocessing_tab(state)),
             ("Analysis-PO4", lambda: analysis_tab(state)),
+        ]
+    elif state.adata.uns['analysis'].get('analysis_type', "DIA") == "pelsa":
+        specs = [
+            ("Overview",      lambda: overview_tab_pelsa(state)),
+            ("Preprocessing-PO4", lambda: preprocessing_tab(state)),
         ]
 
     tabs = pn.Tabs(dynamic=True, sizing_mode="stretch_width")
@@ -552,8 +558,9 @@ def build_app():
         # Optional autoload in dev
         try:
             from anndata import read_h5ad
+            adata = read_h5ad("data/proteoflux_results_pelsa.h5ad")
             #adata = read_h5ad("data/proteoflux_results_phospho.h5ad")
-            adata = read_h5ad("data/proteoflux_results.h5ad")
+            #adata = read_h5ad("data/proteoflux_results.h5ad")
             _load(adata, "proteoflux_results.h5ad")
             logging.info("DEV autoload successful.")
         except Exception:

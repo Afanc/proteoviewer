@@ -409,6 +409,7 @@ def make_clustering_pane(
     margin=(0, 0, 0, 20),
     width_style: str = "98vw",
     tooltip_margin=(-475, 0, 0, -80),
+    color_key: str = "CONDITION",
 ) -> pn.Row:
     """
     Shared Clustering pane (PCA + MDS/UMAP) with identical layout/styling.
@@ -444,6 +445,7 @@ def make_clustering_pane(
         return plot_pca_2d(
             adata=adata,
             pc=tuple(pc),
+            color_key=color_key,
             show_ellipses=bool(show_ellipses),
             width=None,
             height=plot_height,
@@ -463,6 +465,7 @@ def make_clustering_pane(
         if "X_mds" in adata.obsm:
             return plot_mds_2d(
                 adata=adata,
+                color_key=color_key,
                 title="MDS",
                 show_ellipses=bool(show_ellipses),
                 width=None,
@@ -471,6 +474,7 @@ def make_clustering_pane(
         else:
             return plot_umap_2d(
                 adata=adata,
+                color_key=color_key,
                 title="UMAP",
                 width=None,
                 height=plot_height,
@@ -494,7 +498,7 @@ def make_clustering_pane(
         Multidimensional Scaling uses
         correlation distances.
         Ellipses show the 95% confidence
-        of each condition in the embedding.
+        of each displayed group in the embedding.
         """,
         margin=0,
         styles={"z-index": "10"},
