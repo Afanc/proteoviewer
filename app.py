@@ -443,7 +443,7 @@ def _lazy_tabs(state):
     elif state.adata.uns['analysis'].get('analysis_type', "DIA") == "pelsa":
         specs = [
             ("Overview",      lambda: overview_tab_pelsa(state)),
-            ("Preprocessing-PO4", lambda: preprocessing_tab(state)),
+            #("Preprocessing-PO4", lambda: preprocessing_tab(state)),
         ]
 
     tabs = pn.Tabs(dynamic=True, sizing_mode="stretch_width")

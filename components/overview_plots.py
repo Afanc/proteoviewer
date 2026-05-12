@@ -1028,10 +1028,9 @@ def plot_pelsa_volcano(
     state,
     highlight: str = None,
     highlight_group=None,
+    color_by: str = "Significance",
     sign_threshold: float = 0.05,
     hide_zero_neglog10_q: bool = False,
-    max_normalized_rmse: float | None = None,
-    max_pec50_ci_width_norm: float | None = None,
     width: int = 900,
     height: int = 900,
 ) -> go.Figure:
@@ -1041,9 +1040,8 @@ def plot_pelsa_volcano(
     x = pd.to_numeric(res["curve_fold_change_log2"], errors="coerce")
     q = pd.to_numeric(res["curve_q_value"], errors="coerce")
     y = pd.to_numeric(res["curve_neglog10_q"], errors="coerce")
-
-    nrmse = pd.to_numeric(res.get("normalized_rmse", np.nan), errors="coerce")
-    pec50_ci = pd.to_numeric(res.get("pEC50_ci_width_norm", np.nan), errors="coerce")
+    pec50 = pd.to_numeric(res.get("pec50", np.nan), errors="coerce")
+    log10_ec50 = -pec50
 
     ids = res["peptide_id"].astype(str).to_numpy()
     genes = (
@@ -1056,13 +1054,23 @@ def plot_pelsa_volcano(
     finite = fit_success & np.isfinite(x.to_numpy()) & np.isfinite(y.to_numpy())
     if hide_zero_neglog10_q:
         finite &= y.to_numpy(dtype=float) != 0.0
-    if max_normalized_rmse is not None:
-        finite &= np.isfinite(nrmse.to_numpy()) & (nrmse.to_numpy() <= float(max_normalized_rmse))
-    if max_pec50_ci_width_norm is not None:
-        finite &= np.isfinite(pec50_ci.to_numpy()) & (pec50_ci.to_numpy() <= float(max_pec50_ci_width_norm))
+
+    mask = finite
 
     sig = q.to_numpy(dtype=float) < float(sign_threshold)
-    color_vals = np.where(sig & (x.to_numpy() > 0), "red", np.where(sig & (x.to_numpy() < 0), "blue", "gray"))
+    color_mode = str(color_by or "Significance")
+    if color_mode == "Significance":
+        color_vals = np.where(sig & (x.to_numpy() > 0), "red", np.where(sig & (x.to_numpy() < 0), "blue", "gray"))
+        marker_color_kwargs = dict(color=color_vals[mask])
+    elif color_mode == "EC₅₀":
+        marker_color_kwargs = dict(
+            color=log10_ec50[mask],
+            colorscale="Viridis",
+            colorbar=dict(title="log<sub>10</sub> EC₅₀"),
+            showscale=True,
+        )
+    else:
+        raise ValueError(f"Unsupported PELSA volcano color mode: {color_mode!r}")
 
     token = str(highlight or "").strip()
     is_high = np.zeros(len(ids), dtype=bool)
@@ -1084,15 +1092,14 @@ def plot_pelsa_volcano(
     size = np.where(is_high | in_group, 7.5, size)
 
     fig = go.Figure()
-    mask = finite
 
     fig.add_trace(go.Scattergl(
         x=x[mask],
         y=y[mask],
         mode="markers",
         marker=dict(
-            color=color_vals[mask],
             size=size[mask],
+            **marker_color_kwargs,
             opacity=opacity[mask],
             line=dict(width=0),
         ),
@@ -1100,24 +1107,16 @@ def plot_pelsa_volcano(
         customdata=np.c_[
             ids[mask],
             genes[mask],
-            res.loc[mask, "rmse"].to_numpy(),
-            res.loc[mask, "normalized_rmse"].to_numpy(),
-            res.loc[mask, "r2"].to_numpy(),
-            res.loc[mask, "pEC50_ci_width_norm"].to_numpy(),
-            res.loc[mask, "pEC50_inside_range"].to_numpy(),
+            log10_ec50[mask].to_numpy(),
         ],
         hovertemplate=(
             "Peptide: %{customdata[0]}<br>"
             "Gene: %{customdata[1]}<br>"
             "Curve range log₂: %{x:.3f}<br>"
             "-log10(q): %{y:.2f}<br>"
-            "RMSE: %{customdata[2]:.3g}<br>"
-            "nRMSE: %{customdata[3]:.3g}<br>"
-            "R²: %{customdata[4]:.3f}<br>"
-            "pEC50 CI/range: %{customdata[5]:.3g}<br>"
-            "pEC50_inside_range: %{customdata[6]}<extra></extra>"
+            "log10 EC₅₀: %{customdata[2]:.3g}<br>"
         ),
-        name="PELSA curves",
+        name="",
     ))
 
     thr_y = -np.log10(sign_threshold)
@@ -1133,7 +1132,7 @@ def plot_pelsa_volcano(
     down = int(np.sum(mask & sig & (x.to_numpy(dtype=float) < 0)))
     rest = int(np.sum(mask) - up - down)
 
-    annos = [
+    annos = [] if color_mode == "EC₅₀" else [
         dict(x=0.02, y=0.98, xref="paper", yref="paper", opacity=0.7,
              text=f"<b>{down}</b>", bgcolor="blue", font=dict(color="white"), showarrow=False),
         dict(x=0.500, y=0.98, xref="paper", yref="paper",
@@ -1167,6 +1166,16 @@ def get_pelsa_info(state, peptide_id: str) -> dict:
     if peptide_id not in res.index:
         raise KeyError(f"PELSA peptide not found: {peptide_id}")
 
+    def _ec50_from_pec50(value) -> float:
+        pec50 = pd.to_numeric(value, errors="coerce")
+        if not np.isfinite(pec50):
+            return float("nan")
+        # Avoid inf from pathological/unconstrained fits.
+        exponent = -float(pec50)
+        if exponent > 308 or exponent < -308:
+            return float("nan")
+        return float(10.0 ** exponent)
+
     row = res.loc[peptide_id]
     idx = list(map(str, ad.var_names)).index(peptide_id)
 
@@ -1175,6 +1184,7 @@ def get_pelsa_info(state, peptide_id: str) -> dict:
         "index": idx,
         "gene_names": str(ad.var["GENE_NAMES"].astype(str).iloc[idx]) if "GENE_NAMES" in ad.var.columns else "",
         "protein": str(ad.var["FASTA_HEADERS"].astype(str).iloc[idx]) if "FASTA_HEADERS" in ad.var.columns else "",
+        "parent_protein": str(ad.var["PARENT_PROTEIN"].astype(str).iloc[idx]) if "PARENT_PROTEIN" in ad.var.columns else "",
         "qval": float(row.get("curve_q_value", np.nan)),
         "pval": float(row.get("curve_p_value", np.nan)),
         "f_value": float(row.get("curve_f_value", np.nan)),
@@ -1183,6 +1193,7 @@ def get_pelsa_info(state, peptide_id: str) -> dict:
         "normalized_rmse": float(row.get("normalized_rmse", np.nan)),
         "r2": float(row.get("r2", np.nan)),
         "pec50": float(row.get("pec50", np.nan)),
+        "ec50": _ec50_from_pec50(row.get("pec50", np.nan)),
         "pec50_ci_width_norm": float(row.get("pEC50_ci_width_norm", np.nan)),
         "pec50_ci_low": float(row.get("pEC50_ci_low", np.nan)),
         "pec50_ci_high": float(row.get("pEC50_ci_high", np.nan)),

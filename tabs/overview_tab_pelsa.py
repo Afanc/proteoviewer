@@ -20,14 +20,16 @@ from components.overview_plots import (
 )
 from components.selection_export import (
     make_volcano_selection_downloader,
-    SelectionExportSpec
+    SelectionExportSpec,
+    build_pelsa_selection_df,
+    extract_feature_ids_from_selected_data,
 )
 from components.plot_utils import plot_pca_2d, plot_umap_2d, plot_mds_2d
 from components.texts import (
     intro_preprocessing_text,
     log_transform_text
 )
-from components.string_links import get_string_link
+from components.string_links import get_string_link, get_string_functional_enrichment
 from tabs.overview_shared import (
     make_id_sort_toggle,
     sort_arg,
@@ -130,6 +132,256 @@ def overview_tab_pelsa(state: SessionState):
             return s.rsplit(" | ", 1)[1].strip()
         return s
 
+    string_species_options = {
+        "Select species": None,
+        "Homo sapiens": 9606,
+        "Mus musculus": 10090,
+        "Arabidopsis thaliana": 3702,
+        "Saccharomyces cerevisiae": 4932,
+        "Drosophila melanogaster": 7227,
+        "Escherichia coli K-12": 511145,
+        "Pseudomonas aeruginosa PAO1": 208964,
+    }
+
+    string_species_sel = pn.widgets.Select(
+        name="Species (for STRING)",
+        options=string_species_options,
+        value=None,
+        width=190,
+    )
+
+    string_selected_feature_ids: list[str] = []
+
+    def _selected_peptides_to_parent_proteins(feature_ids: list[str]) -> list[str]:
+        if not feature_ids:
+            return []
+        if "PARENT_PROTEIN" not in adata.var.columns:
+            raise KeyError(
+                "STRING enrichment requires adata.var['PARENT_PROTEIN'] for PELSA selections. "
+                f"Available columns={list(adata.var.columns)!r}"
+            )
+
+        var_names = set(map(str, adata.var_names))
+        missing = [str(x) for x in feature_ids if str(x) not in var_names]
+        if missing:
+            raise ValueError(
+                "STRING enrichment selection contains peptide ids not found in adata.var_names. "
+                f"Examples={missing[:10]!r}"
+            )
+
+        parents = adata.var.reindex([str(x) for x in feature_ids])["PARENT_PROTEIN"]
+
+        out = []
+        seen = set()
+        for value in parents.astype(str):
+            for token in value.split(";"):
+                protein = token.strip()
+                if not protein or protein.lower() in {"nan", "none"}:
+                    continue
+                if protein not in seen:
+                    seen.add(protein)
+                    out.append(protein)
+        return out
+
+    def _string_category_table(data: list[dict], category: str, title: str):
+        df = pd.DataFrame(data)
+        if df.empty or "category" not in df.columns:
+            return pn.pane.Markdown(
+                f"**{title}**  \nNo enriched terms.",
+                margin=(0, 0, 0, 0),
+            )
+
+        sub = df[df["category"].astype(str) == category].copy()
+        if sub.empty:
+            return pn.pane.Markdown(
+                f"**{title}**  \nNo enriched terms.",
+                margin=(0, 0, 0, 0),
+            )
+
+        required = {"term", "description", "number_of_genes", "number_of_genes_in_background", "p_value", "fdr"}
+        missing = sorted(required - set(sub.columns))
+        if missing:
+            raise ValueError(
+                "STRING enrichment result is missing required fields. "
+                f"Missing={missing}; present={list(sub.columns)!r}"
+            )
+
+        sub["fdr_num"] = pd.to_numeric(sub["fdr"], errors="raise")
+        sub = (
+            sub[sub["fdr_num"] <= 0.05]
+            .sort_values("fdr_num", ascending=True, kind="mergesort")
+            .copy()
+        )
+
+        if sub.empty:
+            return pn.pane.Markdown(
+                f"**{title}**  \nNo significant terms at FDR ≤ 0.05.",
+                margin=(0, 0, 0, 0),
+            )
+
+        disp = pd.DataFrame({
+            "Domain": sub["term"].astype(str).values,
+            "Description": sub["description"].astype(str).values,
+            "Count in network": (
+                pd.to_numeric(sub["number_of_genes"], errors="coerce")
+                .astype("Int64")
+                .astype(str)
+                .values
+            ),
+            "Count in background": (
+                pd.to_numeric(sub["number_of_genes_in_background"], errors="coerce")
+                .astype("Int64")
+                .astype(str)
+                .values
+            ),
+            #"p-value": pd.to_numeric(sub["p_value"], errors="raise").map(lambda x: f"{x:.3e}").values,
+            "FDR": sub["fdr_num"].map(lambda x: f"{x:.3e}").values,
+        })
+
+        row_h, header_h = 30, 30
+        visible_rows = min(max(len(disp), 1), 7)
+        table_h = row_h * visible_rows + header_h
+
+        tbl = pn.widgets.Tabulator(
+            disp,
+            show_index=False,
+            disabled=True,
+            layout="fit_columns",
+            height=190,
+            sizing_mode="stretch_width",
+            pagination=None,
+            selectable=False,
+            sortable=True,
+            widths={
+                "Domain": 110,
+                "Description": 350,
+                "Count in network": 100,
+                "Count in background": 100,
+                "FDR": 90,
+            },
+            configuration={
+                "rowHeight": 30,
+                "columnDefaults": {"editor": False, "headerSort": False},
+            },
+            margin=(-5,8,8,8),
+        )
+        return pn.Card(
+            pn.pane.Markdown(f"**{title}**", styles={"font-size": "15px", "padding": "0"}),
+            tbl,
+            collapsible=False,
+            hide_header=True,
+            sizing_mode="stretch_width",
+            styles={"background": "#f9f9f9", "border-radius": "8px", "padding": "6px"},
+        )
+
+    def _selected_peptide_table(feature_ids: list[str]):
+        if not feature_ids:
+            return pn.Spacer(width=820, height=0)
+
+        required_var_cols = {"PARENT_PROTEIN", "GENE_NAMES"}
+        missing_var_cols = sorted(required_var_cols - set(adata.var.columns))
+        if missing_var_cols:
+            raise KeyError(
+                "Selected PELSA peptide table requires metadata columns in adata.var. "
+                f"Missing={missing_var_cols}; available={list(adata.var.columns)!r}"
+            )
+
+        res = pd.DataFrame(pelsa_uns["curve_results"]).copy()
+        required_res_cols = {
+            "peptide_id",
+            "curve_fold_change_log2",
+            "curve_q_value",
+            "pec50",
+        }
+        missing_res_cols = sorted(required_res_cols - set(res.columns))
+        if missing_res_cols:
+            raise KeyError(
+                "Selected PELSA peptide table requires curve result columns. "
+                f"Missing={missing_res_cols}; available={list(res.columns)!r}"
+            )
+
+        res["peptide_id"] = res["peptide_id"].astype(str)
+        res = res.set_index("peptide_id", drop=False)
+
+        ids = [str(x) for x in feature_ids]
+        var_names = set(map(str, adata.var_names))
+        missing_var = [x for x in ids if x not in var_names]
+        if missing_var:
+            raise ValueError(
+                "Selected PELSA peptide table contains peptide ids missing from adata.var_names. "
+                f"Examples={missing_var[:10]!r}"
+            )
+
+        missing_res = [x for x in ids if x not in set(res.index.astype(str))]
+        if missing_res:
+            raise ValueError(
+                "Selected PELSA peptide table contains peptide ids missing from curve_results. "
+                f"Examples={missing_res[:10]!r}"
+            )
+
+        var = adata.var.reindex(ids)
+        sub = res.loc[ids]
+
+        disp = pd.DataFrame({
+            "Peptide": ids,
+            "Range log₂": pd.to_numeric(
+                sub["curve_fold_change_log2"],
+                errors="raise",
+            ).astype(float).values,
+            "q-value": (
+                pd.to_numeric(sub["curve_q_value"], errors="raise")
+                .map(lambda x: f"{x:.3e}")
+                .values
+            ),
+            "Gene": var["GENE_NAMES"].astype(str).values,
+            "Parent protein": var["PARENT_PROTEIN"].astype(str).values,
+            "pEC50": pd.to_numeric(sub["pec50"], errors="coerce").astype(float).values,
+        })
+
+        row_h, header_h = 30, 30
+        visible_rows = min(max(len(disp), 1), 5)
+        table_h = row_h * visible_rows + header_h
+
+        tbl = pn.widgets.Tabulator(
+            disp,
+            show_index=False,
+            disabled=True,
+            selectable=False,
+            sortable=True,
+            layout="fit_columns",
+            height=table_h,
+            pagination=None,
+            sizing_mode="stretch_width",
+            formatters={
+                "Range log₂": NumberFormatter(format="0.000"),
+                "pEC50": NumberFormatter(format="0.000"),
+            },
+            widths={
+                "Peptide": 200,
+                "Range log₂": 105,
+                "q-value": 95,
+                "Gene": 90,
+                "Parent protein": 180,
+                "pEC50": 80,
+            },
+            configuration={
+                "rowHeight": row_h,
+                "columnHeaderVertAlign": "bottom",
+                "movableColumns": False,
+                "columnDefaults": {"editor": False, "headerSort": True},
+            },
+            margin=(0,8,8,8),
+        )
+
+        return pn.Card(
+            pn.pane.Markdown("**Selected peptides**", styles={"font-size": "15px", "padding": "0"}),
+            tbl,
+            collapsible=False,
+            hide_header=True,
+            sizing_mode="stretch_width",
+            styles={"background": "#f9f9f9", "border-radius": "8px", "padding": "6px"},
+        )
+
     ## Config Pane
     # Texts
     preproc_cfg = adata.uns["preprocessing"]
@@ -138,9 +390,6 @@ def overview_tab_pelsa(state: SessionState):
     normalization  = preproc_cfg.get("normalization", {})
     imputation     = preproc_cfg.get("imputation", {})
     analysis_type  = preproc_cfg.get("analysis_type", "")
-    proteomics_mode = analysis_type in {"dia", "dda", "proteomics"}
-    peptidomics_mode = analysis_type in {"peptido", "peptidomics"}
-    phospho_mode = analysis_type in {"phospho", "phosphoproteomics"}
     ebayes_method  = analysis_cfg.get("ebayes_method", "limma")
     batch_cols = analysis_cfg.get("batch_effect_columns", None)
     input_layout  = preproc_cfg.get("input_layout", "")
@@ -277,11 +526,7 @@ def overview_tab_pelsa(state: SessionState):
     def _pelsa_sort_arg(mode: str) -> str:
         return "group" if mode == "By concentration" else "sample"
 
-    barplot_title = "Protein IDs by Sample and Category"
-    if peptidomics_mode:
-        barplot_title = "Peptide IDs by Sample and Category"
-    if phospho_mode:
-        barplot_title = "Phosphosites by Sample and Category"
+    barplot_title = "Peptide IDs by Sample and Category"
 
     hist_ID_dmap = pn.bind(
         plot_barplot_proteins_per_sample,
@@ -341,54 +586,11 @@ def overview_tab_pelsa(state: SessionState):
     show_imp_cond2 = pn.widgets.Checkbox(name=f"", value=True)
 
     # Color selector
-    color_options = ["Significance"]
-    if "nrsc" in state.adata.varm:
-        color_options.append("Norm. rel. SC")
-    color_options.append("Avg Intensity")
-    if "ibaq" in state.adata.layers:
-        color_options.append("Avg IBAQ")
-
-
     color_by = pn.widgets.Select(
         name="Color by",
-        options=color_options,
-        value=color_options[0],
+        options=["Significance", "EC₅₀"],
+        value="Significance",
         width=150,
-    )
-
-    #make_toggle_label_updater(
-    #    contrast_sel=contrast_sel,
-    #    show_imp_cond1=show_imp_cond1,
-    #    show_imp_cond2=show_imp_cond2,
-    #)
-
-    #min_meas_sel, _min_meas_value = make_min_meas_select(
-    #    adata=adata,
-    #    contrast_sel=contrast_sel,
-    #    allow_zero=False,
-    #    name="Min / condition",
-    #    width=80,
-    #    default_value_label=None,  # preserve original: ≥min(reps)
-    #)
-
-    # Min numb. precursors options
-    max_prec_options = 6 if proteomics_mode else 4
-    min_prec_title = "pep" if proteomics_mode else "prec"
-    min_prec_sel, _min_prec_value = make_min_precursor_select(
-        max_prec_options=max_prec_options,
-        title_token=min_prec_title,
-        width=80,
-        default_label="≥0",
-    )
-    nrsc_alignment_sel = pn.widgets.FloatSlider(
-        name="Max nrSC misalign.",
-        start=0.0,
-        end=2.0,
-        step=0.05,
-        value=1.50,
-        width=130,
-        bar_color="blue",
-        visible=("nrsc_misalignment" in state.adata.varm),
     )
 
     curve_results = pd.DataFrame(pelsa_uns["curve_results"])
@@ -402,38 +604,14 @@ def overview_tab_pelsa(state: SessionState):
             return default
         return max(default, float(vals.quantile(0.99)))
 
-    #max_nrmse_sel = pn.widgets.FloatSlider(
-    #    name="Max nRMSE",
-    #    start=0.0,
-    #    end=_slider_end("normalized_rmse", 2.0),
-    #    step=0.05,
-    #    value=_slider_end("normalized_rmse", 2.0),
-    #    width=130,
-    #    bar_color="gray",
-    #)
-
-    #max_pec50_ci_sel = pn.widgets.FloatSlider(
-    #    name="Max pEC50 CI/range",
-    #    start=0.0,
-    #    end=_slider_end("pEC50_ci_width_norm", 3.0),
-    #    step=0.05,
-    #    value=_slider_end("pEC50_ci_width_norm", 3.0),
-    #    width=150,
-    #    bar_color="gray",
-    #)
     hide_zero_q_sel = pn.widgets.Checkbox(
-        name="Hide -log10(q)=0",
+        name="Hide Flat Curves (qval=1)",
         value=True,
     )
 
-    search_input_name = "Search Protein/Gene"
-    placeholder_txt="Gene name or UniProt ID"
+    search_input_name = "Search Peptide/Gene"
+    placeholder_txt="Gene or peptide"
     options_list = _build_search_options(state.adata)
-    #options_list=list(state.adata.var["GENE_NAMES"]) + list(state.adata.var_names)
-    if peptidomics_mode:
-        search_input_name = "Search Peptide"
-        placeholder_txt = "Peptide Sequence"
-        options_list=list(state.adata.var_names)
 
     search_input = pn.widgets.AutocompleteInput(
         name=search_input_name,
@@ -495,10 +673,9 @@ def overview_tab_pelsa(state: SessionState):
         state=state,
         highlight=pn.bind(_normalize_search_token, search_input),
         highlight_group=group_ids_selected,
+        color_by=color_by,
         sign_threshold=0.05,
         hide_zero_neglog10_q=hide_zero_q_sel,
-        #max_normalized_rmse=max_nrmse_sel,
-        #max_pec50_ci_width_norm=max_pec50_ci_sel,
         width=None,
         height=900,
     )
@@ -532,14 +709,123 @@ def overview_tab_pelsa(state: SessionState):
     # selection download
     download_selection, _on_volcano_selected_data, _on_volcano_click_data, _on_cohort_ids = make_volcano_selection_downloader(
         state=state,
-        contrast_getter=lambda: str(contrast_sel.value),
+        contrast_getter= lambda: "pelsa_curve_fit",
         spec=SelectionExportSpec(
-            filename="proteoflux_selection.csv",
+            filename="proteoflux_pelsa_selection.csv",
             label="Download selection",
+            uniprot_var_col="PARENT_PROTEIN",
+            id_col_name="PEPTIDE"
         ),
+        selection_df_builder=build_pelsa_selection_df,
     )
-    volcano_plot.param.watch(lambda e: _on_volcano_selected_data(e.new), "selected_data")
+
+    string_enrichment_holder = pn.Column(
+        pn.Spacer(height=0),
+        width=840,
+        margin=(0, 0, 0, 0),
+    )
+
+    def _render_string_enrichment():
+        if not string_selected_feature_ids:
+            return pn.Spacer(width=840, height=320)
+
+        species = string_species_sel.value
+        if species is None:
+            return pn.pane.Markdown(
+                "**STRING enrichment**  \nSelect a species to run enrichment on the current box/lasso selection.",
+                styles={"background": "#f9f9f9", "padding": "10px", "border-radius": "8px"},
+                width=820,
+                height=120,
+                margin=(0,0,0,0),
+            )
+
+        proteins = _selected_peptides_to_parent_proteins(string_selected_feature_ids)
+        if len(proteins) < 2:
+            return pn.pane.Markdown(
+                "**STRING enrichment**  \nSelect peptides from at least two parent proteins. "
+                "STRING expands single-protein queries, so single-protein enrichment is not shown here.",
+                styles={"background": "#f9f9f9", "padding": "10px", "border-radius": "8px"},
+                sizing_mode="stretch_width",
+                width=820,
+                height=120,
+                margin=(0,0,0,0),
+            )
+
+        data = get_string_functional_enrichment(tuple(sorted(proteins)), int(species))
+        if not data:
+            return pn.pane.Markdown(
+                f"**STRING enrichment**  \nNo enriched terms returned for {len(proteins)} parent proteins.",
+                styles={"background": "#f9f9f9", "padding": "10px", "border-radius": "8px"},
+                sizing_mode="stretch_width",
+                width=820,
+                height=120,
+                margin=(0,0,0,0),
+            )
+
+        return pn.Card(
+            pn.pane.Markdown(
+                f"### STRING GO enrichment  | {len(string_selected_feature_ids)} peptides → {len(proteins)} parent proteins",
+                margin=(0, 0, 5, 0),
+            ),
+            _selected_peptide_table(string_selected_feature_ids),
+            pn.Spacer(height=10),
+            _string_category_table(data, "Process", "GO Biological Process"),
+            pn.Spacer(height=10),
+            _string_category_table(data, "Function", "GO Molecular Function"),
+            pn.Spacer(height=10),
+            _string_category_table(data, "Component", "GO Cellular Component"),
+            collapsible=False,
+            hide_header=True,
+            width=820,
+            styles={
+                "background": "#f9f9f9",
+                "border-radius": "8px",
+                "box-shadow": "3px 3px 5px #bcbcbc",
+                "padding": "10px",
+            },
+        )
+
+    def _update_string_enrichment(_=None) -> None:
+        string_enrichment_holder.loading = True
+        try:
+            try:
+                string_enrichment_holder[:] = [_render_string_enrichment()]
+            except Exception as exc:
+                string_enrichment_holder[:] = [pn.pane.Markdown(
+                    f"**STRING enrichment failed**  \n`{exc}`",
+                    styles={"background": "#fff3f3", "padding": "10px", "border-radius": "8px"},
+                    sizing_mode="stretch_width",
+                )]
+        finally:
+            string_enrichment_holder.loading = False
+        _sync_detail_mode()
+
+    def _on_pelsa_selected_data(event) -> None:
+        selected_data = event.new
+        _on_volcano_selected_data(selected_data)
+
+        if selected_data is None or selected_data == {}:
+            string_selected_feature_ids.clear()
+            _update_string_enrichment()
+            _sync_detail_mode()
+            return
+        if "points" in selected_data and not selected_data["points"]:
+            if selected_data.get("selector", "__missing__") is None:
+                return
+            string_selected_feature_ids.clear()
+            _update_string_enrichment()
+            _sync_detail_mode()
+            return
+
+        string_selected_feature_ids.clear()
+        string_selected_feature_ids.extend(extract_feature_ids_from_selected_data(selected_data))
+        _update_string_enrichment()
+        _sync_detail_mode()
+
+    volcano_plot.param.watch(_on_pelsa_selected_data, "selected_data")
+
     volcano_plot.param.watch(lambda e: _on_volcano_click_data(e.new), "click_data")
+    string_species_sel.param.watch(_update_string_enrichment, "value")
 
     # Cohort changes must update the export state immediately (priority: click > cohort > lasso).
     wire_cohort_export_updates(
@@ -551,63 +837,6 @@ def overview_tab_pelsa(state: SessionState):
         clear_btn=clear_all,
         search_field_sel=search_field_sel,
     )
-
-    # Cohort Violin View
-    #def _cohort_violin(ids, contrast, sm, s1, s2, min_nonimp_per_cond, min_consistent_peptides):
-    #    if not ids:
-    #        return pn.Spacer(height=0)  # collapses cleanly when no cohort
-    #    fig = plot_group_violin_for_volcano(
-    #        state=state,
-    #        contrast=contrast,
-    #        min_nonimp_per_cond=min_nonimp_per_cond,
-    #        min_consistent_peptides=min_consistent_peptides,
-    #        highlight_group=ids,
-    #        show_measured=sm,
-    #        show_imp_cond1=s1,
-    #        show_imp_cond2=s2,
-    #        width=1200,
-    #        height=100,
-    #    )
-    #    return pn.pane.Plotly(
-    #        fig,
-    #        height=150,
-    #        margin=(-10, 0, 10, 20),
-    #        sizing_mode="stretch_width",
-    #        config={'responsive': True},
-    #        styles={
-    #            'border-radius':  '8px',
-    #            'box-shadow':     '3px 3px 5px #bcbcbc',
-    #        }
-    #    )
-
-    ## Bind reactivity via pn.bind (don’t pass bind objects into @depends)
-    #cohort_violin_view = pn.bind(
-    #    _cohort_violin,
-    #    group_ids_selected,
-    #    contrast_sel,
-    #    show_measured,
-    #    show_imp_cond1,
-    #    show_imp_cond2,
-    #    min_nonimp_per_cond=pn.bind(_min_meas_value, min_meas_sel),
-    #    min_consistent_peptides=pn.bind(_min_prec_value, min_prec_sel),
-    #)
-
-    ## bind a detail‐plot function to the same contrast & search_input
-    layers = ["Final", "Log-only", "Raw", "Spectral Counts"]
-
-    layers_sel = pn.widgets.Select(
-        name="Protein Data View",
-        options=layers,
-        value=layers[0],
-        width=130,
-        margin=(20, 0, 0, 20),
-    )
-
-    def _toggle_layers_visibility(event):
-        layers_sel.visible = bool(event.new)
-
-    search_input.param.watch(_toggle_layers_visibility, "value")
-    layers_sel.visible = False
 
     @lru_cache(maxsize=4096)
     def _cached_string_link(uniprot_id: str) -> str:
@@ -625,38 +854,101 @@ def overview_tab_pelsa(state: SessionState):
         key = _normalize_search_token(protein)
         info = get_pelsa_info(state, key)
 
+        def _first_token(x):
+            s = str(x or "").strip()
+            return s.split(";", 1)[0].strip() if ";" in s else s
+
         Number = pn.indicators.Number
         metrics_row_items = [
             Number(name="q-value", value=info["qval"], format="{value:.3e}", default_color="red", font_size="12pt", styles={"flex": "1"}),
             Number(name="Range log₂", value=info["range_log2"], format="{value:.3f}", default_color="red", font_size="14pt", styles={"flex": "1"}),
-            #Number(name="RMSE", value=info["rmse"], format="{value:.3f}", default_color="dimgray", font_size="14pt", styles={"flex": "1"}),
-            #Number(name="nRMSE", value=info["normalized_rmse"], format="{value:.3f}", default_color="dimgray", font_size="14pt", styles={"flex": "1"}),
-            #Number(name="RMSE log₂", value=info["rmse"], format="{value:.3f}", default_color="dimgray", font_size="14pt", styles={"flex": "1"}),
-            #Number(name="nRMSE log₂", value=info["normalized_rmse"], format="{value:.3f}", default_color="dimgray", font_size="14pt", styles={"flex": "1"}),
-            Number(name="R²", value=info["r2"], format="{value:.3f}", default_color="dimgray", font_size="14pt", styles={"flex": "1"}),
-            #Number(name="pEC50", value=info["pec50"], format="{value:.3f}", default_color="dimgray", font_size="14pt", styles={"flex": "1"}),
-            #Number(name="pEC50 CI/range", value=info["pec50_ci_width_norm"], format="{value:.3f}", default_color="dimgray", font_size="12pt", styles={"flex": "1"}),
+            Number(name="EC₅₀", value=info["ec50"], format="{value:.3f}", default_color="orange", font_size="14pt", styles={"flex": "1"}),
         ]
 
         header = pn.Row(
-            pn.pane.Markdown(f"**Peptide**: {info['peptide_id']}", styles={"font-size": "16px"}),
+            pn.pane.HTML(
+                f"""
+                <style>
+                .pelsa-peptide-scroll {{
+                    scrollbar-width: none;      /* Firefox */
+                    -ms-overflow-style: none;   /* old Edge/IE */
+                }}
+                .pelsa-peptide-scroll::-webkit-scrollbar {{
+                    display: none;
+                }}
+                </style>
+                <div class="pelsa-peptide-scroll" style="
+                    font-size: 16px;
+                    text-align: left;
+                    white-space: nowrap;
+                    overflow-x: auto;
+                    overflow-y: hidden;
+                    scrollbar-width: thin;
+                    max-width: 100%;
+                    width: 100%;
+                    padding: 4px 6px 1px 6px;
+                    box-sizing: border-box;
+                    line-height: 18px;
+                ">
+                    <b>Peptide:</b>&nbsp;{info['peptide_id']}
+                </div>
+                """,
+                sizing_mode="stretch_width",
+                styles={
+                    "min-width": "0",
+                    "width": "100%",
+                },
+            ),
             sizing_mode="stretch_width",
             height=50,
             styles={
                 "display": "flex",
+                "align-items": "center",
                 "background": "#f9f9f9",
                 "padding": "0px",
                 "border-bottom": "1px solid #ddd",
             },
         )
 
+        parent_uniprot = _first_token(info.get("parent_protein", ""))
+        if parent_uniprot.lower() in {"", "nan", "none"}:
+            parent_uniprot = ""
+
         footer_left = pn.pane.HTML(
             "<span style='font-size: 12px;'>"
-            f"Gene: <b>{info['gene_names']}</b>"
-            f" &nbsp;|&nbsp; p: <b>{info['pval']:.3e}</b>"
-            #f" &nbsp;|&nbsp; pEC50 95% CI: <b>{info['pec50_ci_low']:.3f}–{info['pec50_ci_high']:.3f}</b>"
-            #f" &nbsp;|&nbsp; pEC50 in range: <b>{info['pEC50_inside_range']}</b>"
+            f"Gene(s): <b>{info['gene_names']}</b>"
+            f" &nbsp;|&nbsp; UniProt: <b>{parent_uniprot}</b>"
+            f" &nbsp;|&nbsp; Peptide index: <b>{int(info['index']) + 1}</b>"
             "</span>"
+        )
+
+        string_link_for_footer = _cached_string_link(parent_uniprot) if parent_uniprot else ""
+        footer_right = pn.pane.HTML(
+            "" if not parent_uniprot else
+            (
+                f"<span style='font-size: 12px;'>"
+                f"🔗 <a href='https://www.uniprot.org/uniprotkb/{parent_uniprot}/entry' "
+                f"target='_blank' rel='noopener'>UniProt Entry</a>"
+                + (
+                    f" &nbsp;|&nbsp; "
+                    f"<a href='{string_link_for_footer}' target='_blank' rel='noopener'>STRING Entry</a>"
+                    if string_link_for_footer else
+                    ""
+                )
+                + "</span>"
+            )
+        )
+
+        footer_links = pn.Row(
+            footer_left,
+            pn.Spacer(),
+            footer_right,
+            sizing_mode="stretch_width",
+            styles={
+                "justify-content": "space-between",
+                "padding": "2px 8px 4px 0px",
+                "margin-top": "-6px",
+            },
         )
 
         hr = pn.Spacer(height=1, sizing_mode="stretch_width", styles={"background": "#ccc", "margin": "6px 0"})
@@ -665,7 +957,7 @@ def overview_tab_pelsa(state: SessionState):
             header,
             pn.Row(*metrics_row_items, sizing_mode="stretch_width"),
             hr,
-            footer_left,
+            footer_links,
             width=800,
             styles={
                 "background": "#f9f9f9",
@@ -691,8 +983,8 @@ def overview_tab_pelsa(state: SessionState):
         return pn.pane.Plotly(
             fig,
             width=800,
-            height=350,
-            margin=(-30, 0, 0, 0),
+            height=300,
+            margin=(0, 0, 0, 0),
             styles={
                 "border-radius": "8px",
                 "box-shadow": "3px 3px 5px #bcbcbc",
@@ -702,16 +994,22 @@ def overview_tab_pelsa(state: SessionState):
     info_holder = pn.Column()
     bar_holder  = pn.Column()
     pep_holder  = pn.Column()
+    table_holder  = pn.Column()
+    detail_mode_holder = pn.Column(width=840)
+
+    peptide_detail_panel = pn.Column(
+        info_holder,
+        pn.Spacer(height=20),
+        table_holder,
+        pn.Spacer(height=20),
+        pep_holder,
+        pn.Spacer(height=20),
+        bar_holder,
+        width=840,
+    )
 
     detail_panel = pn.Row(
-        pn.Column(
-            info_holder,
-            pn.Spacer(height=50),
-            bar_holder,
-            pn.Spacer(height=20),
-            pep_holder,
-            width=840,
-        ),
+        detail_mode_holder,
         margin=(0, 0, 0, 0),
         styles={
             "margin-left": "auto",
@@ -720,12 +1018,26 @@ def overview_tab_pelsa(state: SessionState):
 
     bokeh_doc = pn.state.curdoc  # for next-tick scheduling
 
+    def _sync_detail_mode() -> None:
+        """
+        Right-pane priority:
+        1. clicked/searched peptide detail
+        2. box/lasso STRING enrichment
+        3. empty spacer
+        """
+        if str(search_input.value or "").strip():
+            detail_mode_holder[:] = [peptide_detail_panel]
+        elif string_selected_feature_ids:
+            detail_mode_holder[:] = [string_enrichment_holder]
+        else:
+            detail_mode_holder[:] = [pn.Spacer(width=840, height=320)]
+
     def _current_uniprot_id():
         token = search_input.value
         if not token:
             return None
         key = _normalize_search_token(token)
-        info = get_protein_info(state, contrast_sel.value, key, layers_sel)
+        info = get_protein_info(state, contrast_sel.value, key)
         return info["uniprot_id"]
 
     def _render_info():
@@ -753,8 +1065,21 @@ def overview_tab_pelsa(state: SessionState):
             .map(lambda x: f"{x:.3e}" if np.isfinite(x) else "nan")
         )
 
+        sig = pd.to_numeric(disp["qval"], errors="coerce") < 0.05
+        ranges = pd.to_numeric(disp["range_log2"], errors="coerce")
+        colors = np.where(
+            (ranges > 0) & sig,
+            "red",
+            np.where((ranges < 0) & sig, "blue", "gray"),
+        )
+        disp["Peptide_html"] = [
+            f"<span style='color:{color}'>{peptide}</span>"
+            for color, peptide in zip(colors, disp["Peptide"])
+        ]
+
         styled = (
-            disp[["Peptide", "Range log₂", "q-value", "peptide_id", "current"]]
+            disp[["Peptide_html", "Range log₂", "q-value", "peptide_id", "current"]]
+            .rename(columns={"Peptide_html": "Peptide"})
             .style
             .apply(
                 lambda row: ["background-color: rgba(255,235,59,0.35)"] * len(row)
@@ -764,14 +1089,17 @@ def overview_tab_pelsa(state: SessionState):
             .format({"Range log₂": "{:.3f}"})
         )
 
+        sibling_ids = disp["peptide_id"].astype(str).tolist()
+
         row_h, header_h = 32, 30
         nrows = len(disp)
-        visible = max(min(int(nrows), 3), 1)
-        table_h = row_h * (3 if nrows > 3 else visible) + header_h
+        visible = max(min(int(nrows), 4), 1)
+        table_h = row_h * (4 if nrows > 4 else visible) + header_h
 
         tbl = pn.widgets.Tabulator(
             styled,
             formatters={
+                "Peptide": {"type": "html"},
                 "Range log₂": NumberFormatter(format="0.000"),
             },
             hidden_columns=["peptide_id", "current"],
@@ -780,15 +1108,16 @@ def overview_tab_pelsa(state: SessionState):
             layout="fit_columns",
             disabled=True,
             height=table_h,
-            width=780,
-            widths={"Peptide": 190, "Range log₂": 90, "q-value": 90},
+            pagination=None,
+            width=380,
+            widths={"Peptide": 180, "Range log₂": 90, "q-value": 90},
             configuration={
                 "rowHeight": row_h,
                 "columnHeaderVertAlign": "bottom",
                 "movableColumns": False,
                 "columnDefaults": {"editor": False, "headerSort": False},
             },
-            margin=(8, 8, 8, 8),
+            margin=(-5, 8, 8, 8),
         )
 
         def _on_select(event):
@@ -799,15 +1128,41 @@ def overview_tab_pelsa(state: SessionState):
 
         tbl.param.watch(_on_select, "selection")
 
-        header = pn.pane.Markdown(
-            "**Sister peptides**",
-            styles={"font-size": "16px", "padding": "0", "line-height": "0px"},
+        def _adjacent_peptides_csv() -> bytes:
+            if not sibling_ids:
+                raise ValueError("No adjacent PELSA peptides to export.")
+            df_export = build_pelsa_selection_df(
+                state=state,
+                contrast="pelsa_curve_fit",
+                feature_ids=sibling_ids,
+                uniprot_var_col="PARENT_PROTEIN",
+                id_col_name="PEPTIDE",
+            )
+            return io.BytesIO(df_export.to_csv(index=False).encode("utf-8"))
+
+        download_adjacent = pn.widgets.FileDownload(
+            label="Download",
+            callback=_adjacent_peptides_csv,
+            filename="proteoflux_adjacent_peptides.csv",
+            button_type="success",
+            visible=True,
+            margin=(5, 10, 0, 0),
+        )
+
+        header = pn.Row(
+            pn.pane.Markdown(
+                "**Adjacent peptides**",
+                styles={"font-size": "16px", "padding": "0", "line-height": "0px"},
+            ),
+            pn.Spacer(sizing_mode="stretch_width"),
+            download_adjacent,
+            sizing_mode="stretch_width",
         )
         return pn.Card(
             header,
             make_hr(),
             tbl,
-            width=800,
+            width=400,
             collapsible=False,
             hide_header=True,
             styles={
@@ -851,31 +1206,32 @@ def overview_tab_pelsa(state: SessionState):
         pane.param.watch(_on_profile_click, "click_data")
         return pane
 
-    def _render_pep():
+    def _render_table():
         peptide = search_input.value
         if not peptide:
-            return pn.Spacer(width=800, height=320)
+            return pn.Spacer(width=380, height=320)
 
-        #return pn.Row(
-        #    _render_sister_peptide_table(peptide),
-        #    pn.Spacer(width=20),
-        #    _render_local_stability_profile(peptide),
-        #    width=820,
-        #    margin=(0, 0, 0, 0),
-        #)
         return pn.Column(
             _render_sister_peptide_table(peptide),
-            pn.Spacer(height=20),
-            _render_local_stability_profile(peptide),
-            width=820,
+            width=320,
             margin=(0, 0, 0, 0),
         )
 
-        return pn.Spacer(width=800, height=320)
+    def _render_pep():
+        peptide = search_input.value
+        if not peptide:
+            return pn.Spacer(width=380, height=320)
+
+        return pn.Column(
+            _render_local_stability_profile(peptide),
+            width=320,
+            margin=(0, 0, 0, 0),
+        )
 
     def _update_info(_=None):
         # No spinner here; it's cheap and we don't want a loader on empty states
         info_holder[:] = [_render_info()]
+        _sync_detail_mode()
 
     def _update_bar(_=None):
         protein = search_input.value
@@ -890,31 +1246,51 @@ def overview_tab_pelsa(state: SessionState):
             bar_holder[:] = [_render_bar()]
         finally:
             bar_holder.loading = False
+        _sync_detail_mode()
+
+    def _update_table(_=None):
+        if not search_input.value:
+            table_holder.loading = False
+            table_holder[:] = [pn.Spacer(width=400, height=320)]
+
+            return
+        table_holder.loading = True
+        try:
+            table_holder[:] = [_render_table()]
+        finally:
+            table_holder.loading = False
+        _sync_detail_mode()
 
     def _update_pep(_=None):
         if not search_input.value:
             pep_holder.loading = False
-            pep_holder[:] = [pn.Spacer(width=800, height=320)]
+            pep_holder[:] = [pn.Spacer(width=400, height=320)]
+
             return
         pep_holder.loading = True
         try:
             pep_holder[:] = [_render_pep()]
         finally:
             pep_holder.loading = False
+        _sync_detail_mode()
+
+    def _update_detail(_=None):
+        _update_info()
+        _update_table()
+        _update_pep()
+        _update_bar()
 
     # Wire events:
-    search_input.param.watch(lambda e: (_update_info(), _update_bar(), _update_pep()), "value")
-    contrast_sel.param.watch(lambda e: (_update_info(), _update_bar(), _update_pep()), "value")
-    layers_sel.param.watch(lambda e: (_update_info(), _update_bar()), "value")
+    search_input.param.watch(_update_detail, "value")
+    contrast_sel.param.watch(_update_detail, "value")
 
-    # Initial fill (after the page paints so we don’t see a flash)
-    bokeh_doc.add_next_tick_callback(lambda: (_update_info(), _update_bar(), _update_pep()))
+    # Initial fill (after the page paints so we don’t see a flash) - removed because fine ? check later
+    #bokeh_doc.add_next_tick_callback(lambda: (_update_info(), _update_table(), _update_pep(), _update_bar(), _sync_detail_mode()))
 
     # assemble into a layout, no legend‐based toggles
     volcano_and_detail = pn.Row(
         pn.Column(                 # left container that can stretch
             volcano_plot,
-            #cohort_violin_view,
             sizing_mode="stretch_width",
             styles={
                 "flex": "1",
@@ -936,9 +1312,12 @@ def overview_tab_pelsa(state: SessionState):
             pn.Spacer(width=20),
             pn.Column(
                 hide_zero_q_sel,
-                margin=(-30, 0, 0, 0),
+                margin=(25, 0, 0, 0),
+                width=175,
             ),
             pn.Spacer(width=20),
+            make_vr(),
+            pn.Spacer(width=30),
             pn.Column(
                 pn.pane.Markdown("**Cohort Inspector**", align="start", margin=(-20,0,0,10)),
                 search_field_sel,
@@ -959,9 +1338,11 @@ def overview_tab_pelsa(state: SessionState):
             pn.Spacer(width=20),
             search_input,
             pn.Row(clear_search, margin = (17,0,0,0)),
-            pn.Spacer(width=0),
-            pn.Row(layers_sel, margin = (-17,0,0,0)),
+            pn.Spacer(width=10),
+            make_vr(),
             pn.Spacer(width=20),
+            string_species_sel,
+            pn.Spacer(width=40),
             download_selection,
             width=300,
             height=80,

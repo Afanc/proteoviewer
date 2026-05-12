@@ -317,12 +317,115 @@ def build_volcano_selection_df(
 
     return df
 
+def build_pelsa_selection_df(
+    state: SessionState,
+    contrast: str,
+    feature_ids: list[str],
+    *,
+    uniprot_var_col: str = "PARENT_PROTEIN",
+    id_col_name: str = "PEPTIDE",
+) -> pd.DataFrame:
+    """
+    Build the CSV export table for a PELSA pseudo-volcano selection.
+
+    PELSA is peptide-centric and does not have contrast-specific limma varm
+    statistics. Selection export therefore uses adata.uns['pelsa']['curve_results']
+    plus peptide/protein metadata from adata.var.
+    """
+    _require(bool(feature_ids), "No PELSA datapoints selected.")
+
+    adata = state.adata
+    mode = str(adata.uns.get("preprocessing", {}).get("analysis_type", "")).lower()
+    _require(
+        mode == "pelsa",
+        f"PELSA selection export requires analysis_type='pelsa'. Got {mode!r}."
+    )
+
+    pelsa = adata.uns.get("pelsa", {})
+    _require(
+        "curve_results" in pelsa,
+        "Cannot export PELSA selection: missing adata.uns['pelsa']['curve_results']."
+    )
+
+    curve_results = pd.DataFrame(pelsa["curve_results"]).copy()
+    required_curve_cols = {
+        "peptide_id",
+        "curve_fold_change_log2",
+        "curve_p_value",
+        "curve_q_value",
+        "pec50",
+    }
+    missing_curve_cols = sorted(required_curve_cols - set(curve_results.columns))
+    _require(
+        not missing_curve_cols,
+        "Cannot export PELSA selection: required curve result columns are missing. "
+        f"Missing={missing_curve_cols}. Present={list(curve_results.columns)!r}"
+    )
+
+    required_var_cols = {uniprot_var_col, "GENE_NAMES"}
+    missing_var_cols = sorted(required_var_cols - set(adata.var.columns))
+    _require(
+        not missing_var_cols,
+        "Cannot export PELSA selection: required adata.var columns are missing. "
+        f"Missing={missing_var_cols}. Present={list(adata.var.columns)!r}"
+    )
+
+    curve_results["peptide_id"] = curve_results["peptide_id"].astype(str)
+    curve_results = curve_results.set_index("peptide_id", drop=False)
+
+    var_index = set(map(str, adata.var_names))
+    result_index = set(curve_results.index.astype(str))
+
+    missing_var = [str(fid) for fid in feature_ids if str(fid) not in var_index]
+    _require(
+        not missing_var,
+        "Cannot export PELSA selection: selected peptide id not found in adata.var_names. "
+        f"Missing={missing_var[:10]!r}"
+    )
+
+    missing_results = [str(fid) for fid in feature_ids if str(fid) not in result_index]
+    _require(
+        not missing_results,
+        "Cannot export PELSA selection: selected peptide id not found in curve_results. "
+        f"Missing={missing_results[:10]!r}"
+    )
+
+    ids = [str(fid) for fid in feature_ids]
+    res = curve_results.loc[ids]
+    var = adata.var.reindex(ids)
+
+    df = pd.DataFrame(index=ids)
+    df[id_col_name] = ids
+    df["UNIPROT_ID"] = var[uniprot_var_col].astype(str).values
+    df["GENE_NAME"] = var["GENE_NAMES"].astype(str).values
+
+    df["RANGE_LOG2"] = pd.to_numeric(res["curve_fold_change_log2"], errors="raise").astype(float).values
+    df["PVALUE"] = pd.to_numeric(res["curve_p_value"], errors="raise").astype(float).values
+    df["QVALUE"] = pd.to_numeric(res["curve_q_value"], errors="raise").astype(float).values
+    df["PEC50"] = pd.to_numeric(res["pec50"], errors="raise").astype(float).values
+
+    optional_curve_cols = [
+        ("pEC50_CI_LOW", "pEC50_ci_low"),
+        ("pEC50_CI_HIGH", "pEC50_ci_high"),
+        ("pEC50_CI_WIDTH_NORM", "pEC50_ci_width_norm"),
+        ("RMSE", "rmse"),
+        ("NRMSE", "normalized_rmse"),
+        ("R2", "r2"),
+    ]
+    for out_col, src_col in optional_curve_cols:
+        if src_col in res.columns:
+            df[out_col] = pd.to_numeric(res[src_col], errors="coerce").astype(float).values
+
+    return df.reset_index(drop=True)
+
+
 
 def make_volcano_selection_downloader(
     *,
     state: SessionState,
     contrast_getter: Callable[[], str],
     spec: SelectionExportSpec = SelectionExportSpec(),
+    selection_df_builder: Optional[Callable[..., pd.DataFrame]] = None,
 ) -> tuple[
     pn.widgets.FileDownload,
     Callable[[dict], None],
@@ -358,13 +461,14 @@ def make_volcano_selection_downloader(
 
 
     def _csv_callback() -> bytes:
-        df = build_volcano_selection_df(
-            state=state,
-            contrast=str(contrast_getter()),
-            feature_ids=effective_ids,
-            uniprot_var_col=spec.uniprot_var_col,
-            id_col_name=spec.id_col_name,
-        )
+        builder = selection_df_builder or build_volcano_selection_df
+        df = builder(
+                state=state,
+                contrast=str(contrast_getter()),
+                feature_ids=effective_ids,
+                uniprot_var_col=spec.uniprot_var_col,
+                id_col_name=spec.id_col_name,
+            )
 
         # Panel FileDownload expects a file-like object or a filesystem path.
         data = df.to_csv(index=False).encode("utf-8")
