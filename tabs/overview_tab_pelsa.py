@@ -1,3 +1,4 @@
+import io
 import os
 import re
 import numpy as np
@@ -18,6 +19,7 @@ from components.overview_plots import (
     get_pelsa_sister_peptides,
     plot_pelsa_local_stability_profile,
 )
+from components.structure_viewer import build_structure_viewer_pane, PeptideRegion
 from components.selection_export import (
     make_volcano_selection_downloader,
     SelectionExportSpec,
@@ -359,7 +361,7 @@ def overview_tab_pelsa(state: SessionState):
             widths={
                 "Peptide": 200,
                 "Range log₂": 105,
-                "q-value": 95,
+                "q-value": 85,
                 "Gene": 90,
                 "Parent protein": 180,
                 "pEC50": 80,
@@ -573,13 +575,13 @@ def overview_tab_pelsa(state: SessionState):
     # Contrast selector
     contrasts = list(map(str, state.adata.uns.get("contrast_names", ["pelsa_curve_fit"])))
 
-    contrast_sel = pn.widgets.Select(
-        name="Contrast",
-        options=contrasts,
-        value=contrasts[0],
-        width=250,
-        visible=False,
-    )
+    #contrast_sel = pn.widgets.Select(
+    #    name="Contrast",
+    #    options=contrasts,
+    #    value=contrasts[0],
+    #    width=250,
+    #    visible=False,
+    #)
 
     show_measured  = pn.widgets.Checkbox(name="Observed in Both", value=True)
     show_imp_cond1 = pn.widgets.Checkbox(name=f"", value=True)
@@ -591,6 +593,20 @@ def overview_tab_pelsa(state: SessionState):
         options=["Significance", "EC₅₀"],
         value="Significance",
         width=150,
+    )
+
+    structure_color_by = pn.widgets.Select(
+        name="Structure color",
+        options=["Significance", "None"],
+        value="Significance",
+        width=140,
+    )
+
+    structure_representation = pn.widgets.Select(
+        name="Structure rep.",
+        options=["Surface", "Cartoon"],
+        value="Surface",
+        width=140,
     )
 
     curve_results = pd.DataFrame(pelsa_uns["curve_results"])
@@ -849,7 +865,7 @@ def overview_tab_pelsa(state: SessionState):
     @pn.depends(protein=search_input)
     def info_card(protein):
         if not protein:
-            return pn.Spacer(width=800, height=170)
+            return pn.Spacer(width=700, height=170)
 
         key = _normalize_search_token(protein)
         info = get_pelsa_info(state, key)
@@ -958,7 +974,7 @@ def overview_tab_pelsa(state: SessionState):
             pn.Row(*metrics_row_items, sizing_mode="stretch_width"),
             hr,
             footer_links,
-            width=800,
+            width=700,
             styles={
                 "background": "#f9f9f9",
                 "align-items": "center",
@@ -975,16 +991,16 @@ def overview_tab_pelsa(state: SessionState):
     @pn.depends(protein=search_input)
     def pelsa_curve_view(protein):
         if not protein:
-            return pn.Spacer(width=800, height=500, margin=(-30, 0, 0, 0))
+            return pn.Spacer(width=1000, height=360, margin=(-30, 0, 0, 0))
 
         key = _normalize_search_token(protein)
-        fig = plot_pelsa_curve(state, key, width=800, height=350)
+        fig = plot_pelsa_curve(state, key, width=1000, height=360)
 
         return pn.pane.Plotly(
             fig,
-            width=800,
-            height=300,
-            margin=(0, 0, 0, 0),
+            width=1300,
+            height=360,
+            margin=(0, 0, 10, 0),
             styles={
                 "border-radius": "8px",
                 "box-shadow": "3px 3px 5px #bcbcbc",
@@ -994,18 +1010,30 @@ def overview_tab_pelsa(state: SessionState):
     info_holder = pn.Column()
     bar_holder  = pn.Column()
     pep_holder  = pn.Column()
+    structure_holder = pn.Column()
     table_holder  = pn.Column()
-    detail_mode_holder = pn.Column(width=840)
+    detail_mode_holder = pn.Column()
 
     peptide_detail_panel = pn.Column(
-        info_holder,
-        pn.Spacer(height=20),
-        table_holder,
-        pn.Spacer(height=20),
-        pep_holder,
+        pn.Row(
+            pn.Column(
+                info_holder,
+                pn.Spacer(height=20),
+                table_holder,
+                pn.Spacer(height=20),
+                pep_holder,
+                sizing_mode="stretch_width",
+                styles={"align-items": "flex-start"},
+            ),
+            pn.Spacer(width=20),
+            structure_holder,
+            sizing_mode="stretch_width",
+            styles={"align-items": "flex-start"},
+        ),
         pn.Spacer(height=20),
         bar_holder,
-        width=840,
+        #width=840,
+        margin=(0, 20, 0, 0),
     )
 
     detail_panel = pn.Row(
@@ -1013,6 +1041,7 @@ def overview_tab_pelsa(state: SessionState):
         margin=(0, 0, 0, 0),
         styles={
             "margin-left": "auto",
+            "flex": "1.0",
         }
     )
 
@@ -1032,17 +1061,64 @@ def overview_tab_pelsa(state: SessionState):
         else:
             detail_mode_holder[:] = [pn.Spacer(width=840, height=320)]
 
-    def _current_uniprot_id():
-        token = search_input.value
-        if not token:
-            return None
-        key = _normalize_search_token(token)
-        info = get_protein_info(state, contrast_sel.value, key)
-        return info["uniprot_id"]
-
     def _render_info():
         # pass current values explicitly (protein, contrast)
         return info_card(search_input.value)
+
+    def _structure_peptide_regions(peptide: str) -> list[PeptideRegion]:
+        key = _normalize_search_token(peptide)
+        try:
+            sib = get_pelsa_sister_peptides(state, key)
+        except Exception:
+            return []
+
+        if sib.empty or "peptide_id" not in sib.columns:
+            return []
+
+        out: list[PeptideRegion] = []
+        for row in sib.itertuples(index=False):
+            pid = str(getattr(row, "peptide_id", "")).strip()
+            if not pid or pid not in adata.var.index:
+                continue
+            try:
+                var_row = adata.var.loc[pid]
+                out.append(PeptideRegion(
+                    peptide_id=pid,
+                    start=int(pd.to_numeric(var_row["PEPTIDE_START"], errors="raise")),
+                    end=int(pd.to_numeric(var_row["PEPTIDE_END"], errors="raise")),
+                    qval=float(getattr(row, "qval", np.nan)),
+                    range_log2=float(getattr(row, "range_log2", np.nan)),
+                ))
+            except Exception:
+                continue
+        return out
+
+    def _render_structure(peptide):
+        if not peptide:
+            return pn.Spacer(width=550, height=760)
+
+        key = _normalize_search_token(peptide)
+        try:
+            info = get_pelsa_info(state, key)
+        except Exception as exc:
+            return pn.pane.Markdown(
+                f"**Structure not available**  \n`{exc}`",
+                width=400,
+                height=120,
+                styles={"background": "#fff3f3", "padding": "10px", "border-radius": "8px"},
+            )
+
+        parent = str(info.get("parent_protein", "") or "").strip()
+        parent = parent.split(";", 1)[0].strip()
+
+        return build_structure_viewer_pane(
+            parent,
+            peptides=_structure_peptide_regions(key),
+            color_mode=structure_color_by.value,
+            representation_mode=structure_representation.value,
+            width=580,
+            height=765,
+        )
 
     def _render_bar():
         # pass (protein, contrast, layer) explicitly
@@ -1109,8 +1185,8 @@ def overview_tab_pelsa(state: SessionState):
             disabled=True,
             height=table_h,
             pagination=None,
-            width=380,
-            widths={"Peptide": 180, "Range log₂": 90, "q-value": 90},
+            width=360,
+            widths={"Peptide": 190, "Range log₂": 90, "q-value": 75},
             configuration={
                 "rowHeight": row_h,
                 "columnHeaderVertAlign": "bottom",
@@ -1162,7 +1238,7 @@ def overview_tab_pelsa(state: SessionState):
             header,
             make_hr(),
             tbl,
-            width=400,
+            width=700,
             collapsible=False,
             hide_header=True,
             styles={
@@ -1175,13 +1251,13 @@ def overview_tab_pelsa(state: SessionState):
 
     def _render_local_stability_profile(peptide):
         if not peptide:
-            return pn.Spacer(width=800, height=260)
+            return pn.Spacer(width=700, height=260)
 
         key = _normalize_search_token(peptide)
-        fig = plot_pelsa_local_stability_profile(state, key, width=800, height=330)
+        fig = plot_pelsa_local_stability_profile(state, key, width=700, height=330)
         pane = pn.pane.Plotly(
             fig,
-            width=800,
+            width=700,
             height=330,
             margin=(0, 0, 0, 0),
             config={"responsive": True},
@@ -1213,7 +1289,7 @@ def overview_tab_pelsa(state: SessionState):
 
         return pn.Column(
             _render_sister_peptide_table(peptide),
-            width=320,
+            width=360,
             margin=(0, 0, 0, 0),
         )
 
@@ -1237,7 +1313,7 @@ def overview_tab_pelsa(state: SessionState):
         protein = search_input.value
         if not protein:
             bar_holder.loading = False
-            bar_holder[:] = [pn.Spacer(width=800, height=500, margin=(-30, 0, 0, 0))]
+            bar_holder[:] = [pn.Spacer(width=1000, height=500, margin=(-30, 0, 0, 0))]
             return
 
         # Only show a loader if there IS a protein selected (i.e., real work)
@@ -1274,15 +1350,31 @@ def overview_tab_pelsa(state: SessionState):
             pep_holder.loading = False
         _sync_detail_mode()
 
+    def _update_structure(_=None):
+        if not search_input.value:
+            structure_holder.loading = False
+            structure_holder[:] = [pn.Spacer(width=600, height=800)]
+            return
+
+        structure_holder.loading = True
+        try:
+            structure_holder[:] = [_render_structure(search_input.value)]
+        finally:
+            structure_holder.loading = False
+        _sync_detail_mode()
+
     def _update_detail(_=None):
         _update_info()
         _update_table()
         _update_pep()
         _update_bar()
+        _update_structure()
 
     # Wire events:
     search_input.param.watch(_update_detail, "value")
-    contrast_sel.param.watch(_update_detail, "value")
+
+    structure_color_by.param.watch(_update_structure, "value")
+    structure_representation.param.watch(_update_structure, "value")
 
     # Initial fill (after the page paints so we don’t see a flash) - removed because fine ? check later
     #bokeh_doc.add_next_tick_callback(lambda: (_update_info(), _update_table(), _update_pep(), _update_bar(), _sync_detail_mode()))
@@ -1293,7 +1385,7 @@ def overview_tab_pelsa(state: SessionState):
             volcano_plot,
             sizing_mode="stretch_width",
             styles={
-                "flex": "1",
+                "flex": "1.3",
             },
         ),
         pn.Spacer(width=30),
@@ -1344,6 +1436,13 @@ def overview_tab_pelsa(state: SessionState):
             string_species_sel,
             pn.Spacer(width=40),
             download_selection,
+            pn.Spacer(width=20),
+            make_vr(),
+            pn.Spacer(width=20),
+            structure_color_by,
+            pn.Spacer(width=20),
+            structure_representation,
+            pn.Spacer(width=20),
             width=300,
             height=80,
         ),
@@ -1373,14 +1472,5 @@ def overview_tab_pelsa(state: SessionState):
         sizing_mode="stretch_width",
         styles=FRAME_STYLES_TALL,
     )
-
-    #def _frame_styles(ids, protein):
-    #    has_ids = bool(ids)
-    #    has_protein = bool((protein or "").strip())
-    #    if has_ids or has_protein:
-    #        return FRAME_STYLES_TALL
-    #    return FRAME_STYLES_SHORT
-
-    #layout.styles = pn.bind(_frame_styles, group_ids_selected, search_input)
 
     return layout

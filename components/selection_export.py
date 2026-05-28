@@ -402,19 +402,8 @@ def build_pelsa_selection_df(
     df["RANGE_LOG2"] = pd.to_numeric(res["curve_fold_change_log2"], errors="raise").astype(float).values
     df["PVALUE"] = pd.to_numeric(res["curve_p_value"], errors="raise").astype(float).values
     df["QVALUE"] = pd.to_numeric(res["curve_q_value"], errors="raise").astype(float).values
-    df["PEC50"] = pd.to_numeric(res["pec50"], errors="raise").astype(float).values
-
-    optional_curve_cols = [
-        ("pEC50_CI_LOW", "pEC50_ci_low"),
-        ("pEC50_CI_HIGH", "pEC50_ci_high"),
-        ("pEC50_CI_WIDTH_NORM", "pEC50_ci_width_norm"),
-        ("RMSE", "rmse"),
-        ("NRMSE", "normalized_rmse"),
-        ("R2", "r2"),
-    ]
-    for out_col, src_col in optional_curve_cols:
-        if src_col in res.columns:
-            df[out_col] = pd.to_numeric(res[src_col], errors="coerce").astype(float).values
+    pec50 = pd.to_numeric(res["pec50"], errors="raise").astype(float)
+    df["LOG10_EC50"] = (-pec50).values
 
     return df.reset_index(drop=True)
 
