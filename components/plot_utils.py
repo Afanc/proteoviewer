@@ -629,9 +629,9 @@ def plot_violins(
     - data: {label: array_of_values}
     - colors: optional mapping label→color (falls back to Plotly palette)
     """
-    #labels = list(data.keys())
     labels = _sort_labels_numeric_aware(data.keys())
     data = {_label_as_str(k): np.asarray(v) for k, v in data.items()}
+    xpos = {lbl: i for i, lbl in enumerate(labels)}
 
     # default palette if not provided
     default_colors = px.colors.qualitative.Plotly
@@ -641,7 +641,7 @@ def plot_violins(
     for lbl in labels:
         arr = np.asarray(data[lbl])
         fig.add_trace(go.Violin(
-            x=[lbl]*len(arr),
+            x=[xpos[lbl]] * len(arr),
             y=arr,
             name=lbl,
             legendgroup=lbl,
@@ -660,7 +660,7 @@ def plot_violins(
     for lbl in labels:
         med = np.nanmedian(data[lbl])
         fig.add_annotation(
-            x=lbl, y=med+offset,
+            x=xpos[lbl], y=med+offset,
             text=f"{med:.2f}",
             showarrow=False,
             yanchor="bottom",
@@ -673,7 +673,13 @@ def plot_violins(
         title=dict(text=title, x=0.5) or "",
         autosize=True,
         width=width, height=height,
-        xaxis=dict(title=x_title or "", showgrid=True),
+        xaxis=dict(
+            title=x_title or "",
+            showgrid=True,
+            tickmode="array",
+            tickvals=[xpos[lbl] for lbl in labels],
+            ticktext=labels,
+        ),
         yaxis=dict(title=y_title or "", showgrid=True),
         showlegend=showlegend,
         legend_itemclick=False,
@@ -681,9 +687,6 @@ def plot_violins(
     )
     #fig.update_xaxes(showline=True, linewidth=1, linecolor="black", mirror=True)
     fig.update_xaxes(
-        type="category",
-        categoryorder="array",
-        categoryarray=labels,
         showline=True,
         linewidth=1,
         linecolor="black",
@@ -758,7 +761,7 @@ def plot_pca_2d(
         xaxis=dict(title=f"PC{pc[0]} ({var[pc[0]-1]*100:.1f}% var)"),
         yaxis=dict(title=f"PC{pc[1]} ({var[pc[1]-1]*100:.1f}% var)"),
         legend=dict(
-            title_text=" {color_key}",
+            title_text=f" {color_key}",
             bordercolor="black",
             borderwidth=1,
             x=1.02, y=1,
@@ -835,7 +838,7 @@ def plot_umap_2d(
         xaxis=dict(title="UMAP1"),
         yaxis=dict(title="UMAP2"),
         legend=dict(
-            title_text=" {color_key}",
+            title_text=f" {color_key}",
             bordercolor="black",
             borderwidth=1,
             x=1.02, y=1,
@@ -922,7 +925,7 @@ def plot_mds_2d(
         xaxis=dict(title="MDS1"),
         yaxis=dict(title="MDS2"),
         legend=dict(
-            title_text=" {color_key}",
+            title_text=f" {color_key}",
             bordercolor="black",
             borderwidth=1,
             x=1.02, y=1,

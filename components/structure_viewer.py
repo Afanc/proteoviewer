@@ -35,6 +35,8 @@ class StructureFetchResult:
     ok: bool
     path: Path | None
     message: str = ""
+    version: int | None = None
+    source_url: str | None = None
 
 @dataclass(frozen=True)
 class PeptideRegion:
@@ -43,7 +45,7 @@ class PeptideRegion:
     end: int
     qval: float | None = None
     range_log2: float | None = None
-
+    selected: bool = False
 
 def _clean_uniprot_id(uniprot_id: str | None) -> str:
     """
@@ -137,6 +139,10 @@ def _candidate_alphafold_urls(
     return list(dict.fromkeys(candidates))
 
 
+def _alphafold_version_from_url(url: str | None) -> int | None:
+    m = re.search(r"model_v(\d+)\.pdb", str(url or ""))
+    return int(m.group(1)) if m else None
+
 def fetch_alphafold_structure(
     uniprot_id: str | None,
     *,
@@ -161,10 +167,24 @@ def fetch_alphafold_structure(
     root.mkdir(parents=True, exist_ok=True)
 
     pdb_path = root / f"{uniprot}.pdb"
+    meta_path = root / f"{uniprot}.json"
     missing_path = root / f"{uniprot}.missing"
 
     if pdb_path.exists() and pdb_path.stat().st_size > 0:
-        return StructureFetchResult(ok=True, path=pdb_path)
+        version = None
+        source_url = None
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            version = int(meta["version"]) if meta.get("version") is not None else None
+            source_url = str(meta.get("source_url") or "") or None
+        except Exception:
+            pass
+        return StructureFetchResult(
+            ok=True,
+            path=pdb_path,
+            version=version,
+            source_url=source_url,
+        )
 
     if _missing_cache_is_fresh(missing_path):
         return StructureFetchResult(
@@ -216,11 +236,24 @@ def fetch_alphafold_structure(
             transient_errors.append(f"Invalid PDB payload for {url}")
             continue
 
-        tmp_path = pdb_path.with_suffix(".pdb.tmp")
+        tmp_path = pdb_path.with_name(f"{pdb_path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
         tmp_path.write_text(text, encoding="utf-8")
         tmp_path.replace(pdb_path)
 
-        return StructureFetchResult(ok=True, path=pdb_path)
+        version = _alphafold_version_from_url(url)
+        meta_tmp = meta_path.with_name(f"{meta_path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
+        meta_path.write_text(
+            json.dumps({"uniprot": uniprot, "version": version, "source_url": url}, indent=2),
+            encoding="utf-8",
+        )
+        meta_tmp.replace(meta_path)
+
+        return StructureFetchResult(
+            ok=True,
+            path=pdb_path,
+            version=version,
+            source_url=url,
+        )
 
     # Only now negative-cache the biological "not found" case, and only for a
     # short TTL. This avoids permanently poisoning valid accessions.
@@ -329,18 +362,27 @@ def _qvalue_color(qval: float | None, *, threshold: float = 0.05) -> str:
 
 
 def _structure_color_regions(peptides: list[PeptideRegion] | None, color_mode: str) -> list[dict]:
-    if str(color_mode or "None") != "Significance":
-        return []
+    mode = str(color_mode or "None")
     regions = []
     for pep in peptides or []:
         q = _safe_float(pep.qval)
-        if math.isfinite(q) and q < 0.05:
+        selected = bool(getattr(pep, "selected", False))
+        if mode == "Significance" and math.isfinite(q) and q < 0.05:
             color = _qvalue_color(q)
             regions.append({
                 "start": int(pep.start),
                 "end": int(pep.end),
                 "color": color,
                 "colorInt": _hex_to_int(color),
+                "selected": selected,
+            })
+        elif selected:
+            regions.append({
+                "start": int(pep.start),
+                "end": int(pep.end),
+                "color": "#d62728",
+                "colorInt": _hex_to_int("#d62728"),
+                "selected": True,
             })
     return regions
 
@@ -461,6 +503,7 @@ def _molstar_srcdoc(
       for (const region of colorRegions || []) {{
         const start = Number(region.start);
         const end = Number(region.end);
+        const isSelected = Boolean(region.selected);
         if (!Number.isFinite(start) || !Number.isFinite(end)) {{
           continue;
         }}
@@ -470,10 +513,10 @@ def _molstar_srcdoc(
             beg_auth_seq_id: start,
             end_auth_seq_id: end,
           }},
-          color: String(region.color || "#bdbdbd"),
+          color: isSelected ? "#d62728" : String(region.color || "#bdbdbd"),
         }});
-      }}
 
+      }}
       const mvsData = builder.getState();
       await mvs.loadMVS(viewer.plugin, mvsData, {{
         sourceUrl: undefined,
@@ -553,9 +596,18 @@ def build_structure_viewer_pane(
         f"</iframe>"
     )
 
+    version_txt = ""
+    if result.version is not None:
+        version_txt = f" model v{int(result.version)}"
+    else:
+        version_txt = " model version unknown"
+
     return pn.Card(
         pn.pane.Markdown(
-            f"**Structure** &nbsp; <span style='font-size:12px; color:#666;'>AlphaFold: {html.escape(uniprot)}</span>",
+            f"**Structure** &nbsp; "
+            f"<span style='font-size:12px; color:#666;'>"
+            f"AlphaFold: {html.escape(uniprot)}{html.escape(version_txt)}"
+            f"</span>",
             margin=(0, 0, 4, 0),
         ),
         pn.pane.HTML(

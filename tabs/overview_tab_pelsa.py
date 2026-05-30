@@ -151,7 +151,7 @@ def overview_tab_pelsa(state: SessionState):
         value=None,
         width=190,
     )
-
+    string_species_sel.visible = False
     string_selected_feature_ids: list[str] = []
 
     def _selected_peptides_to_parent_proteins(feature_ids: list[str]) -> list[str]:
@@ -252,7 +252,7 @@ def overview_tab_pelsa(state: SessionState):
             height=190,
             sizing_mode="stretch_width",
             pagination=None,
-            selectable=False,
+            selectable=True,
             sortable=True,
             widths={
                 "Domain": 110,
@@ -609,6 +609,16 @@ def overview_tab_pelsa(state: SessionState):
         width=140,
     )
 
+    structure_controls = pn.Row(
+        make_vr(),
+        pn.Spacer(width=20),
+        structure_color_by,
+        pn.Spacer(width=20),
+        structure_representation,
+        pn.Spacer(width=20),
+        visible=False,
+    )
+
     curve_results = pd.DataFrame(pelsa_uns["curve_results"])
 
     def _slider_end(col: str, default: float) -> float:
@@ -704,8 +714,11 @@ def overview_tab_pelsa(state: SessionState):
 
             search_input.value = str(cd[0] if isinstance(cd, (list, tuple)) and len(cd) else pt.get("text", ""))
 
-    #volcano_dmap_wrapped = bind_uirevision(volcano_dmap, contrast_sel, prefix="volcano")
-    volcano_dmap_wrapped = volcano_dmap
+    def _with_pelsa_uirevision(fig):
+        fig.update_layout(uirevision="pelsa-volcano")
+        return fig
+
+    volcano_dmap_wrapped = pn.bind(_with_pelsa_uirevision, volcano_dmap)
 
     volcano_plot = pn.pane.Plotly(
         volcano_dmap_wrapped,
@@ -822,6 +835,7 @@ def overview_tab_pelsa(state: SessionState):
 
         if selected_data is None or selected_data == {}:
             string_selected_feature_ids.clear()
+            string_species_sel.visible = False
             _update_string_enrichment()
             _sync_detail_mode()
             return
@@ -829,12 +843,14 @@ def overview_tab_pelsa(state: SessionState):
             if selected_data.get("selector", "__missing__") is None:
                 return
             string_selected_feature_ids.clear()
+            string_species_sel.visible = False
             _update_string_enrichment()
             _sync_detail_mode()
             return
 
         string_selected_feature_ids.clear()
         string_selected_feature_ids.extend(extract_feature_ids_from_selected_data(selected_data))
+        string_species_sel.visible = bool(string_selected_feature_ids)
         _update_string_enrichment()
         _sync_detail_mode()
 
@@ -994,7 +1010,7 @@ def overview_tab_pelsa(state: SessionState):
             return pn.Spacer(width=1000, height=360, margin=(-30, 0, 0, 0))
 
         key = _normalize_search_token(protein)
-        fig = plot_pelsa_curve(state, key, width=1000, height=360)
+        fig = plot_pelsa_curve(state, key, width=1300, height=360)
 
         return pn.pane.Plotly(
             fig,
@@ -1032,8 +1048,9 @@ def overview_tab_pelsa(state: SessionState):
         ),
         pn.Spacer(height=20),
         bar_holder,
-        #width=840,
         margin=(0, 20, 0, 0),
+        sizing_mode="fixed",
+        width=1300,
     )
 
     detail_panel = pn.Row(
@@ -1041,7 +1058,7 @@ def overview_tab_pelsa(state: SessionState):
         margin=(0, 0, 0, 0),
         styles={
             "margin-left": "auto",
-            "flex": "1.0",
+            #"flex": "1.0",
         }
     )
 
@@ -1054,7 +1071,10 @@ def overview_tab_pelsa(state: SessionState):
         2. box/lasso STRING enrichment
         3. empty spacer
         """
-        if str(search_input.value or "").strip():
+        has_single_detail = bool(str(search_input.value or "").strip())
+        structure_controls.visible = has_single_detail
+
+        if has_single_detail:
             detail_mode_holder[:] = [peptide_detail_panel]
         elif string_selected_feature_ids:
             detail_mode_holder[:] = [string_enrichment_holder]
@@ -1088,6 +1108,7 @@ def overview_tab_pelsa(state: SessionState):
                     end=int(pd.to_numeric(var_row["PEPTIDE_END"], errors="raise")),
                     qval=float(getattr(row, "qval", np.nan)),
                     range_log2=float(getattr(row, "range_log2", np.nan)),
+                    selected=(pid == key),
                 ))
             except Exception:
                 continue
@@ -1136,9 +1157,27 @@ def overview_tab_pelsa(state: SessionState):
         disp = df.copy()
         disp["Peptide"] = disp["peptide_id"].astype(str)
         disp["Range log₂"] = pd.to_numeric(disp["range_log2"], errors="coerce")
+        # Peptide genomic/protein position metadata from adata.var.
+        # Keep missing values as NA rather than failing the whole detail pane.
+        starts = []
+        for pid in disp["peptide_id"].astype(str):
+            try:
+                starts.append(int(pd.to_numeric(adata.var.loc[pid, "PEPTIDE_START"], errors="raise")))
+            except Exception:
+                starts.append(pd.NA)
+        disp["Start Pos"] = pd.Series(starts, index=disp.index, dtype="Int64")
         disp["q-value"] = (
             pd.to_numeric(disp["qval"], errors="coerce")
             .map(lambda x: f"{x:.3e}" if np.isfinite(x) else "nan")
+        )
+
+        disp["EC₅₀"] = pd.to_numeric(disp["ec50"], errors="coerce")
+
+        # Display adjacent peptides in protein-coordinate order.
+        # Keep missing positions at the bottom, then stabilize by peptide id.
+        disp = (
+            disp.sort_values(["Start Pos", "peptide_id"], ascending=[True, True], na_position="last")
+            .reset_index(drop=True)
         )
 
         sig = pd.to_numeric(disp["qval"], errors="coerce") < 0.05
@@ -1154,7 +1193,7 @@ def overview_tab_pelsa(state: SessionState):
         ]
 
         styled = (
-            disp[["Peptide_html", "Range log₂", "q-value", "peptide_id", "current"]]
+            disp[["Peptide_html", "Start Pos", "Range log₂", "EC₅₀", "q-value", "peptide_id", "current"]]
             .rename(columns={"Peptide_html": "Peptide"})
             .style
             .apply(
@@ -1162,7 +1201,7 @@ def overview_tab_pelsa(state: SessionState):
                 if bool(row["current"]) else [""] * len(row),
                 axis=1,
             )
-            .format({"Range log₂": "{:.3f}"})
+            .format({"Range log₂": "{:.3f}", "EC₅₀": "{:.3f}", "Start Pos": "{:.0f}"})
         )
 
         sibling_ids = disp["peptide_id"].astype(str).tolist()
@@ -1177,6 +1216,7 @@ def overview_tab_pelsa(state: SessionState):
             formatters={
                 "Peptide": {"type": "html"},
                 "Range log₂": NumberFormatter(format="0.000"),
+                "EC₅₀": NumberFormatter(format="0.000"),
             },
             hidden_columns=["peptide_id", "current"],
             selectable=1,
@@ -1185,8 +1225,8 @@ def overview_tab_pelsa(state: SessionState):
             disabled=True,
             height=table_h,
             pagination=None,
-            width=360,
-            widths={"Peptide": 190, "Range log₂": 90, "q-value": 75},
+            width=660,
+            widths={"Peptide": 250, "Start Pos": 85, "Range log₂": 85, "EC₅₀": 65, "q-value": 90},
             configuration={
                 "rowHeight": row_h,
                 "columnHeaderVertAlign": "bottom",
@@ -1377,7 +1417,6 @@ def overview_tab_pelsa(state: SessionState):
     structure_representation.param.watch(_update_structure, "value")
 
     # Initial fill (after the page paints so we don’t see a flash) - removed because fine ? check later
-    #bokeh_doc.add_next_tick_callback(lambda: (_update_info(), _update_table(), _update_pep(), _update_bar(), _sync_detail_mode()))
 
     # assemble into a layout, no legend‐based toggles
     volcano_and_detail = pn.Row(
@@ -1430,19 +1469,11 @@ def overview_tab_pelsa(state: SessionState):
             pn.Spacer(width=20),
             search_input,
             pn.Row(clear_search, margin = (17,0,0,0)),
-            pn.Spacer(width=10),
-            make_vr(),
             pn.Spacer(width=20),
-            string_species_sel,
-            pn.Spacer(width=40),
             download_selection,
             pn.Spacer(width=20),
-            make_vr(),
-            pn.Spacer(width=20),
-            structure_color_by,
-            pn.Spacer(width=20),
-            structure_representation,
-            pn.Spacer(width=20),
+            structure_controls,
+            string_species_sel,
             width=300,
             height=80,
         ),

@@ -1338,6 +1338,12 @@ def get_pelsa_sister_peptides(state, peptide_id: str, sign_threshold: float = 0.
     out["peptide_id"] = siblings
     out["range_log2"] = pd.to_numeric(res.loc[siblings, "curve_fold_change_log2"], errors="coerce").to_numpy(dtype=float)
     out["qval"] = pd.to_numeric(res.loc[siblings, "curve_q_value"], errors="coerce").to_numpy(dtype=float)
+    pec50 = pd.to_numeric(res.loc[siblings, "pec50"], errors="coerce").to_numpy(dtype=float)
+    exponent = -pec50
+    ec50 = np.full_like(exponent, np.nan, dtype=float)
+    ok = np.isfinite(exponent) & (exponent <= 308) & (exponent >= -308)
+    ec50[ok] = np.power(10.0, exponent[ok])
+    out["ec50"] = ec50
     out["current"] = out["peptide_id"].astype(str) == peptide_id
     out["__abs_range__"] = np.abs(out["range_log2"].to_numpy(dtype=float))
     out = out.sort_values(["__abs_range__", "qval", "peptide_id"], ascending=[False, True, True], kind="mergesort")
