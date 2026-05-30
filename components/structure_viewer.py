@@ -241,12 +241,10 @@ def fetch_alphafold_structure(
         tmp_path.replace(pdb_path)
 
         version = _alphafold_version_from_url(url)
-        meta_tmp = meta_path.with_name(f"{meta_path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
         meta_path.write_text(
             json.dumps({"uniprot": uniprot, "version": version, "source_url": url}, indent=2),
             encoding="utf-8",
         )
-        meta_tmp.replace(meta_path)
 
         return StructureFetchResult(
             ok=True,
