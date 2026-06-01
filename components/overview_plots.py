@@ -1142,7 +1142,7 @@ def plot_pelsa_volcano(
     ]
 
     fig.update_layout(
-        title=dict(text="PELSA pseudo-volcano", x=0.5),
+        title=dict(text="PELSA Volcano", x=0.5),
         annotations=annos,
         height=height,
         margin=dict(l=60, r=120, t=60, b=60, autoexpand=False),

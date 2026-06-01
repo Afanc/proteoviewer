@@ -267,8 +267,29 @@ def overview_tab_pelsa(state: SessionState):
             },
             margin=(-5,8,8,8),
         )
-        return pn.Card(
+
+        safe_title = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(title).strip()).strip("_")
+        download_btn = pn.widgets.Button(
+            name="Download",
+            button_type="success",
+            width=90,
+            margin=(0, 0, 0, 0),
+        )
+
+        def _download_string_table(event):
+            tbl.download(filename=f"proteoflux_string_{safe_title or 'table'}.csv")
+
+        download_btn.on_click(_download_string_table)
+
+        header = pn.Row(
             pn.pane.Markdown(f"**{title}**", styles={"font-size": "15px", "padding": "0"}),
+            pn.Spacer(sizing_mode="stretch_width"),
+            download_btn,
+            sizing_mode="stretch_width",
+        )
+
+        return pn.Card(
+            header,
             tbl,
             collapsible=False,
             hide_header=True,
