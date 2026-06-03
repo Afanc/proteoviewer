@@ -14,7 +14,7 @@ DEFAULT_MARGIN = (0, 0, 0, 20)
 DEFAULT_SIZING = "stretch_width"
 
 FRAME_STYLES = {
-    "max-height": "calc(100vh - 160px)",  # tweak the 160px to your header/controls height
+    "max-height": "calc(100vh - 160px)",
     "overflow": "auto",
     "overscroll-behavior": "contain",
     "padding-bottom": "10px",
@@ -22,7 +22,7 @@ FRAME_STYLES = {
     "max-width": "100vw",
 }
 FRAME_STYLES_BASE = {
-    "max-height": "calc(100vh - 160px)",  # tweak the 160px to your header/controls height
+    "max-height": "calc(100vh - 160px)",
     "overflow": "auto",
     "padding-bottom": "10px",
     "overflow-x": "hidden",
@@ -35,7 +35,7 @@ FRAME_STYLES_TALL = {
 
 FRAME_STYLES_SHORT = {
     **FRAME_STYLES_BASE,
-    "max-height": "calc(100vh - 48px)",   # tweak this for "no cohort" state
+    "max-height": "calc(100vh - 160px)",   # tweak this for "no cohort" state
 }
 
 def make_row(*components,

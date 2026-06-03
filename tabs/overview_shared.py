@@ -4,8 +4,10 @@ import os
 import re
 from typing import Callable, Iterable, Optional, Sequence
 
+import pandas as pd
 import panel as pn
 
+from components.string_links import get_string_functional_enrichment
 from components.overview_plots import (
     resolve_pattern_to_uniprot_ids,
     resolve_exact_list_to_uniprot_ids,
@@ -16,6 +18,16 @@ from components.plot_utils import (
 )
 from utils.layout_utils import make_vr
 
+STRING_SPECIES_OPTIONS = {
+    "Select species": None,
+    "Homo sapiens": 9606,
+    "Mus musculus": 10090,
+    "Arabidopsis thaliana": 3702,
+    "Saccharomyces cerevisiae": 4932,
+    "Drosophila melanogaster": 7227,
+    "Escherichia coli K-12": 511145,
+    "Pseudomonas aeruginosa PAO1": 208964,
+}
 
 def make_id_sort_toggle(*, margin=(20, 0, 0, 20), width=170) -> pn.widgets.RadioButtonGroup:
     return pn.widgets.RadioButtonGroup(
@@ -647,3 +659,288 @@ def wire_cohort_export_updates(
         obj.param.watch(_push, param_name)
 
     return _push
+
+def make_string_species_select(width: int = 190) -> pn.widgets.Select:
+    sel = pn.widgets.Select(
+        name="Species (for STRING)",
+        options=STRING_SPECIES_OPTIONS,
+        value=None,
+        width=width,
+    )
+    sel.visible = False
+    return sel
+
+
+def _first_token(value) -> str:
+    s = str(value or "").strip()
+    return s.split(";", 1)[0].strip() if ";" in s else s
+
+
+def feature_ids_to_string_proteins(
+    adata,
+    feature_ids: list[str],
+    *,
+    prefer_parent: bool = False,
+    parent_col: str = "PARENT_PROTEIN",
+) -> list[str]:
+    """
+    Convert selected volcano feature ids to protein identifiers suitable for STRING.
+
+    For protein-level workflows, feature ids are usually already protein ids.
+    For peptide, phospho, and PELSA workflows, parent_col is preferred when available.
+    """
+    if not feature_ids:
+        return []
+
+    ids = [str(x) for x in feature_ids]
+    var_names = set(map(str, adata.var_names))
+    missing = [x for x in ids if x not in var_names]
+    if missing:
+        raise ValueError(
+            "STRING enrichment selection contains feature ids not found in adata.var_names. "
+            f"Examples={missing[:10]!r}"
+        )
+
+    out: list[str] = []
+    seen: set[str] = set()
+
+    use_parent = bool(prefer_parent and parent_col in adata.var.columns)
+    values = adata.var.reindex(ids)[parent_col].astype(str) if use_parent else pd.Series(ids, index=ids)
+
+    for value in values.astype(str):
+        for token in str(value).split(";"):
+            protein = token.strip()
+            if not protein or protein.lower() in {"nan", "none"}:
+                continue
+            if protein not in seen:
+                seen.add(protein)
+                out.append(protein)
+
+    return out
+
+
+def make_string_category_table(data: list[dict], category: str, title: str):
+    df = pd.DataFrame(data)
+    if df.empty or "category" not in df.columns:
+        return pn.pane.Markdown(
+            f"**{title}**  \nNo enriched terms.",
+            margin=(0, 0, 0, 0),
+        )
+
+    sub = df[df["category"].astype(str) == category].copy()
+    if sub.empty:
+        return pn.pane.Markdown(
+            f"**{title}**  \nNo enriched terms.",
+            margin=(0, 0, 0, 0),
+        )
+
+    required = {
+        "term",
+        "description",
+        "number_of_genes",
+        "number_of_genes_in_background",
+        "p_value",
+        "fdr",
+    }
+    missing = sorted(required - set(sub.columns))
+    if missing:
+        raise ValueError(
+            "STRING enrichment result is missing required fields. "
+            f"Missing={missing}; present={list(sub.columns)!r}"
+        )
+
+    sub["fdr_num"] = pd.to_numeric(sub["fdr"], errors="raise")
+    sub = (
+        sub[sub["fdr_num"] <= 0.05]
+        .sort_values("fdr_num", ascending=True, kind="mergesort")
+        .copy()
+    )
+
+    if sub.empty:
+        return pn.pane.Markdown(
+            f"**{title}**  \nNo significant terms at FDR ≤ 0.05.",
+            margin=(0, 0, 0, 0),
+        )
+
+    disp = pd.DataFrame({
+        "Term": sub["term"].astype(str).values,
+        "Description": sub["description"].astype(str).values,
+        "Count in network": (
+            pd.to_numeric(sub["number_of_genes"], errors="coerce")
+            .astype("Int64")
+            .astype(str)
+            .values
+        ),
+        "Count in background": (
+            pd.to_numeric(sub["number_of_genes_in_background"], errors="coerce")
+            .astype("Int64")
+            .astype(str)
+            .values
+        ),
+        "FDR": sub["fdr_num"].map(lambda x: f"{x:.3e}").values,
+    })
+
+    tbl = pn.widgets.Tabulator(
+        disp,
+        show_index=False,
+        disabled=True,
+        layout="fit_columns",
+        height=190,
+        sizing_mode="stretch_width",
+        pagination=None,
+        selectable=True,
+        sortable=True,
+        widths={
+            "Term": 110,
+            "Description": 350,
+            "Count in network": 100,
+            "Count in background": 100,
+            "FDR": 90,
+        },
+        configuration={
+            "rowHeight": 30,
+            "columnDefaults": {"editor": False, "headerSort": False},
+        },
+        margin=(-5, 8, 8, 8),
+    )
+
+    safe_title = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(title).strip()).strip("_")
+    download_btn = pn.widgets.Button(
+        name="Download",
+        button_type="success",
+        width=90,
+        margin=(0, 0, 0, 0),
+    )
+
+    def _download_string_table(_event):
+        tbl.download(filename=f"proteoflux_string_{safe_title or 'table'}.csv")
+
+    download_btn.on_click(_download_string_table)
+
+    header = pn.Row(
+        pn.pane.Markdown(f"**{title}**", styles={"font-size": "15px", "padding": "0"}),
+        pn.Spacer(sizing_mode="stretch_width"),
+        download_btn,
+        sizing_mode="stretch_width",
+    )
+
+    return pn.Card(
+        header,
+        tbl,
+        collapsible=False,
+        hide_header=True,
+        sizing_mode="stretch_width",
+        styles={"background": "#f9f9f9", "border-radius": "8px", "padding": "6px"},
+    )
+
+
+def make_string_selected_feature_table(
+    adata,
+    feature_ids: list[str],
+    *,
+    title: str = "Selected features",
+    parent_col: str = "PARENT_PROTEIN",
+) -> pn.viewable.Viewable:
+    if not feature_ids:
+        return pn.Spacer(width=820, height=0)
+
+    ids = [str(x) for x in feature_ids]
+    var = adata.var.reindex(ids)
+
+    disp = pd.DataFrame({"Feature": ids})
+    if "GENE_NAMES" in adata.var.columns:
+        disp["Gene"] = var["GENE_NAMES"].astype(str).values
+    if parent_col in adata.var.columns:
+        disp["Parent protein"] = var[parent_col].astype(str).values
+
+    tbl = pn.widgets.Tabulator(
+        disp,
+        show_index=False,
+        disabled=True,
+        selectable=False,
+        sortable=True,
+        layout="fit_columns",
+        height=min(max(len(disp), 1), 5) * 30 + 30,
+        pagination=None,
+        sizing_mode="stretch_width",
+        configuration={
+            "rowHeight": 30,
+            "columnDefaults": {"editor": False, "headerSort": True},
+        },
+        margin=(0, 8, 8, 8),
+    )
+
+    return pn.Card(
+        pn.pane.Markdown(f"**{title}**", styles={"font-size": "15px", "padding": "0"}),
+        tbl,
+        collapsible=False,
+        hide_header=True,
+        sizing_mode="stretch_width",
+        styles={"background": "#f9f9f9", "border-radius": "8px", "padding": "6px"},
+    )
+
+
+def make_string_enrichment_card(
+    *,
+    selected_feature_ids: list[str],
+    proteins: list[str],
+    species: int | None,
+    selected_table,
+    width: int = 820,
+):
+    if not selected_feature_ids:
+        return pn.Spacer(width=width, height=320)
+
+    if species is None:
+        return pn.pane.Markdown(
+            "**STRING enrichment**  \nSelect a species to run enrichment on the current box/lasso selection.",
+            styles={"background": "#f9f9f9", "padding": "10px", "border-radius": "8px"},
+            width=width,
+            height=120,
+            margin=(0, 0, 0, 0),
+        )
+
+    if len(proteins) < 2:
+        return pn.pane.Markdown(
+            "**STRING enrichment**  \nSelect features from at least two parent proteins. "
+            "STRING expands single-protein queries, so single-protein enrichment is not shown here.",
+            styles={"background": "#f9f9f9", "padding": "10px", "border-radius": "8px"},
+            sizing_mode="stretch_width",
+            width=width,
+            height=120,
+            margin=(0, 0, 0, 0),
+        )
+
+    data = get_string_functional_enrichment(tuple(sorted(proteins)), int(species))
+    if not data:
+        return pn.pane.Markdown(
+            f"**STRING enrichment**  \nNo enriched terms returned for {len(proteins)} parent proteins.",
+            styles={"background": "#f9f9f9", "padding": "10px", "border-radius": "8px"},
+            sizing_mode="stretch_width",
+            width=width,
+            height=120,
+            margin=(0, 0, 0, 0),
+        )
+
+    return pn.Card(
+        pn.pane.Markdown(
+            f"### STRING enrichment  | {len(selected_feature_ids)} features → {len(proteins)} parent proteins",
+            margin=(0, 0, 5, 0),
+        ),
+        selected_table,
+        pn.Spacer(height=10),
+        make_string_category_table(data, "Process", "GO Biological Process"),
+        pn.Spacer(height=10),
+        make_string_category_table(data, "Function", "GO Molecular Function"),
+        pn.Spacer(height=10),
+        make_string_category_table(data, "Component", "GO Cellular Component"),
+        collapsible=False,
+        hide_header=True,
+        width=width,
+        styles={
+            "background": "#f9f9f9",
+            "border-radius": "8px",
+            "box-shadow": "3px 3px 5px #bcbcbc",
+            "padding": "10px",
+        },
+    )

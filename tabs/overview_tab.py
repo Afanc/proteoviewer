@@ -15,7 +15,8 @@ from components.overview_plots import (
 )
 from components.selection_export import (
     make_volcano_selection_downloader,
-    SelectionExportSpec
+    SelectionExportSpec,
+    extract_feature_ids_from_selected_data,
 )
 from components.plot_utils import plot_pca_2d, plot_umap_2d, plot_mds_2d
 from components.texts import (
@@ -37,6 +38,10 @@ from tabs.overview_shared import (
     bind_uirevision,
     wire_cohort_export_updates,
     filter_feature_ids_to_visible_volcano,
+    make_string_species_select,
+    feature_ids_to_string_proteins,
+    make_string_selected_feature_table,
+    make_string_enrichment_card,
 )
 from utils.layout_utils import (
     plotly_section,
@@ -115,6 +120,9 @@ def overview_tab(state: SessionState):
         if " | " in s:
             return s.rsplit(" | ", 1)[1].strip()
         return s
+
+    string_species_sel = make_string_species_select(width=190)
+    string_selected_feature_ids: list[str] = []
 
     ## Config Pane
     # Texts
@@ -436,7 +444,7 @@ def overview_tab(state: SessionState):
         highlight_group=group_ids_selected,
         sign_threshold=0.05,
         width=None,
-        height=900,
+        height=1150,
     )
 
     def _on_volcano_click(event):
@@ -460,7 +468,7 @@ def overview_tab(state: SessionState):
 
     volcano_plot = pn.pane.Plotly(
         volcano_dmap_wrapped,
-        height=900,
+        height=1150,
         margin=(0, 0, 0, 20),
         sizing_mode="stretch_width",
         config={'responsive': True},
@@ -482,7 +490,6 @@ def overview_tab(state: SessionState):
             label="Download selection",
         ),
     )
-    volcano_plot.param.watch(lambda e: _on_volcano_selected_data(e.new), "selected_data")
     volcano_plot.param.watch(lambda e: _on_volcano_click_data(e.new), "click_data")
 
     # Cohort changes must update the export state immediately (priority: click > cohort > lasso).
@@ -881,15 +888,38 @@ def overview_tab(state: SessionState):
     bar_holder  = pn.Column()
     pep_holder  = pn.Column()
 
+    #detail_panel = pn.Row(
+    #    pn.Column(
+    #        info_holder,
+    #        pn.Spacer(height=50),
+    #        bar_holder,
+    #        pn.Spacer(height=20),
+    #        pep_holder,
+    #        width=840,
+    #    ),
+    #    margin=(0, 0, 0, 0),
+    protein_detail_panel = pn.Column(
+        info_holder,
+        pn.Spacer(height=50),
+        bar_holder,
+        pn.Spacer(height=20),
+        pep_holder,
+        width=840,
+    )
+
+    string_enrichment_holder = pn.Column(
+        pn.Spacer(height=0),
+        width=840,
+        margin=(0, 0, 0, 0),
+    )
+
+    detail_mode_holder = pn.Column(
+        pn.Spacer(width=840, height=320),
+        width=840,
+    )
+
     detail_panel = pn.Row(
-        pn.Column(
-            info_holder,
-            pn.Spacer(height=50),
-            bar_holder,
-            pn.Spacer(height=20),
-            pep_holder,
-            width=840,
-        ),
+        detail_mode_holder,
         margin=(0, 0, 0, 0),
         styles={
             "margin-left": "auto",
@@ -897,6 +927,86 @@ def overview_tab(state: SessionState):
     )
 
     bokeh_doc = pn.state.curdoc  # for next-tick scheduling
+
+    def _selected_features_to_string_proteins(feature_ids: list[str]) -> list[str]:
+        # Protein-level workflows can usually use feature ids directly.
+        # Peptido/phospho features need parent protein ids when available.
+        return feature_ids_to_string_proteins(
+            adata,
+            feature_ids,
+            prefer_parent=(peptidomics_mode or phospho_mode),
+            parent_col="PARENT_PROTEIN",
+        )
+
+    def _render_string_enrichment():
+        proteins = _selected_features_to_string_proteins(string_selected_feature_ids)
+        return make_string_enrichment_card(
+            selected_feature_ids=string_selected_feature_ids,
+            proteins=proteins,
+            species=string_species_sel.value,
+            selected_table=make_string_selected_feature_table(
+                adata,
+                string_selected_feature_ids,
+                title="Selected features",
+                parent_col="PARENT_PROTEIN",
+            ),
+            width=820,
+        )
+
+    def _sync_detail_mode() -> None:
+        has_single_detail = bool(str(search_input.value or "").strip())
+        string_species_sel.visible = bool(string_selected_feature_ids)
+        layers_sel.visible = has_single_detail
+
+        if has_single_detail:
+            detail_mode_holder[:] = [protein_detail_panel]
+        elif string_selected_feature_ids:
+            detail_mode_holder[:] = [string_enrichment_holder]
+        else:
+            detail_mode_holder[:] = [pn.Spacer(width=840, height=320)]
+
+    def _update_string_enrichment(_=None) -> None:
+        string_enrichment_holder.loading = True
+        try:
+            try:
+                string_enrichment_holder[:] = [_render_string_enrichment()]
+            except Exception as exc:
+                string_enrichment_holder[:] = [pn.pane.Markdown(
+                    f"**STRING enrichment failed**  \n`{exc}`",
+                    styles={"background": "#fff3f3", "padding": "10px", "border-radius": "8px"},
+                    sizing_mode="stretch_width",
+                )]
+        finally:
+            string_enrichment_holder.loading = False
+        _sync_detail_mode()
+
+    def _on_normal_selected_data(event) -> None:
+        selected_data = event.new
+        _on_volcano_selected_data(selected_data)
+
+        if selected_data is None or selected_data == {}:
+            string_selected_feature_ids.clear()
+            _update_string_enrichment()
+            _sync_detail_mode()
+            return
+
+        if "points" in selected_data and not selected_data["points"]:
+            if selected_data.get("selector", "__missing__") is None:
+                return
+            string_selected_feature_ids.clear()
+            _update_string_enrichment()
+            _sync_detail_mode()
+            return
+
+        string_selected_feature_ids.clear()
+        string_selected_feature_ids.extend(extract_feature_ids_from_selected_data(selected_data))
+        _update_string_enrichment()
+        _sync_detail_mode()
+
+    # STRING enrichment handlers must be wired after the functions above exist.
+    volcano_plot.param.watch(_on_normal_selected_data, "selected_data")
+    string_species_sel.param.watch(_update_string_enrichment, "value")
+
 
     def _current_uniprot_id():
         token = search_input.value
@@ -930,6 +1040,7 @@ def overview_tab(state: SessionState):
     def _update_info(_=None):
         # No spinner here; it's cheap and we don't want a loader on empty states
         info_holder[:] = [_render_info()]
+        _sync_detail_mode()
 
     def _update_bar(_=None):
         protein = search_input.value
@@ -944,6 +1055,7 @@ def overview_tab(state: SessionState):
             bar_holder[:] = [_render_bar()]
         finally:
             bar_holder.loading = False
+        _sync_detail_mode()
 
     def _update_pep(_=None):
         if not search_input.value:
@@ -955,6 +1067,7 @@ def overview_tab(state: SessionState):
             pep_holder[:] = [_render_pep()]
         finally:
             pep_holder.loading = False
+        _sync_detail_mode()
 
     # Wire events:
     search_input.param.watch(lambda e: (_update_info(), _update_bar(), _update_pep()), "value")
@@ -962,7 +1075,7 @@ def overview_tab(state: SessionState):
     layers_sel.param.watch(lambda e: (_update_info(), _update_bar()), "value")
 
     # Initial fill (after the page paints so we don’t see a flash)
-    bokeh_doc.add_next_tick_callback(lambda: (_update_info(), _update_bar(), _update_pep()))
+    bokeh_doc.add_next_tick_callback(lambda: (_update_info(), _update_bar(), _update_pep(), _sync_detail_mode()))
 
     # assemble into a layout, no legend‐based toggles
     volcano_and_detail = pn.Row(
@@ -1009,7 +1122,9 @@ def overview_tab(state: SessionState):
             make_vr(),
             pn.Spacer(width=20),
             pn.Column(
-                pn.pane.Markdown("**Cohort Inspector**", align="start", margin=(-20,0,0,10)),
+                pn.pane.Markdown("**Cohort Inspector**",
+                                 align="start",
+                                 margin=(-20,0,0,10)),
                 search_field_sel,
             ),
             pn.Spacer(width=10),
@@ -1032,6 +1147,8 @@ def overview_tab(state: SessionState):
             pn.Row(layers_sel, margin = (-17,0,0,0)),
             pn.Spacer(width=20),
             download_selection,
+            pn.Spacer(width=20),
+            string_species_sel,
             width=300,
             height=80,
         ),
@@ -1045,7 +1162,8 @@ def overview_tab(state: SessionState):
         }
     )
 
-    volcano_pane.height = pn.bind(lambda ids: 1200 if ids else 1060, group_ids_selected)
+    volcano_pane.height = pn.bind(lambda ids: 1450 if ids else 1320,
+                                  group_ids_selected)
 
     # Tab layout
     layout = pn.Column(

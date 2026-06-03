@@ -31,7 +31,7 @@ from components.texts import (
     intro_preprocessing_text,
     log_transform_text
 )
-from components.string_links import get_string_link, get_string_functional_enrichment
+from components.string_links import get_string_link
 from tabs.overview_shared import (
     make_id_sort_toggle,
     sort_arg,
@@ -46,6 +46,9 @@ from tabs.overview_shared import (
     bind_uirevision,
     wire_cohort_export_updates,
     filter_feature_ids_to_visible_volcano,
+    make_string_species_select,
+    feature_ids_to_string_proteins,
+    make_string_enrichment_card,
 )
 from utils.layout_utils import (
     plotly_section,
@@ -134,167 +137,15 @@ def overview_tab_pelsa(state: SessionState):
             return s.rsplit(" | ", 1)[1].strip()
         return s
 
-    string_species_options = {
-        "Select species": None,
-        "Homo sapiens": 9606,
-        "Mus musculus": 10090,
-        "Arabidopsis thaliana": 3702,
-        "Saccharomyces cerevisiae": 4932,
-        "Drosophila melanogaster": 7227,
-        "Escherichia coli K-12": 511145,
-        "Pseudomonas aeruginosa PAO1": 208964,
-    }
-
-    string_species_sel = pn.widgets.Select(
-        name="Species (for STRING)",
-        options=string_species_options,
-        value=None,
-        width=190,
-    )
-    string_species_sel.visible = False
+    string_species_sel = make_string_species_select(width=190)
     string_selected_feature_ids: list[str] = []
 
     def _selected_peptides_to_parent_proteins(feature_ids: list[str]) -> list[str]:
-        if not feature_ids:
-            return []
-        if "PARENT_PROTEIN" not in adata.var.columns:
-            raise KeyError(
-                "STRING enrichment requires adata.var['PARENT_PROTEIN'] for PELSA selections. "
-                f"Available columns={list(adata.var.columns)!r}"
-            )
-
-        var_names = set(map(str, adata.var_names))
-        missing = [str(x) for x in feature_ids if str(x) not in var_names]
-        if missing:
-            raise ValueError(
-                "STRING enrichment selection contains peptide ids not found in adata.var_names. "
-                f"Examples={missing[:10]!r}"
-            )
-
-        parents = adata.var.reindex([str(x) for x in feature_ids])["PARENT_PROTEIN"]
-
-        out = []
-        seen = set()
-        for value in parents.astype(str):
-            for token in value.split(";"):
-                protein = token.strip()
-                if not protein or protein.lower() in {"nan", "none"}:
-                    continue
-                if protein not in seen:
-                    seen.add(protein)
-                    out.append(protein)
-        return out
-
-    def _string_category_table(data: list[dict], category: str, title: str):
-        df = pd.DataFrame(data)
-        if df.empty or "category" not in df.columns:
-            return pn.pane.Markdown(
-                f"**{title}**  \nNo enriched terms.",
-                margin=(0, 0, 0, 0),
-            )
-
-        sub = df[df["category"].astype(str) == category].copy()
-        if sub.empty:
-            return pn.pane.Markdown(
-                f"**{title}**  \nNo enriched terms.",
-                margin=(0, 0, 0, 0),
-            )
-
-        required = {"term", "description", "number_of_genes", "number_of_genes_in_background", "p_value", "fdr"}
-        missing = sorted(required - set(sub.columns))
-        if missing:
-            raise ValueError(
-                "STRING enrichment result is missing required fields. "
-                f"Missing={missing}; present={list(sub.columns)!r}"
-            )
-
-        sub["fdr_num"] = pd.to_numeric(sub["fdr"], errors="raise")
-        sub = (
-            sub[sub["fdr_num"] <= 0.05]
-            .sort_values("fdr_num", ascending=True, kind="mergesort")
-            .copy()
-        )
-
-        if sub.empty:
-            return pn.pane.Markdown(
-                f"**{title}**  \nNo significant terms at FDR ≤ 0.05.",
-                margin=(0, 0, 0, 0),
-            )
-
-        disp = pd.DataFrame({
-            "Domain": sub["term"].astype(str).values,
-            "Description": sub["description"].astype(str).values,
-            "Count in network": (
-                pd.to_numeric(sub["number_of_genes"], errors="coerce")
-                .astype("Int64")
-                .astype(str)
-                .values
-            ),
-            "Count in background": (
-                pd.to_numeric(sub["number_of_genes_in_background"], errors="coerce")
-                .astype("Int64")
-                .astype(str)
-                .values
-            ),
-            #"p-value": pd.to_numeric(sub["p_value"], errors="raise").map(lambda x: f"{x:.3e}").values,
-            "FDR": sub["fdr_num"].map(lambda x: f"{x:.3e}").values,
-        })
-
-        row_h, header_h = 30, 30
-        visible_rows = min(max(len(disp), 1), 7)
-        table_h = row_h * visible_rows + header_h
-
-        tbl = pn.widgets.Tabulator(
-            disp,
-            show_index=False,
-            disabled=True,
-            layout="fit_columns",
-            height=190,
-            sizing_mode="stretch_width",
-            pagination=None,
-            selectable=True,
-            sortable=True,
-            widths={
-                "Domain": 110,
-                "Description": 350,
-                "Count in network": 100,
-                "Count in background": 100,
-                "FDR": 90,
-            },
-            configuration={
-                "rowHeight": 30,
-                "columnDefaults": {"editor": False, "headerSort": False},
-            },
-            margin=(-5,8,8,8),
-        )
-
-        safe_title = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(title).strip()).strip("_")
-        download_btn = pn.widgets.Button(
-            name="Download",
-            button_type="success",
-            width=90,
-            margin=(0, 0, 0, 0),
-        )
-
-        def _download_string_table(event):
-            tbl.download(filename=f"proteoflux_string_{safe_title or 'table'}.csv")
-
-        download_btn.on_click(_download_string_table)
-
-        header = pn.Row(
-            pn.pane.Markdown(f"**{title}**", styles={"font-size": "15px", "padding": "0"}),
-            pn.Spacer(sizing_mode="stretch_width"),
-            download_btn,
-            sizing_mode="stretch_width",
-        )
-
-        return pn.Card(
-            header,
-            tbl,
-            collapsible=False,
-            hide_header=True,
-            sizing_mode="stretch_width",
-            styles={"background": "#f9f9f9", "border-radius": "8px", "padding": "6px"},
+        return feature_ids_to_string_proteins(
+            adata,
+            feature_ids,
+            prefer_parent=True,
+            parent_col="PARENT_PROTEIN",
         )
 
     def _selected_peptide_table(feature_ids: list[str]):
@@ -776,64 +627,14 @@ def overview_tab_pelsa(state: SessionState):
     )
 
     def _render_string_enrichment():
-        if not string_selected_feature_ids:
-            return pn.Spacer(width=840, height=320)
-
-        species = string_species_sel.value
-        if species is None:
-            return pn.pane.Markdown(
-                "**STRING enrichment**  \nSelect a species to run enrichment on the current box/lasso selection.",
-                styles={"background": "#f9f9f9", "padding": "10px", "border-radius": "8px"},
-                width=820,
-                height=120,
-                margin=(0,0,0,0),
-            )
-
         proteins = _selected_peptides_to_parent_proteins(string_selected_feature_ids)
-        if len(proteins) < 2:
-            return pn.pane.Markdown(
-                "**STRING enrichment**  \nSelect peptides from at least two parent proteins. "
-                "STRING expands single-protein queries, so single-protein enrichment is not shown here.",
-                styles={"background": "#f9f9f9", "padding": "10px", "border-radius": "8px"},
-                sizing_mode="stretch_width",
-                width=820,
-                height=120,
-                margin=(0,0,0,0),
-            )
-
-        data = get_string_functional_enrichment(tuple(sorted(proteins)), int(species))
-        if not data:
-            return pn.pane.Markdown(
-                f"**STRING enrichment**  \nNo enriched terms returned for {len(proteins)} parent proteins.",
-                styles={"background": "#f9f9f9", "padding": "10px", "border-radius": "8px"},
-                sizing_mode="stretch_width",
-                width=820,
-                height=120,
-                margin=(0,0,0,0),
-            )
-
-        return pn.Card(
-            pn.pane.Markdown(
-                f"### STRING GO enrichment  | {len(string_selected_feature_ids)} peptides → {len(proteins)} parent proteins",
-                margin=(0, 0, 5, 0),
-            ),
-            _selected_peptide_table(string_selected_feature_ids),
-            pn.Spacer(height=10),
-            _string_category_table(data, "Process", "GO Biological Process"),
-            pn.Spacer(height=10),
-            _string_category_table(data, "Function", "GO Molecular Function"),
-            pn.Spacer(height=10),
-            _string_category_table(data, "Component", "GO Cellular Component"),
-            collapsible=False,
-            hide_header=True,
+        return make_string_enrichment_card(
+            selected_feature_ids=string_selected_feature_ids,
+            proteins=proteins,
+            species=string_species_sel.value,
+            selected_table=_selected_peptide_table(string_selected_feature_ids),
             width=820,
-            styles={
-                "background": "#f9f9f9",
-                "border-radius": "8px",
-                "box-shadow": "3px 3px 5px #bcbcbc",
-                "padding": "10px",
-            },
-        )
+         )
 
     def _update_string_enrichment(_=None) -> None:
         string_enrichment_holder.loading = True
@@ -871,7 +672,6 @@ def overview_tab_pelsa(state: SessionState):
 
         string_selected_feature_ids.clear()
         string_selected_feature_ids.extend(extract_feature_ids_from_selected_data(selected_data))
-        string_species_sel.visible = bool(string_selected_feature_ids)
         _update_string_enrichment()
         _sync_detail_mode()
 
@@ -1049,7 +849,10 @@ def overview_tab_pelsa(state: SessionState):
     pep_holder  = pn.Column()
     structure_holder = pn.Column()
     table_holder  = pn.Column()
-    detail_mode_holder = pn.Column()
+    detail_mode_holder = pn.Column(
+        pn.Spacer(width=840, height=320),
+        width=840,
+    )
 
     peptide_detail_panel = pn.Column(
         pn.Row(
@@ -1076,10 +879,9 @@ def overview_tab_pelsa(state: SessionState):
 
     detail_panel = pn.Row(
         detail_mode_holder,
-        margin=(0, 0, 0, 0),
+        margin=(0, 20, 0, 0),
         styles={
             "margin-left": "auto",
-            #"flex": "1.0",
         }
     )
 
@@ -1094,12 +896,16 @@ def overview_tab_pelsa(state: SessionState):
         """
         has_single_detail = bool(str(search_input.value or "").strip())
         structure_controls.visible = has_single_detail
+        string_species_sel.visible = bool(string_selected_feature_ids)
 
         if has_single_detail:
             detail_mode_holder[:] = [peptide_detail_panel]
+            detail_mode_holder.width = 1300
         elif string_selected_feature_ids:
             detail_mode_holder[:] = [string_enrichment_holder]
+            detail_mode_holder.width = 840
         else:
+            detail_mode_holder.width = 840
             detail_mode_holder[:] = [pn.Spacer(width=840, height=320)]
 
     def _render_info():
