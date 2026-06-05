@@ -35,6 +35,8 @@ a = Analysis(
         'fastcluster',
         'binascii',
         'skmisc',
+        'tkinter',
+        'tkinter.filedialog',
     ],
     hookspath=[],
     runtime_hooks=['utils/rthook_logging.py'],

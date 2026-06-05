@@ -345,8 +345,27 @@ def _build_header(area_center, version: str, dev_flag: bool) -> pn.Column:
     return pn.Column(mainbar, sizing_mode="stretch_width", css_classes=["pv-header"])
 
 def pick_h5ad_path(title="Select .h5ad file") -> str | None:
-    """Native system dialog for local dev; no-op on server."""
-    if not DEV:
+    """Native system dialog for local dev / Windows desktop; no-op on server."""
+    if not (DEV or DESKTOP):
+         return None
+
+    # Windows frozen executable: use stdlib tkinter to avoid shipping Qt just for a dialog.
+    if DESKTOP:
+        import tkinter as tk
+        from tkinter import filedialog
+
+        root = tk.Tk()
+        root.withdraw()
+        root.attributes("-topmost", True)
+        try:
+            path = filedialog.askopenfilename(
+                title=title,
+                filetypes=[("AnnData H5AD", "*.h5ad"), ("All files", "*.*")],
+            )
+            return path or None
+        finally:
+            root.destroy()
+
         return None
     from PySide6.QtWidgets import QApplication, QFileDialog
     from PySide6.QtCore import QUrl, QStandardPaths
@@ -502,8 +521,8 @@ def _session_id():
 @log_time("Building app")
 def build_app():
     """
-    - DEV: native file picker (no /mnt/data copy)
-    - SERVER: Panel FileInput; copy to /mnt/data/proteoviewer_uploads/<session>/ then load
+    - DEV/DESKTOP: native file picker, read local .h5ad directly.
+    - SERVER: HTTP upload to server-side storage, then read uploaded .h5ad.
     """
     status   = pn.pane.Markdown("### Please load a .h5ad ProteoFlux file.", margin=(0,0,0,10))
     content  = pn.Column(pn.Spacer(height=1),
@@ -525,8 +544,8 @@ def build_app():
             pass
         status.object = f"**Loaded:** {fname}"
 
-    # ---- DEV UI ----
-    if DEV:
+    # ---- Local UI: dev + Windows desktop executable ----
+    if DEV or DESKTOP:
         pick_btn = pn.widgets.Button(name="Browse system files", button_type="primary")
 
         # Native system file dialog (loads directly from path)
@@ -538,9 +557,22 @@ def build_app():
                 if not path:
                     status.object = "Selection cancelled."
                     return
-                status.object = "Loading…"
-                adata = read_h5ad(path)
-                _load(adata, os.path.basename(path))
+
+                fname = os.path.basename(path)
+                status.object = f"Loading `{fname}`…"
+                logging.info("Loading local h5ad: %s", path)
+
+                # Let the browser receive the status update before blocking on read_h5ad.
+                def _do_load():
+                    try:
+                        adata = read_h5ad(path)
+                        _load(adata, fname)
+                    except Exception as e:
+                        import traceback
+                        status.object = f"**Error loading `{fname}`:** {e}"
+                        print("[local file picker] EXCEPTION:", e, "\n", traceback.format_exc(), flush=True)
+
+                pn.state.curdoc.add_next_tick_callback(_do_load)
             except Exception as e:
                 import traceback
                 status.object = f"**Error (system dialog):** {e}"
@@ -555,16 +587,17 @@ def build_app():
             sizing_mode="stretch_width",
         )
 
-        # Optional autoload in dev
-        try:
-            from anndata import read_h5ad
-            #adata = read_h5ad("data/proteoflux_results_pelsa.h5ad")
-            #adata = read_h5ad("data/proteoflux_results_phospho.h5ad")
-            adata = read_h5ad("data/proteoflux_results.h5ad")
-            _load(adata, "proteoflux_results.h5ad")
-            logging.info("DEV autoload successful.")
-        except Exception:
-            logging.exception("DEV autoload failed; starting with empty UI.")
+        # Optional autoload in dev only, never in packaged desktop mode.
+        if DEV:
+            try:
+                from anndata import read_h5ad
+                #adata = read_h5ad("data/proteoflux_results_pelsa.h5ad")
+                #adata = read_h5ad("data/proteoflux_results_phospho.h5ad")
+                adata = read_h5ad("data/proteoflux_results.h5ad")
+                _load(adata, "proteoflux_results.h5ad")
+                logging.info("DEV autoload successful.")
+            except Exception:
+                logging.exception("DEV autoload failed; starting with empty UI.")
 
     # ---- SERVER UI ----
     else:
