@@ -4,8 +4,10 @@ import os
 import re
 from typing import Callable, Iterable, Optional, Sequence
 
+import numpy as np
 import pandas as pd
 import panel as pn
+from bokeh.models.widgets.tables import NumberFormatter
 
 from components.string_links import get_string_functional_enrichment
 from components.overview_plots import (
@@ -840,6 +842,7 @@ def make_string_selected_feature_table(
     *,
     title: str = "Selected features",
     parent_col: str = "PARENT_PROTEIN",
+    contrast: str | None = None,
 ) -> pn.viewable.Viewable:
     if not feature_ids:
         return pn.Spacer(width=820, height=0)
@@ -847,7 +850,43 @@ def make_string_selected_feature_table(
     ids = [str(x) for x in feature_ids]
     var = adata.var.reindex(ids)
 
+    def _contrast_index() -> int | None:
+        if contrast is None:
+            return None
+        try:
+            contrast_names = list(map(str, adata.uns["contrast_names"]))
+            return contrast_names.index(str(contrast))
+        except Exception:
+            return None
+
+    def _varm_vector(candidates: tuple[str, ...]) -> pd.Series:
+        j = _contrast_index()
+        if j is None:
+            return pd.Series(np.nan, index=ids, dtype=float)
+
+        pos = adata.var.index.get_indexer(ids)
+        valid = pos >= 0
+
+        for key in candidates:
+            if key not in adata.varm:
+                continue
+            arr = np.asarray(adata.varm[key])
+            if arr.ndim != 2 or arr.shape[1] <= j:
+                continue
+
+            out = np.full(len(ids), np.nan, dtype=float)
+            out[valid] = arr[pos[valid], j]
+            return pd.Series(out, index=ids, dtype=float)
+
+        return pd.Series(np.nan, index=ids, dtype=float)
+
     disp = pd.DataFrame({"Feature": ids})
+    disp["log₂ FC"] = _varm_vector(("log2fc", "log2_fc", "logFC", "logfc")).values
+    disp["q-value"] = _varm_vector(("qvalue", "qval", "q", "q_ebayes")).map(
+        lambda x: f"{x:.3e}" if np.isfinite(x) else "nan"
+    ).values
+
+
     if "GENE_NAMES" in adata.var.columns:
         disp["Gene"] = var["GENE_NAMES"].astype(str).values
     if parent_col in adata.var.columns:
@@ -863,6 +902,9 @@ def make_string_selected_feature_table(
         height=min(max(len(disp), 1), 5) * 30 + 30,
         pagination=None,
         sizing_mode="stretch_width",
+        formatters={
+            "log₂ FC": NumberFormatter(format="0.000"),
+        },
         configuration={
             "rowHeight": 30,
             "columnDefaults": {"editor": False, "headerSort": True},

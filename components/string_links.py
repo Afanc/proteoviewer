@@ -2,7 +2,7 @@ import requests
 from functools import lru_cache
 
 # Reasonable timeouts: (connect, read) seconds
-_DEFAULT_TIMEOUT = (3.0, 5.0)
+_DEFAULT_TIMEOUT = (5.0, 30.0)
 
 STRING_API_URL = "https://version-12-0.string-db.org/api"
 STRING_CALLER_IDENTITY = "proteoviewer_biozentrum_pcf_unibas"

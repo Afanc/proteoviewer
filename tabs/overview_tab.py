@@ -949,6 +949,7 @@ def overview_tab(state: SessionState):
                 string_selected_feature_ids,
                 title="Selected features",
                 parent_col="PARENT_PROTEIN",
+                contrast=str(contrast_sel.value),
             ),
             width=820,
         )
