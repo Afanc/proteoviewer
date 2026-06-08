@@ -6,7 +6,16 @@ from typing import Tuple, List, Optional, Set
 import plotly.graph_objects as go
 import plotly.express as px
 from plotly.subplots import make_subplots
-from components.plot_utils import plot_stacked_proteins_by_category, plot_violins, compute_metric_by_condition, get_color_map, plot_cluster_heatmap_plotly, plot_volcanoes, get_volcano_classification_masks
+from components.plot_utils import (
+    plot_stacked_proteins_by_category,
+    plot_violins,
+    compute_metric_by_condition,
+    get_color_map,
+    plot_cluster_heatmap_plotly,
+    plot_volcanoes,
+    get_volcano_classification_masks,
+)
+from components.domain_annotations import fetch_interpro_representative_domains
 
 from utils.utils import logger, log_time
 
@@ -1457,6 +1466,133 @@ def _pelsa_global_significance_cmax(adata, sign_threshold: float) -> float:
         return sign_score
     return max(sign_score, float(np.nanmax(scores)))
 
+
+def _add_pelsa_domain_strip(
+    fig: go.Figure,
+    *,
+    domains,
+    protein_len: int,
+    y_center: float,
+    halfheight: float,
+) -> None:
+    """
+    Add a compact InterPro representative-domain strip to the bottom of the
+    local stability profile.
+
+    Rectangles provide the visual layer; transparent line traces provide hover.
+    """
+    palette = (
+        px.colors.qualitative.Set3
+        + px.colors.qualitative.Pastel
+        + px.colors.qualitative.Plotly
+    )
+
+    y0 = y_center - halfheight
+    y1 = y_center + halfheight
+
+    # Empty/background strip. This keeps the visual layout stable and makes
+    # "no representative/Pfam domains" look intentional rather than broken.
+    fig.add_shape(
+        type="rect",
+        xref="x",
+        yref="y",
+        x0=0,
+        x1=max(float(protein_len), 1.0),
+        y0=y0,
+        y1=y1,
+        fillcolor="rgba(230,230,230,0.55)",
+        line=dict(color="white", width=1),
+        layer="below",
+    )
+
+    # Thin visual separator between peptide profile and domain strip.
+    fig.add_shape(
+        type="line",
+        xref="x",
+        yref="y",
+        x0=0,
+        x1=max(float(protein_len), 1.0),
+        y0=y1 + halfheight * 0.65,
+        y1=y1 + halfheight * 0.65,
+        line=dict(color="white", width=2),
+        layer="above",
+    )
+
+    if not domains:
+        fig.add_annotation(
+            x=max(float(protein_len), 1.0) * 0.5,
+            y=y_center,
+            xref="x",
+            yref="y",
+            text="No representative domains",
+            showarrow=False,
+            xanchor="center",
+            yanchor="middle",
+            font=dict(size=9, color="#777"),
+        )
+
+    for i, dom in enumerate(domains):
+        start = max(1.0, float(dom.start))
+        end = min(float(protein_len), float(dom.end))
+        if not np.isfinite(start) or not np.isfinite(end) or end <= start:
+            continue
+
+        color = palette[i % len(palette)]
+        fig.add_shape(
+            type="rect",
+            xref="x",
+            yref="y",
+            x0=start,
+            x1=end,
+            y0=y0,
+            y1=y1,
+            fillcolor=color,
+            opacity=0.85,
+            line=dict(color="white", width=1),
+            layer="below",
+        )
+
+        n_hit = max(6, int(np.ceil((end - start) / 8.0)))
+        hit_x = np.linspace(start, end, n_hit)
+        hit_y = np.full(n_hit, y_center, dtype=float)
+        customdata = np.array([[
+            dom.name,
+            dom.accession,
+            dom.source,
+            start,
+            end,
+        ]] * n_hit, dtype=object)
+
+        fig.add_trace(go.Scatter(
+            x=hit_x,
+            y=hit_y,
+            mode="lines+markers",
+            line=dict(color="rgba(0,0,0,0)", width=max(10, halfheight * 18)),
+            marker=dict(size=max(8, halfheight * 10), color="rgba(0,0,0,0.001)"),
+            customdata=customdata,
+            hovertemplate=(
+                "Domain: %{customdata[0]}<br>"
+                "Accession: %{customdata[1]}<br>"
+                "Source: %{customdata[2]}<br>"
+                "Position: %{customdata[3]:.0f}–%{customdata[4]:.0f}<extra></extra>"
+            ),
+            showlegend=False,
+        ))
+
+    fig.add_annotation(
+        x=0,
+        y=y_center,
+        xref="x",
+        yref="y",
+        text="Domains",
+        showarrow=False,
+        xanchor="right",
+        yanchor="middle",
+        xshift=-6,
+        font=dict(size=10, color="#555"),
+    )
+
+
 def plot_pelsa_local_stability_profile(
     state,
     peptide_id: str,
@@ -1509,6 +1645,13 @@ def plot_pelsa_local_stability_profile(
     protein_len = int(round(float(length_vals.max())))
     if protein_len <= 0:
         raise ValueError(f"Invalid PROTEIN_LENGTH_ESTIMATE_AA for parent {parent!r}: {protein_len}")
+
+    domain_result = fetch_interpro_representative_domains(parent)
+    domains = list(domain_result.domains or [])
+    if domain_result.protein_length is not None and int(domain_result.protein_length) > 0:
+        # Prefer real InterPro/UniProt sequence length when available, but never
+        # shrink below observed peptide coordinates.
+        protein_len = max(protein_len, int(domain_result.protein_length))
 
     plot_df = pd.DataFrame(index=sibling_ids)
     plot_df["start"] = siblings["PEPTIDE_START"].astype(float).to_numpy()
@@ -1573,6 +1716,12 @@ def plot_pelsa_local_stability_profile(
     yvals = plot_df["range_log2"].to_numpy(dtype=float)
     ymax = max(1.0, float(np.nanmax(np.abs(yvals))) * 1.15)
     peptide_halfheight = max(0.025 * ymax, 0.08)
+
+    protein_len = max(protein_len, int(np.ceil(float(plot_df["end"].max()))))
+
+    domain_halfheight = peptide_halfheight
+    domain_y = -ymax - 2.25 * peptide_halfheight
+    y_min = domain_y - 1.65 * domain_halfheight
 
 
     for (_, row), color in zip(plot_df.iterrows(), colors):
@@ -1645,6 +1794,14 @@ def plot_pelsa_local_stability_profile(
             showlegend=False,
         ))
 
+    _add_pelsa_domain_strip(
+        fig,
+        domains=domains,
+        protein_len=protein_len,
+        y_center=domain_y,
+        halfheight=domain_halfheight,
+    )
+
     title_parent = parent.split(";", 1)[0]
     fig.update_layout(
         title=dict(text=f"Local stability profile", x=0.5),
@@ -1652,7 +1809,7 @@ def plot_pelsa_local_stability_profile(
         width=width,
         margin=dict(l=55, r=20, t=50, b=45),
         xaxis=dict(title="Protein position (aa)", range=[0, max(protein_len, float(plot_df["end"].max()))]),
-        yaxis=dict(title="Range log₂", range=[-ymax, ymax], zeroline=True, zerolinecolor="black"),
+        yaxis=dict(title="Range log₂", range=[y_min, ymax], zeroline=True, zerolinecolor="black"),
     )
     return fig
 
