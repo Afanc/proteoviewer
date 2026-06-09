@@ -782,6 +782,9 @@ def overview_tab_pelsa(state: SessionState):
                 f"<span style='font-size: 12px;'>"
                 f"🔗 <a href='https://www.uniprot.org/uniprotkb/{parent_uniprot}/entry' "
                 f"target='_blank' rel='noopener'>UniProt Entry</a>"
+                f" &nbsp;|&nbsp; "
+                f"<a href='https://www.ebi.ac.uk/interpro/protein/reviewed/{parent_uniprot}/' "
+                f"target='_blank' rel='noopener'>InterPro Entry</a>"
                 + (
                     f" &nbsp;|&nbsp; "
                     f"<a href='{string_link_for_footer}' target='_blank' rel='noopener'>STRING Entry</a>"
