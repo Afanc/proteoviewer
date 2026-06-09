@@ -194,7 +194,7 @@ ProteoViewer is a companion application to [Proteoflux](https://github.com/Afanc
 
 If you use ProteoFlux in your work, please cite:
 
-ProteoFlux v1.8.5.
-Zenodo. https://doi.org/10.5281/zenodo.18640999
+ProteoFlux (latest version).
+Zenodo. https://doi.org/10.5281/zenodo.18640998
 
 A peer-reviewed publication is currently under submission.
