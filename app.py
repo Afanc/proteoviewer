@@ -546,7 +546,6 @@ def build_app():
 
     # ---- Local UI: dev + any Windows local run (.exe or Anaconda/Python) ----
     if DEV or sys.platform == "win32":
-    if DEV or DESKTOP:
         pick_btn = pn.widgets.Button(name="Browse system files", button_type="primary")
 
         # Native system file dialog (loads directly from path)
