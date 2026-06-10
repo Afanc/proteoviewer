@@ -345,12 +345,12 @@ def _build_header(area_center, version: str, dev_flag: bool) -> pn.Column:
     return pn.Column(mainbar, sizing_mode="stretch_width", css_classes=["pv-header"])
 
 def pick_h5ad_path(title="Select .h5ad file") -> str | None:
-    """Native system dialog for local dev / Windows desktop; no-op on server."""
-    if not (DEV or DESKTOP):
-         return None
+    """Native system dialog for local dev / Windows local runs; no-op on Linux server."""
+    if not (DEV or sys.platform == "win32"):
+        return None
 
-    # Windows frozen executable: use stdlib tkinter to avoid shipping Qt just for a dialog.
-    if DESKTOP:
+    # Windows local use: frozen .exe and Anaconda/Python both use stdlib tkinter.
+    if sys.platform == "win32":
         import tkinter as tk
         from tkinter import filedialog
 
@@ -544,7 +544,8 @@ def build_app():
             pass
         status.object = f"**Loaded:** {fname}"
 
-    # ---- Local UI: dev + Windows desktop executable ----
+    # ---- Local UI: dev + any Windows local run (.exe or Anaconda/Python) ----
+    if DEV or sys.platform == "win32":
     if DEV or DESKTOP:
         pick_btn = pn.widgets.Button(name="Browse system files", button_type="primary")
 
@@ -591,9 +592,9 @@ def build_app():
         if DEV:
             try:
                 from anndata import read_h5ad
-                #adata = read_h5ad("data/proteoflux_results_pelsa.h5ad")
+                adata = read_h5ad("data/proteoflux_results_pelsa.h5ad")
                 #adata = read_h5ad("data/proteoflux_results_phospho.h5ad")
-                adata = read_h5ad("data/proteoflux_results.h5ad")
+                #adata = read_h5ad("data/proteoflux_results.h5ad")
                 _load(adata, "proteoflux_results.h5ad")
                 logging.info("DEV autoload successful.")
             except Exception:
@@ -748,8 +749,8 @@ if __name__ == "__main__":
             websocket_max_message_size=2000 * 1024 * 1024,
             http_server_kwargs={"max_buffer_size": 2000 * 1024 * 1024},
         )
-    elif DESKTOP:
-        # Windows EXE: local single-process server (no num_procs), open browser
+    elif sys.platform == "win32":
+        # Windows local run: .exe or Anaconda/Python; single-process local server, open browser
         port = get_free_port()
         pn.serve(
             target,
