@@ -42,6 +42,7 @@ from tabs.overview_shared import (
     feature_ids_to_string_proteins,
     make_string_selected_feature_table,
     make_string_enrichment_card,
+    metadata_list,
 )
 from utils.layout_utils import (
     plotly_section,
@@ -136,7 +137,7 @@ def overview_tab(state: SessionState):
     peptidomics_mode = analysis_type in {"peptido", "peptidomics"}
     phospho_mode = analysis_type in {"phospho", "phosphoproteomics"}
     ebayes_method  = analysis_cfg.get("ebayes_method", "limma")
-    batch_cols = analysis_cfg.get("batch_effect_columns", None)
+    batch_cols = metadata_list(analysis_cfg.get("batch_effect_columns", None))
     input_layout  = preproc_cfg.get("input_layout", "")
 
     num_samples = len(adata.obs.index.unique())
@@ -217,10 +218,8 @@ def overview_tab(state: SessionState):
     # format batch info (single line, appended to DE line)
     batch_txt = ""
     if batch_cols:
-        if isinstance(batch_cols, (list, tuple)):
-            batch_txt = f" (batch effect columns: {', '.join(map(str, batch_cols))})"
-        else:
-            batch_txt = f" (batch effect column: {batch_cols})"
+        label = "columns" if len(batch_cols) > 1 else "column"
+        batch_txt = f" (batch effect {label}: {', '.join(map(str, batch_cols))})"
 
     # build a single Markdown string
     summary_md = textwrap.dedent(f"""

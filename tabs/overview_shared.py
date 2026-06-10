@@ -31,6 +31,30 @@ STRING_SPECIES_OPTIONS = {
     "Pseudomonas aeruginosa PAO1": 208964,
 }
 
+
+def metadata_list(value) -> list:
+    """
+    Normalize AnnData/HDF5 metadata values to a plain Python list.
+
+    AnnData may round-trip empty YAML lists as empty NumPy arrays. Those
+    cannot be used directly in truth-value checks, e.g. ``if value``.
+    """
+    if value is None:
+        return []
+
+    if isinstance(value, str):
+        value = value.strip()
+        return [value] if value else []
+
+    if isinstance(value, np.ndarray):
+        return [x for x in value.tolist() if str(x).strip()]
+
+    if isinstance(value, (list, tuple, set, pd.Index, pd.Series)):
+        return [x for x in list(value) if str(x).strip()]
+
+    return [value]
+
+
 def make_id_sort_toggle(*, margin=(20, 0, 0, 20), width=170) -> pn.widgets.RadioButtonGroup:
     return pn.widgets.RadioButtonGroup(
         name="Order",
