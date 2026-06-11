@@ -205,7 +205,10 @@ def _build_pipeline_summary(adata) -> str:
     multisite_mode = str(phospho_cfg.get("multisite_collapse_policy", "explode") or "explode")
     ebayes_method = analysis.get("ebayes_method", "limma")
     input_layout = preproc.get("input_layout", "")
-    quant_method = preproc.get("quantification_method", "sum")
+    quant_method = preproc.get("quantification", {}).get("peptide_rollup_method", "sum")
+    if quant_method == "directlfq":
+        min_nonan = preproc_cfg.get("quantification").get("directlfq_min_nonan", 1)
+        quant_method += f", min nonan={min_nonan}"
 
     pf_version = adata.uns['proteoflux'].get("pf_version", 0.0)
 

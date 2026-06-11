@@ -272,7 +272,7 @@ def overview_tab_pelsa(state: SessionState):
     num_replicates = len(adata.obs["REPLICATE"].astype(str).unique())
     num_concentrations = len(adata.obs[concentration_group_key].unique())
 
-    quant_method = preproc_cfg.get("quantification", {}).get("method", "sum")
+    quant_method = preproc_cfg.get("quantification", {}).get("peptide_rollup_method", "sum")
     if quant_method == "directlfq":
         min_nonan = preproc_cfg.get("quantification").get("directlfq_min_nonan", 1)
         quant_method += f", min nonan={min_nonan}"

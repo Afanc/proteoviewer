@@ -144,7 +144,10 @@ def overview_tab(state: SessionState):
     num_conditions = len(adata.obs["CONDITION"].unique())
     num_contrasts = int(num_conditions*(num_conditions-1)/2)
 
-    quant_method = preproc_cfg.get("quantification", {}).get("method", "sum")
+    quant_method = preproc_cfg.get("quantification", {}).get("protein_rollup_method", "sum")
+    if peptidomics_mode:
+        quant_method = preproc_cfg.get("quantification", {}).get("peptide_rollup_method", "sum")
+
     if quant_method == "directlfq":
         min_nonan = preproc_cfg.get("quantification").get("directlfq_min_nonan", 1)
         quant_method += f", min nonan={min_nonan}"
