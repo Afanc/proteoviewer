@@ -39,7 +39,7 @@ DEV = os.getenv("PV_DEV", "0") == "1"
 FROZEN = bool(getattr(sys, "frozen", False))
 DESKTOP = (sys.platform == "win32") and FROZEN
 
-APP_VERSION_DESKTOP = "1.9.0"
+APP_VERSION_DESKTOP = "1.9.1"
 
 def _resource_file(name: str) -> Path:
     """
