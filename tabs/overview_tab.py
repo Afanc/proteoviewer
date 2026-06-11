@@ -929,6 +929,7 @@ def overview_tab(state: SessionState):
     )
 
     bokeh_doc = pn.state.curdoc  # for next-tick scheduling
+    string_parent_col = "UNIPROT" if peptidomics_mode else "PARENT_PROTEIN"
 
     def _selected_features_to_string_proteins(feature_ids: list[str]) -> list[str]:
         # Protein-level workflows can usually use feature ids directly.
@@ -937,7 +938,7 @@ def overview_tab(state: SessionState):
             adata,
             feature_ids,
             prefer_parent=(peptidomics_mode or phospho_mode),
-            parent_col="PARENT_PROTEIN",
+            parent_col=string_parent_col,
         )
 
     def _render_string_enrichment():
@@ -950,7 +951,7 @@ def overview_tab(state: SessionState):
                 adata,
                 string_selected_feature_ids,
                 title="Selected features",
-                parent_col="PARENT_PROTEIN",
+                parent_col=string_parent_col,
                 contrast=str(contrast_sel.value),
             ),
             width=820,

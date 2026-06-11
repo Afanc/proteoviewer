@@ -55,6 +55,46 @@ def get_string_link(uniprot_id: str) -> str:
         return ""
 
 @lru_cache(maxsize=256)
+def get_string_id_mapping(
+    identifiers: tuple[str, ...],
+    species: int,
+) -> list[dict]:
+    """Map submitted protein identifiers to STRING IDs for a species."""
+    clean_ids = tuple(
+        x for x in (str(i).strip() for i in identifiers)
+        if x and x.lower() not in {"nan", "none"}
+    )
+    if not clean_ids:
+        return []
+
+    request_url = "/".join([STRING_API_URL, "json", "get_string_ids"])
+    params = {
+        "identifiers": "\r".join(clean_ids),
+        "species": int(species),
+        "caller_identity": STRING_CALLER_IDENTITY,
+        "limit": 1,
+    }
+
+    try:
+        response = requests.post(request_url, data=params, timeout=_DEFAULT_TIMEOUT)
+        if response.status_code == 404:
+            return []
+        response.raise_for_status()
+        data = response.json()
+    except requests.exceptions.RequestException as exc:
+        raise RuntimeError(f"STRING identifier mapping failed: {exc}") from exc
+    except ValueError as exc:
+        raise RuntimeError("STRING identifier mapping returned invalid JSON.") from exc
+
+    if not isinstance(data, list):
+        raise RuntimeError(
+            "STRING identifier mapping returned unexpected payload type: "
+            f"{type(data).__name__}."
+        )
+
+    return data
+
+@lru_cache(maxsize=256)
 def get_string_functional_enrichment(
     identifiers: tuple[str, ...],
     species: int,
@@ -84,9 +124,25 @@ def get_string_functional_enrichment(
     if species is None:
         raise ValueError("STRING enrichment requires a species.")
 
+    mapping = get_string_id_mapping(clean_ids, int(species))
+    mapped_ids = tuple(
+        dict.fromkeys(
+            str(row.get("stringId", "")).strip()
+            for row in mapping
+            if str(row.get("stringId", "")).strip()
+        )
+    )
+
+    if not mapped_ids:
+        examples = ", ".join(clean_ids[:10])
+        raise RuntimeError(
+            "No submitted identifiers could be mapped by STRING for "
+            f"species={int(species)}. Examples: {examples}"
+        )
+
     request_url = "/".join([STRING_API_URL, "json", "enrichment"])
     params = {
-        "identifiers": "\r".join(clean_ids),
+        "identifiers": "\r".join(mapped_ids),
         "species": int(species),
         "caller_identity": STRING_CALLER_IDENTITY,
     }

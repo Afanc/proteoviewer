@@ -730,8 +730,19 @@ def feature_ids_to_string_proteins(
     out: list[str] = []
     seen: set[str] = set()
 
-    use_parent = bool(prefer_parent and parent_col in adata.var.columns)
-    values = adata.var.reindex(ids)[parent_col].astype(str) if use_parent else pd.Series(ids, index=ids)
+    #use_parent = bool(prefer_parent and parent_col in adata.var.columns)
+    #values = adata.var.reindex(ids)[parent_col].astype(str) if use_parent else pd.Series(ids, index=ids)
+    if prefer_parent:
+        if parent_col not in adata.var.columns:
+            raise KeyError(
+                "STRING enrichment for peptide-level data requires parent protein metadata, "
+                f"but {parent_col!r} is missing from adata.var. "
+                f"Available columns={list(adata.var.columns)!r}"
+            )
+
+        values = adata.var.reindex(ids)[parent_col].astype(str)
+    else:
+        values = pd.Series(ids, index=ids)
 
     for value in values.astype(str):
         for token in str(value).split(";"):
@@ -913,6 +924,7 @@ def make_string_selected_feature_table(
 
     if "GENE_NAMES" in adata.var.columns:
         disp["Gene"] = var["GENE_NAMES"].astype(str).values
+
     if parent_col in adata.var.columns:
         disp["Parent protein"] = var[parent_col].astype(str).values
 
@@ -957,56 +969,73 @@ def make_string_enrichment_card(
     if not selected_feature_ids:
         return pn.Spacer(width=width, height=320)
 
+    def _base_card(*items):
+        return pn.Card(
+            pn.pane.Markdown(
+                f"### STRING enrichment  | "
+                f"{len(selected_feature_ids)} features → {len(proteins)} parent proteins",
+                margin=(0, 0, 5, 0),
+            ),
+            selected_table,
+            pn.Spacer(height=10),
+            *items,
+            collapsible=False,
+            hide_header=True,
+            width=width,
+            styles={
+                "background": "#f9f9f9",
+                "border-radius": "8px",
+                "box-shadow": "3px 3px 5px #bcbcbc",
+                "padding": "10px",
+            },
+        )
+
+
     if species is None:
-        return pn.pane.Markdown(
-            "**STRING enrichment**  \nSelect a species to run enrichment on the current box/lasso selection.",
+        return _base_card(pn.pane.Markdown(
+            "**Select a species** to run enrichment on the current box/lasso selection.",
             styles={"background": "#f9f9f9", "padding": "10px", "border-radius": "8px"},
             width=width,
             height=120,
             margin=(0, 0, 0, 0),
-        )
+        ))
 
     if len(proteins) < 2:
-        return pn.pane.Markdown(
-            "**STRING enrichment**  \nSelect features from at least two parent proteins. "
+        return _base_card(pn.pane.Markdown(
+            "**STRING enrichment not run.**  \nSelect features from at least two parent proteins. "
             "STRING expands single-protein queries, so single-protein enrichment is not shown here.",
             styles={"background": "#f9f9f9", "padding": "10px", "border-radius": "8px"},
             sizing_mode="stretch_width",
             width=width,
             height=120,
             margin=(0, 0, 0, 0),
-        )
+        ))
 
-    data = get_string_functional_enrichment(tuple(sorted(proteins)), int(species))
+    try:
+        data = get_string_functional_enrichment(tuple(sorted(proteins)), int(species))
+    except Exception as exc:
+        return _base_card(pn.pane.Markdown(
+            f"**STRING enrichment failed**  \n`{exc}`",
+            styles={"background": "#fff3f3", "padding": "10px", "border-radius": "8px"},
+            sizing_mode="stretch_width",
+            width=width,
+            margin=(0, 0, 0, 0),
+        ))
+
     if not data:
-        return pn.pane.Markdown(
+        return _base_card(pn.pane.Markdown(
             f"**STRING enrichment**  \nNo enriched terms returned for {len(proteins)} parent proteins.",
             styles={"background": "#f9f9f9", "padding": "10px", "border-radius": "8px"},
             sizing_mode="stretch_width",
             width=width,
             height=120,
             margin=(0, 0, 0, 0),
-        )
+        ))
 
-    return pn.Card(
-        pn.pane.Markdown(
-            f"### STRING enrichment  | {len(selected_feature_ids)} features → {len(proteins)} parent proteins",
-            margin=(0, 0, 5, 0),
-        ),
-        selected_table,
-        pn.Spacer(height=10),
+    return _base_card(
         make_string_category_table(data, "Process", "GO Biological Process"),
         pn.Spacer(height=10),
         make_string_category_table(data, "Function", "GO Molecular Function"),
         pn.Spacer(height=10),
         make_string_category_table(data, "Component", "GO Cellular Component"),
-        collapsible=False,
-        hide_header=True,
-        width=width,
-        styles={
-            "background": "#f9f9f9",
-            "border-radius": "8px",
-            "box-shadow": "3px 3px 5px #bcbcbc",
-            "padding": "10px",
-        },
     )
