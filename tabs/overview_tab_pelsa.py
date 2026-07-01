@@ -487,7 +487,6 @@ def overview_tab_pelsa(state: SessionState):
         structure_color_by,
         pn.Spacer(width=20),
         structure_representation,
-        pn.Spacer(width=20),
         visible=False,
     )
 
@@ -1303,8 +1302,9 @@ def overview_tab_pelsa(state: SessionState):
             download_selection,
             pn.Spacer(width=20),
             structure_controls,
+            pn.Spacer(width=20),
             string_species_sel,
-            width=300,
+            width=400,
             height=80,
         ),
         volcano_and_detail,

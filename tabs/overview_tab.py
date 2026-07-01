@@ -122,7 +122,7 @@ def overview_tab(state: SessionState):
             return s.rsplit(" | ", 1)[1].strip()
         return s
 
-    string_species_sel = make_string_species_select(width=190)
+    string_species_sel = make_string_species_select(width=150)
     string_selected_feature_ids: list[str] = []
 
     ## Config Pane

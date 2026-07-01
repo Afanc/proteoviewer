@@ -29,6 +29,7 @@ STRING_SPECIES_OPTIONS = {
     "Drosophila melanogaster": 7227,
     "Escherichia coli K-12": 511145,
     "Pseudomonas aeruginosa PAO1": 208964,
+    "Caenorhabditis elegans": 6239,
 }
 
 
