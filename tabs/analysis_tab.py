@@ -14,6 +14,8 @@ from components.analysis_plots import (
     plot_h_clustering_heatmap,
 )
 
+from components.plot_utils import plot_pca_2d
+
 from utils.layout_utils import plotly_section, make_vr, make_hr, make_section, make_row, FRAME_STYLES
 
 def analysis_tab(state):
@@ -62,6 +64,67 @@ def analysis_tab(state):
         height=570
     )
 
+    # section: batch correction / design-adjusted PCA diagnostic
+    batch_pca_pc_sel = pn.widgets.Select(
+        name="PCA axes",
+        options={
+            "PC1 vs PC2": (1, 2),
+            "PC1 vs PC3": (1, 3),
+            "PC2 vs PC3": (2, 3),
+        },
+        value=(1, 2),
+        width=110,
+        margin=(-10, 0, 0, 20),
+        styles={"z-index": "10"},
+    )
+
+    show_batch_pca_ellipses = pn.widgets.Checkbox(
+        name="PCA 95% CI",
+        value=True,
+        margin=(-10, 0, 0, 20),
+        styles={"z-index": "10"},
+    )
+
+    @pn.depends(pc=batch_pca_pc_sel, show_ellipses=show_batch_pca_ellipses)
+    def batch_pca_row(pc, show_ellipses):
+        before = plot_pca_2d(
+            adata=adata,
+            pc=tuple(pc),
+            color_key="CONDITION",
+            title="PCA before batch correction",
+            show_ellipses=bool(show_ellipses),
+            width=None,
+            height=420,
+            obsm_key="X_pca",
+            uns_key="pca",
+        )
+        after = plot_pca_2d(
+            adata=adata,
+            pc=tuple(pc),
+            color_key="CONDITION",
+            title="PCA after batch correction",
+            show_ellipses=bool(show_ellipses),
+            width=None,
+            height=420,
+            obsm_key="X_pca_design_adjusted",
+            uns_key="pca_design_adjusted",
+        )
+        return pn.Row(
+            plotly_section(before, height=420, margin=(-40, 0, 0, 0)),
+            pn.Spacer(width=10),
+            make_vr(),
+            plotly_section(after, height=420, margin=(-40, 0, 0, 0)),
+        )
+
+    batch_pca_pane = make_row(
+        pn.Column(
+            pn.pane.Markdown("##  Batch Correction PCA", styles={"flex": "0.05", "z-index": "10"}),
+            pn.Row(batch_pca_pc_sel, pn.Spacer(width=20), show_batch_pca_ellipses),
+            batch_pca_row,
+        ),
+        height=470,
+        width='95vw',
+    )
     # section: stats distributions (p & q, overlay raw vs eBayes) 
     contrast_sel_stat = pn.widgets.Select(name="Contrast", options=list(contrast_names), value=contrast_names[0], width=180,
                                           margin=(-10,0,0,20), styles={"z-index": "10"})
@@ -115,6 +178,8 @@ def analysis_tab(state):
     stats_pane = make_section(
         header ="Statistical Analysis",
         row=pn.Column(
+            batch_pca_pane,
+            pn.Spacer(height=30),
             stats_row,
             pn.Spacer(height=30),
             shrink_row,
@@ -123,7 +188,7 @@ def analysis_tab(state):
         ),
         background="#E8F5E9",
         width="98vw",
-        height=1020
+        height=1520
     )
 
     # Clustering

@@ -718,14 +718,34 @@ def plot_pca_2d(
     title: str = "PCA",
     width: int = 900,
     height: int = 500,
+    obsm_key: str = "X_pca",
+    uns_key: str = "pca",
     show_ellipses: bool = True,
     annotate: bool = False,
 ) -> go.Figure:
     """
     2D PCA scatter of samples, colored by adata.obs[color_key].
     """
+    if obsm_key not in adata.obsm:
+        fig = go.Figure()
+        fig.update_layout(
+            title=dict(text=f"{title} (not available)", x=0.5),
+            width=width,
+            height=height,
+            template="plotly_white",
+            xaxis=dict(visible=False),
+            yaxis=dict(visible=False),
+            annotations=[dict(
+                x=0.5, y=0.5, xref="paper", yref="paper",
+                text=f"PCA embedding not found in adata.obsm['{obsm_key}']",
+                showarrow=False,
+                font=dict(size=12, color="black"),
+            )],
+        )
+        return fig
+
     # build DataFrame
-    pcs = adata.obsm["X_pca"][:, [pc[0]-1, pc[1]-1]]
+    pcs = adata.obsm[obsm_key][:, [pc[0]-1, pc[1]-1]]
     df = pd.DataFrame(pcs, columns=[f"PC{pc[0]}", f"PC{pc[1]}"],
                       index=adata.obs_names)
     df[color_key] = adata.obs[color_key].values
@@ -753,13 +773,13 @@ def plot_pca_2d(
             hovertemplate = (f"Sample: %{{text}}")
         ))
     # axis labels with explained variance
-    var = adata.uns["pca"]["variance_ratio"]
+    var = adata.uns.get(uns_key, {}).get("variance_ratio", None)
     fig.update_layout(
         title=dict(text=title, x=0.5),
         height=height,
         template="plotly_white",
-        xaxis=dict(title=f"PC{pc[0]} ({var[pc[0]-1]*100:.1f}% var)"),
-        yaxis=dict(title=f"PC{pc[1]} ({var[pc[1]-1]*100:.1f}% var)"),
+        xaxis=dict(title=f"PC{pc[0]}" + (f" ({var[pc[0]-1]*100:.1f}% var)" if var is not None and len(var) >= pc[0] else "")),
+        yaxis=dict(title=f"PC{pc[1]}" + (f" ({var[pc[1]-1]*100:.1f}% var)" if var is not None and len(var) >= pc[1] else "")),
         legend=dict(
             title_text=f" {color_key}",
             bordercolor="black",
