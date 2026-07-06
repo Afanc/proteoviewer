@@ -122,7 +122,7 @@ def analysis_tab(state):
             pn.Row(batch_pca_pc_sel, pn.Spacer(width=20), show_batch_pca_ellipses),
             batch_pca_row,
         ),
-        height=470,
+        height=490,
         width='95vw',
     )
     # section: stats distributions (p & q, overlay raw vs eBayes) 
@@ -188,7 +188,7 @@ def analysis_tab(state):
         ),
         background="#E8F5E9",
         width="98vw",
-        height=1520
+        height=1540
     )
 
     # Clustering
