@@ -36,6 +36,7 @@ from tabs.overview_shared import (
     make_intro_pane,
     make_min_meas_select,
     make_min_precursor_select,
+    wire_min_meas_disabled_by_min_precursors,
     make_toggle_label_updater,
     make_cohort_inspector_widgets,
     make_metrics_pane,
@@ -438,6 +439,13 @@ def overview_tab_phospho(state: SessionState):
         title_token=min_prec_title,
         width=80,
         default_label="≥0",
+    )
+
+    wire_min_meas_disabled_by_min_precursors(
+        min_meas_sel=min_meas_sel,
+        min_prec_sel=min_prec_sel,
+        min_prec_value_fn=_min_prec_value,
+        contrast_sel=contrast_sel,
     )
 
     search_input = pn.widgets.AutocompleteInput(

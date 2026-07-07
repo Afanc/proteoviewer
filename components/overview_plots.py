@@ -1040,6 +1040,7 @@ def plot_pelsa_volcano(
     color_by: str = "Significance",
     sign_threshold: float = 0.05,
     hide_zero_neglog10_q: bool = False,
+    ec50_range: tuple[float, float] | None = None,
     width: int = 900,
     height: int = 900,
 ) -> go.Figure:
@@ -1051,6 +1052,10 @@ def plot_pelsa_volcano(
     y = pd.to_numeric(res["curve_neglog10_q"], errors="coerce")
     pec50 = pd.to_numeric(res.get("pec50", np.nan), errors="coerce")
     log10_ec50 = -pec50
+    with np.errstate(over="ignore", under="ignore", invalid="ignore"):
+        ec50 = np.power(10.0, log10_ec50.to_numpy(dtype=float))
+    ec50[~np.isfinite(ec50)] = np.nan
+
 
     ids = res["peptide_id"].astype(str).to_numpy()
     genes = (
@@ -1065,17 +1070,65 @@ def plot_pelsa_volcano(
         finite &= y.to_numpy(dtype=float) != 0.0
 
     mask = finite
+    if ec50_range is not None:
+        lo, hi = map(float, ec50_range)
+        if lo > hi:
+            lo, hi = hi, lo
+        mask &= np.isfinite(ec50)
+        mask &= ec50 >= lo
+        mask &= ec50 <= hi
 
     sig = q.to_numpy(dtype=float) < float(sign_threshold)
     color_mode = str(color_by or "Significance")
     if color_mode == "Significance":
         color_vals = np.where(sig & (x.to_numpy() > 0), "red", np.where(sig & (x.to_numpy() < 0), "blue", "gray"))
         marker_color_kwargs = dict(color=color_vals[mask])
-    elif color_mode == "EC₅₀":
+    elif color_mode == "EC50":
         marker_color_kwargs = dict(
             color=log10_ec50[mask],
             colorscale="Viridis",
-            colorbar=dict(title="log<sub>10</sub> EC₅₀"),
+            colorbar=dict(title="log<sub>10</sub> EC50"),
+            showscale=True,
+        )
+    elif color_mode == "Avg Control Int.":
+        pelsa = ad.uns.get("pelsa", {}) or {}
+        concentration_col = str(pelsa.get("concentration_column", "")).strip()
+        if not concentration_col or concentration_col not in ad.obs.columns:
+            raise KeyError(
+                "PELSA volcano control-intensity coloring requires "
+                "adata.uns['pelsa']['concentration_column'] to point to an obs column."
+            )
+
+        control_concentration = pd.to_numeric(
+            pelsa.get("control_concentration", 0),
+            errors="coerce",
+        )
+        if not np.isfinite(control_concentration):
+            control_concentration = 0.0
+
+        obs_conc = pd.to_numeric(ad.obs[concentration_col], errors="coerce").to_numpy(dtype=float)
+        control_mask = np.isclose(
+            obs_conc,
+            float(control_concentration),
+            rtol=1e-9,
+            atol=1e-12,
+            equal_nan=False,
+        )
+        if not np.any(control_mask):
+            raise ValueError(
+                "PELSA volcano control-intensity coloring found no samples at "
+                f"control concentration={float(control_concentration):g}."
+            )
+
+        raw_layer = ad.layers.get("raw", ad.X)
+        raw_mat = raw_layer.toarray() if hasattr(raw_layer, "toarray") else np.asarray(raw_layer)
+        avg_control = np.nanmean(raw_mat[control_mask, :], axis=0)
+        avg_control = pd.Series(avg_control, index=ad.var_names).reindex(ids).to_numpy(dtype=float)
+
+        marker_color_kwargs = dict(
+            color=np.log10(np.clip(avg_control, 0.0, None) + 1.0)[mask],
+            colorscale="Viridis",
+            colorbar=dict(title="log<sub>10</sub> Int"),
             showscale=True,
         )
     else:
@@ -1117,13 +1170,15 @@ def plot_pelsa_volcano(
             ids[mask],
             genes[mask],
             log10_ec50[mask].to_numpy(),
+            ec50[mask],
         ],
         hovertemplate=(
             "Peptide: %{customdata[0]}<br>"
             "Gene: %{customdata[1]}<br>"
             "Curve range log₂: %{x:.3f}<br>"
             "-log10(q): %{y:.2f}<br>"
-            "log10 EC₅₀: %{customdata[2]:.3g}<br>"
+            "log10 EC50: %{customdata[2]:.3g}<br>"
+            "EC50: %{customdata[3]:.3g}<br>"
         ),
         name="",
     ))
@@ -1141,7 +1196,7 @@ def plot_pelsa_volcano(
     down = int(np.sum(mask & sig & (x.to_numpy(dtype=float) < 0)))
     rest = int(np.sum(mask) - up - down)
 
-    annos = [] if color_mode == "EC₅₀" else [
+    annos = [
         dict(x=0.02, y=0.98, xref="paper", yref="paper", opacity=0.7,
              text=f"<b>{down}</b>", bgcolor="blue", font=dict(color="white"), showarrow=False),
         dict(x=0.500, y=0.98, xref="paper", yref="paper",

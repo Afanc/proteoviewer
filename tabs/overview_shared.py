@@ -648,6 +648,66 @@ def make_min_precursor_select(
         return min_prec_options[label]
     return sel, value_fn
 
+def wire_min_meas_disabled_by_min_precursors(
+    *,
+    min_meas_sel: pn.widgets.Select,
+    min_prec_sel: pn.widgets.Select,
+    min_prec_value_fn: Callable[[str], int],
+    contrast_sel: Optional[pn.widgets.Select] = None,
+) -> Callable[[], None]:
+    """
+    Disable the non-imputed measurements-per-condition selector when the
+    consistent peptide/precursor filter is active.
+
+    Rationale:
+    once min consistent peptide/precursor evidence is used, the additional
+    min/condition control becomes confusing. We therefore force min/condition
+    to its maximum value and grey it out.
+    """
+    previous_enabled_value = {"value": min_meas_sel.value}
+
+    def _max_min_meas_label() -> str:
+        opts = list(min_meas_sel.options or [])
+        return opts[-1] if opts else min_meas_sel.value
+
+    def _prec_filter_active() -> bool:
+        try:
+            return int(min_prec_value_fn(min_prec_sel.value)) >= 1
+        except Exception:
+            return False
+
+    def _remember_min_meas(event) -> None:
+        if not min_meas_sel.disabled:
+            previous_enabled_value["value"] = event.new
+
+    def _sync(_event=None) -> None:
+        active = _prec_filter_active()
+
+        if active:
+            if not min_meas_sel.disabled:
+                previous_enabled_value["value"] = min_meas_sel.value
+            min_meas_sel.disabled = True
+            max_label = _max_min_meas_label()
+            if max_label is not None:
+                min_meas_sel.value = max_label
+            return
+
+        min_meas_sel.disabled = False
+        prev = previous_enabled_value["value"]
+        if prev in list(min_meas_sel.options or []):
+            min_meas_sel.value = prev
+
+    min_meas_sel.param.watch(_remember_min_meas, "value")
+    min_prec_sel.param.watch(_sync, "value")
+
+    if contrast_sel is not None:
+        def _sync_after_contrast(_event=None) -> None:
+            pn.state.curdoc.add_next_tick_callback(_sync)
+        contrast_sel.param.watch(_sync_after_contrast, "value")
+
+    _sync()
+    return _sync
+
 def wire_cohort_export_updates(
     *,
     group_ids_selected,

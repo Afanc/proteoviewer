@@ -462,7 +462,7 @@ def overview_tab_pelsa(state: SessionState):
     # Color selector
     color_by = pn.widgets.Select(
         name="Color by",
-        options=["Significance", "EC₅₀"],
+        options=["Significance", "EC50", "Avg Control Int."],
         value="Significance",
         width=150,
     )
@@ -500,6 +500,65 @@ def overview_tab_pelsa(state: SessionState):
         if vals.empty:
             return default
         return max(default, float(vals.quantile(0.99)))
+
+    concentration_levels = sorted(
+        pd.to_numeric(
+            adata.obs[concentration_col],
+            errors="raise",
+        )
+        .dropna()
+        .unique()
+        .tolist()
+    )
+
+    def _conc_label(value: float) -> str:
+        value = float(value)
+        return "Control" if value == 0 else f"{value:g}"
+
+    ec50_range_idx_sel = pn.widgets.IntRangeSlider(
+        name="",
+        start=0,
+        end=max(len(concentration_levels) - 1, 0),
+        value=(0, max(len(concentration_levels) - 1, 0)),
+        step=1,
+        width=140,
+        styles={"z-index": "10"},
+        bar_color="blue",
+        tooltips=False,
+        show_value=False,
+        margin=(-20,0,0,10),
+    )
+
+    def _ec50_range_from_idx(idx_range) -> tuple[float, float]:
+        lo_i, hi_i = idx_range
+        lo_i = int(np.clip(lo_i, 0, len(concentration_levels) - 1))
+        hi_i = int(np.clip(hi_i, 0, len(concentration_levels) - 1))
+        if lo_i > hi_i:
+            lo_i, hi_i = hi_i, lo_i
+        return float(concentration_levels[lo_i]), float(concentration_levels[hi_i])
+
+    def _ec50_range_label(idx_range) -> str:
+        lo, hi = _ec50_range_from_idx(idx_range)
+        return (
+            "<div style='font-size:12px; line-height:14px; margin-bottom:-8px;'>"
+            "<b>EC50 :</b> "
+            f"{_conc_label(lo)} – {_conc_label(hi)}"
+            "</div>"
+        )
+
+    ec50_range_label = pn.pane.HTML(
+        pn.bind(_ec50_range_label, ec50_range_idx_sel),
+        margin=(-30, 0, 0, 15),
+        width=140,
+    )
+
+    ec50_range_controls = pn.Column(
+        ec50_range_label,
+        pn.Spacer(height=30),
+        ec50_range_idx_sel,
+        width=140,
+        margin=(0, 0, 0, 10),
+    )
 
     hide_zero_q_sel = pn.widgets.Checkbox(
         name="Hide Flat Curves (qval=1)",
@@ -573,6 +632,7 @@ def overview_tab_pelsa(state: SessionState):
         color_by=color_by,
         sign_threshold=0.05,
         hide_zero_neglog10_q=hide_zero_q_sel,
+        ec50_range=pn.bind(_ec50_range_from_idx, ec50_range_idx_sel),
         width=None,
         height=900,
     )
@@ -995,10 +1055,7 @@ def overview_tab_pelsa(state: SessionState):
             except Exception:
                 starts.append(pd.NA)
         disp["Start Pos"] = pd.Series(starts, index=disp.index, dtype="Int64")
-        disp["q-value"] = (
-            pd.to_numeric(disp["qval"], errors="coerce")
-            .map(lambda x: f"{x:.3e}" if np.isfinite(x) else "nan")
-        )
+        disp["q-value"] = pd.to_numeric(disp["qval"], errors="coerce")
 
         disp["EC₅₀"] = pd.to_numeric(disp["ec50"], errors="coerce")
 
@@ -1030,7 +1087,11 @@ def overview_tab_pelsa(state: SessionState):
                 if bool(row["current"]) else [""] * len(row),
                 axis=1,
             )
-            .format({"Range log₂": "{:.3f}", "EC₅₀": "{:.3f}", "Start Pos": "{:.0f}"})
+            .format({
+                "Range log₂": "{:.3f}",
+                "EC₅₀": "{:.3f}",
+                "Start Pos": "{:.0f}",
+            }, na_rep="nan")
         )
 
         sibling_ids = disp["peptide_id"].astype(str).tolist()
@@ -1046,21 +1107,35 @@ def overview_tab_pelsa(state: SessionState):
                 "Peptide": {"type": "html"},
                 "Range log₂": NumberFormatter(format="0.000"),
                 "EC₅₀": NumberFormatter(format="0.000"),
+                # couldn't find another way to get it scientific not. + sortable
+                "q-value": pn.io.JSCode("""
+                function format(cell, formatterParams, onRendered) {
+                    const value = Number(cell.getValue());
+                    if (!Number.isFinite(value)) {
+                        return "nan";
+                    }
+                    return value
+                        .toExponential(3)
+                        .replace("e+", "e")
+                        .replace("e-0", "e-");
+                }
+                """),
             },
             hidden_columns=["peptide_id", "current"],
             selectable=1,
             show_index=False,
             layout="fit_columns",
-            disabled=True,
+            disabled=False,
             height=table_h,
             pagination=None,
+            sortable=True,
             width=660,
             widths={"Peptide": 250, "Start Pos": 85, "Range log₂": 85, "EC₅₀": 65, "q-value": 90},
             configuration={
                 "rowHeight": row_h,
                 "columnHeaderVertAlign": "bottom",
                 "movableColumns": False,
-                "columnDefaults": {"editor": False, "headerSort": False},
+                "columnDefaults": {"editor": False, "headerSort": True},
             },
             margin=(-5, 8, 8, 8),
         )
@@ -1271,6 +1346,8 @@ def overview_tab_pelsa(state: SessionState):
             color_by,
             pn.Spacer(width=20),
             pn.Column(
+                ec50_range_controls,
+                pn.Spacer(height=10),
                 hide_zero_q_sel,
                 margin=(25, 0, 0, 0),
                 width=175,
