@@ -13,7 +13,7 @@ scipy
 h5py
 
 # Viz / UI
-panel
+panel==1.8.3
 bokeh
 plotly
 matplotlib
