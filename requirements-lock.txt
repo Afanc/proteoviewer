@@ -35,7 +35,7 @@ numcodecs==0.16.1
 numpy==2.2.6
 packaging==25.0
 pandas==2.3.1
-panel==1.7.5
+panel==1.8.3
 param==2.2.1
 pathspec==0.12.1
 patsy==1.0.1
@@ -76,4 +76,3 @@ urllib3==2.5.0
 webencodings==0.5.1
 wheel==0.45.1
 xyzservices==2025.4.0
-zarr==3.1.1
