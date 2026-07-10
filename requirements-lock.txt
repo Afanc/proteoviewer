@@ -35,7 +35,7 @@ numcodecs==0.16.1
 numpy==2.2.6
 packaging==25.0
 pandas==2.3.1
-panel==1.7.5
+panel==1.8.3
 param==2.2.1
 pathspec==0.12.1
 patsy==1.0.1
