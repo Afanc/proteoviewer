@@ -911,8 +911,9 @@ def overview_tab_pelsa(state: SessionState):
     pep_holder  = pn.Column()
     structure_holder = pn.Column()
     table_holder  = pn.Column()
+    empty_detail_panel = pn.Spacer(width=840, height=320)
     detail_mode_holder = pn.Column(
-        pn.Spacer(width=840, height=320),
+        empty_detail_panel,
         width=840,
     )
 
@@ -961,14 +962,21 @@ def overview_tab_pelsa(state: SessionState):
         string_species_sel.visible = bool(string_selected_feature_ids)
 
         if has_single_detail:
-            detail_mode_holder[:] = [peptide_detail_panel]
             detail_mode_holder.width = 1300
+            target = peptide_detail_panel
         elif string_selected_feature_ids:
-            detail_mode_holder[:] = [string_enrichment_holder]
             detail_mode_holder.width = 840
+            target = string_enrichment_holder
         else:
             detail_mode_holder.width = 840
-            detail_mode_holder[:] = [pn.Spacer(width=840, height=320)]
+            target = empty_detail_panel
+
+        # Avoid detaching and reattaching the existing Mol* iframe.
+        if (
+            len(detail_mode_holder.objects) != 1
+            or detail_mode_holder.objects[0] is not target
+        ):
+            detail_mode_holder.objects = [target]
 
     def _render_info():
         # pass current values explicitly (protein, contrast)
@@ -1122,10 +1130,10 @@ def overview_tab_pelsa(state: SessionState):
                 """),
             },
             hidden_columns=["peptide_id", "current"],
-            selectable=1,
+            selectable=False,
             show_index=False,
             layout="fit_columns",
-            disabled=False,
+            disabled=True,
             height=table_h,
             pagination=None,
             sortable=True,

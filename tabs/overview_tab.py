@@ -11,7 +11,6 @@ from components.overview_plots import (
     plot_intensity_by_protein,
     get_protein_info,
     plot_peptide_trends_centered,
-    plot_group_violin_for_volcano,
 )
 from components.selection_export import (
     make_volcano_selection_downloader,
@@ -34,6 +33,7 @@ from tabs.overview_shared import (
     wire_min_meas_disabled_by_min_precursors,
     make_toggle_label_updater,
     make_cohort_inspector_widgets,
+    make_cohort_violin_view,
     make_metrics_pane,
     make_clustering_pane,
     bind_uirevision,
@@ -533,44 +533,20 @@ def overview_tab(state: SessionState):
         ],
     )
 
-    # Cohort Violin View
-    def _cohort_violin(ids, contrast, sm, s1, s2, min_nonimp_per_cond, min_consistent_peptides):
-        if not ids:
-            return pn.Spacer(height=0)  # collapses cleanly when no cohort
-        fig = plot_group_violin_for_volcano(
-            state=state,
-            contrast=contrast,
-            min_nonimp_per_cond=min_nonimp_per_cond,
-            min_consistent_peptides=min_consistent_peptides,
-            highlight_group=ids,
-            show_measured=sm,
-            show_imp_cond1=s1,
-            show_imp_cond2=s2,
-            width=1200,
-            height=100,
-        )
-        return pn.pane.Plotly(
-            fig,
-            height=150,
-            margin=(-10, 0, 10, 20),
-            sizing_mode="stretch_width",
-            config={'responsive': True},
-            styles={
-                'border-radius':  '8px',
-                'box-shadow':     '3px 3px 5px #bcbcbc',
-            }
-        )
-
-    # Bind reactivity via pn.bind (don’t pass bind objects into @depends)
-    cohort_violin_view = pn.bind(
-        _cohort_violin,
-        group_ids_selected,
-        contrast_sel,
-        show_measured,
-        show_imp_cond1,
-        show_imp_cond2,
-        min_nonimp_per_cond=pn.bind(_min_meas_value, min_meas_sel),
-        min_consistent_peptides=pn.bind(_min_prec_value, min_prec_sel),
+    cohort_violin_view = make_cohort_violin_view(
+        state=state,
+        group_ids_selected=group_ids_selected,
+        search_input_group=search_input_group,
+        file_text_widget=_file_text,
+        search_field_sel=search_field_sel,
+        contrast_sel=contrast_sel,
+        show_measured=show_measured,
+        show_imp_cond1=show_imp_cond1,
+        show_imp_cond2=show_imp_cond2,
+        min_meas_sel=min_meas_sel,
+        min_meas_value_fn=_min_meas_value,
+        min_prec_sel=min_prec_sel,
+        min_prec_value_fn=_min_prec_value,
     )
 
     # bind a detail‐plot function to the same contrast & search_input

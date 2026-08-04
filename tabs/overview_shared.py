@@ -11,6 +11,7 @@ from bokeh.models.widgets.tables import NumberFormatter
 
 from components.string_links import get_string_functional_enrichment
 from components.overview_plots import (
+    plot_group_violin_for_volcano,
     resolve_pattern_to_uniprot_ids,
     resolve_exact_list_to_uniprot_ids,
 )
@@ -339,6 +340,77 @@ def make_cohort_inspector_widgets(
         _file_text,
         cohort_filename,
     )
+
+
+def make_cohort_violin_view(
+    *,
+    state,
+    group_ids_selected: Callable[[], list[str]],
+    search_input_group: pn.widgets.TextInput,
+    file_text_widget: pn.widgets.TextAreaInput,
+    search_field_sel: pn.widgets.Select,
+    contrast_sel: pn.widgets.Select,
+    show_measured: pn.widgets.Checkbox,
+    show_imp_cond1: pn.widgets.Checkbox,
+    show_imp_cond2: pn.widgets.Checkbox,
+    min_meas_sel: pn.widgets.Select,
+    min_meas_value_fn: Callable[[object], int],
+    min_prec_sel: pn.widgets.Select,
+    min_prec_value_fn: Callable[[object], int],
+) -> pn.Column:
+    """Build a cohort violin without Panel's implicit bound-function loader."""
+    holder = pn.Column(
+        pn.Spacer(height=0),
+        sizing_mode="stretch_width",
+    )
+
+    def _update(_event=None) -> None:
+        ids = list(group_ids_selected() or [])
+        if not ids:
+            holder.objects = [pn.Spacer(height=0)]
+            return
+
+        fig = plot_group_violin_for_volcano(
+            state=state,
+            contrast=str(contrast_sel.value),
+            min_nonimp_per_cond=int(min_meas_value_fn(min_meas_sel.value)),
+            min_consistent_peptides=int(min_prec_value_fn(min_prec_sel.value)),
+            highlight_group=ids,
+            show_measured=bool(show_measured.value),
+            show_imp_cond1=bool(show_imp_cond1.value),
+            show_imp_cond2=bool(show_imp_cond2.value),
+            width=1200,
+            height=100,
+        )
+        holder.objects = [
+            pn.pane.Plotly(
+                fig,
+                height=150,
+                margin=(-10, 0, 10, 20),
+                sizing_mode="stretch_width",
+                config={"responsive": True},
+                styles={
+                    "border-radius": "8px",
+                    "box-shadow": "3px 3px 5px #bcbcbc",
+                },
+            )
+        ]
+
+    for widget in (
+        search_input_group,
+        file_text_widget,
+        search_field_sel,
+        contrast_sel,
+        show_measured,
+        show_imp_cond1,
+        show_imp_cond2,
+        min_meas_sel,
+        min_prec_sel,
+    ):
+        widget.param.watch(_update, "value")
+
+    _update()
+    return holder
 
 
 def filter_feature_ids_to_visible_volcano(

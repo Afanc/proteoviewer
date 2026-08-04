@@ -365,7 +365,26 @@ def _structure_color_regions(peptides: list[PeptideRegion] | None, color_mode: s
     for pep in peptides or []:
         q = _safe_float(pep.qval)
         selected = bool(getattr(pep, "selected", False))
-        if mode == "Significance" and math.isfinite(q) and q < 0.05:
+        effect = abs(_safe_float(pep.range_log2))
+        effect_priority = effect if math.isfinite(effect) else float("-inf")
+        q_priority = -q if math.isfinite(q) else float("-inf")
+        priority = (
+            int(selected),
+            effect_priority,
+            q_priority,
+            str(pep.peptide_id),
+        )
+
+        if selected:
+            regions.append({
+                "start": int(pep.start),
+                "end": int(pep.end),
+                "color": "#d62728",
+                "colorInt": _hex_to_int("#d62728"),
+                "selected": True,
+                "_priority": priority,
+            })
+        elif mode == "Significance" and math.isfinite(q) and q < 0.05:
             color = _qvalue_color(q)
             regions.append({
                 "start": int(pep.start),
@@ -373,15 +392,12 @@ def _structure_color_regions(peptides: list[PeptideRegion] | None, color_mode: s
                 "color": color,
                 "colorInt": _hex_to_int(color),
                 "selected": selected,
+                "_priority": priority,
             })
-        elif selected:
-            regions.append({
-                "start": int(pep.start),
-                "end": int(pep.end),
-                "color": "#d62728",
-                "colorInt": _hex_to_int("#d62728"),
-                "selected": True,
-            })
+    # Mol* uses the last matching color layer as the top layer.
+    regions.sort(key=lambda region: region["_priority"])
+    for region in regions:
+        region.pop("_priority")
     return regions
 
 
