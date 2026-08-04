@@ -39,7 +39,7 @@ DEV = os.getenv("PV_DEV", "0") == "1"
 FROZEN = bool(getattr(sys, "frozen", False))
 DESKTOP = (sys.platform == "win32") and FROZEN
 
-APP_VERSION_DESKTOP = "1.9.1"
+APP_VERSION_DESKTOP = "1.9.2"
 
 def _resource_file(name: str) -> Path:
     """
@@ -423,11 +423,6 @@ def _check_pf_meta(adata):
     if _parse_semver(pfv) < _parse_semver(MIN_PF_VERSION):
         return (False, f"File written by ProteoFlux {pfv} (Required >= {MIN_PF_VERSION}). Please re-export with a newer ProteoFlux.", meta)
 
-    pilot_study_mode = adata.uns.get("pilot_study_mode", False)
-
-    if pilot_study_mode:
-        return (False, "This experiment has at least 1 Condition with only 1 Replicate - Pilot Study Mode. Nothing to show in Proteoviewer.", meta)
-
     return (True, f"ProteoFlux {pfv} • {created}", meta)
 
 
@@ -591,9 +586,9 @@ def build_app():
         if DEV:
             try:
                 from anndata import read_h5ad
-                #adata = read_h5ad("data/proteoflux_results_pelsa.h5ad")
+                adata = read_h5ad("data/proteoflux_results_pelsa.h5ad")
                 #adata = read_h5ad("data/proteoflux_results_phospho.h5ad")
-                adata = read_h5ad("data/proteoflux_results.h5ad")
+                #adata = read_h5ad("data/proteoflux_results.h5ad")
                 _load(adata, "proteoflux_results.h5ad")
                 logging.info("DEV autoload successful.")
             except Exception:

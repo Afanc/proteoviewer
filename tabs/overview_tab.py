@@ -130,6 +130,7 @@ def overview_tab(state: SessionState):
     # Texts
     preproc_cfg = adata.uns["preprocessing"]
     analysis_cfg = adata.uns["analysis"]
+    pilot_mode = bool(adata.uns.get("pilot_study_mode", False))
     filtering      = preproc_cfg.get("filtering", {})
     normalization  = preproc_cfg.get("normalization", {})
     imputation     = preproc_cfg.get("imputation", {})
@@ -225,6 +226,12 @@ def overview_tab(state: SessionState):
         label = "columns" if len(batch_cols) > 1 else "column"
         batch_txt = f" (batch effect {label}: {', '.join(map(str, batch_cols))})"
 
+    differential_expression_txt = (
+        "Pilot study mode (statistical testing skipped)"
+        if pilot_mode
+        else f"eBayes via {ebayes_method}{batch_txt}"
+    )
+
     # build a single Markdown string
     summary_md = textwrap.dedent(f"""
 
@@ -244,7 +251,7 @@ def overview_tab(state: SessionState):
         - **Quantification**: {quant_method}
         - **Normalization**: {norm_methods}
         - **Imputation**: {imp_method}
-        - **Differential expression**: eBayes via {ebayes_method}{batch_txt}
+        - **Differential expression**: {differential_expression_txt}
 
         **Proteoflux Version** {pf_version}
     """).strip()
@@ -301,6 +308,19 @@ def overview_tab(state: SessionState):
         plot_mds_2d=plot_mds_2d,
         plot_umap_2d=plot_umap_2d,
     )
+
+    if pilot_mode:
+        return pn.Column(
+            pn.Spacer(height=10),
+            intro_pane,
+            pn.Spacer(height=30),
+            metrics_pane,
+            pn.Spacer(height=30),
+            clustering_pane,
+            pn.Spacer(height=30),
+            sizing_mode="stretch_width",
+            styles=FRAME_STYLES_TALL,
+        )
 
     ## Volcanoes
     # Contrast selector

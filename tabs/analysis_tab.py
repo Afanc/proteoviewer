@@ -20,6 +20,23 @@ from utils.layout_utils import plotly_section, make_vr, make_hr, make_section, m
 
 def analysis_tab(state):
     adata = state.adata
+
+    if bool(adata.uns.get("pilot_study_mode", False)):
+        return pn.Column(
+            pn.Spacer(height=10),
+            pn.pane.Alert(
+                "Pilot study mode: statistical testing was skipped by "
+                "ProteoFlux. Metrics and clustering remain available in "
+                "the Overview tab.",
+                alert_type="info",
+                sizing_mode="stretch_width",
+                margin=(0, 20, 0, 20),
+            ),
+            pn.Spacer(height=30),
+            sizing_mode="stretch_width",
+            styles=FRAME_STYLES,
+        )
+
     bokeh_doc = pn.state.curdoc
     executor = ThreadPoolExecutor(max_workers=1)
 
