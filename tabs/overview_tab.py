@@ -449,7 +449,11 @@ def overview_tab(state: SessionState):
         cohort_filename,
     ) = make_cohort_inspector_widgets(
         adata=state.adata,
-        search_field_options=["FASTA headers", "Gene names", "UniProt IDs"],
+        search_field_options=[
+            "FASTA headers",
+            "Gene names",
+            "Peptide sequences" if peptidomics_mode else "UniProt IDs",
+        ],
         search_field_default="FASTA headers",
         pattern_placeholder="*_ECOLI+ or ^gene[0-9]$",
         status_margin=(-10, 0, 0, 0),
