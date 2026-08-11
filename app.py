@@ -11,6 +11,7 @@ from tabs.overview_tab_phospho import overview_tab_phospho
 from tabs.overview_tab_pelsa import overview_tab_pelsa
 from tabs.preprocessing_tab import preprocessing_tab
 from tabs.analysis_tab import analysis_tab
+from tabs.kinases_tab import kinases_tab
 
 from utils.http_upload_widget import HttpUploadWidget
 from utils.layout_utils import make_vr, make_hr
@@ -450,6 +451,7 @@ def _lazy_tabs(state):
     ]
     if state.adata.uns['analysis'].get('analysis_type', "DIA") == "phospho":
         specs = [
+            ("Kinases", lambda: kinases_tab(state)),
             ("Overview",      lambda: overview_tab_phospho(state)),
             ("Preprocessing-PO4", lambda: preprocessing_tab(state)),
             ("Analysis-PO4", lambda: analysis_tab(state)),
@@ -586,8 +588,8 @@ def build_app():
         if DEV:
             try:
                 from anndata import read_h5ad
-                adata = read_h5ad("data/proteoflux_results_pelsa.h5ad")
-                #adata = read_h5ad("data/proteoflux_results_phospho.h5ad")
+                #adata = read_h5ad("data/proteoflux_results_pelsa.h5ad")
+                adata = read_h5ad("data/proteoflux_results_phospho.h5ad")
                 #adata = read_h5ad("data/proteoflux_results.h5ad")
                 _load(adata, "proteoflux_results.h5ad")
                 logging.info("DEV autoload successful.")
@@ -640,41 +642,6 @@ def build_app():
             pn.Row(status, sizing_mode="stretch_width", css_classes=["pv-status"]),
             sizing_mode="stretch_width",
         )
-
-    # ---- SERVER UI ----
-    #else:
-    #    # Use Panel's FileInput and copy to /path.../<session>/ before loading
-    #    file_in = pn.widgets.FileInput(accept='.h5ad', multiple=False)
-
-    #    def _on_file_in(event):
-    #        if not file_in.value:
-    #            return
-    #        from anndata import read_h5ad
-    #        try:
-    #            status.object = "Uploading…"
-    #            sid = _session_id()
-    #            dest_dir = os.path.join(UPROOT, sid)
-    #            os.makedirs(dest_dir, exist_ok=True)
-    #            fname = file_in.filename or "upload.h5ad"
-    #            dest_path = os.path.join(dest_dir, fname)
-    #            with open(dest_path, "wb") as f:
-    #                f.write(file_in.value)
-    #            status.object = f"Loading…"
-    #            adata = read_h5ad(dest_path)
-    #            _load(adata, fname)
-    #        except Exception as e:
-    #            import traceback
-    #            status.object = f"**Upload error:** {e}"
-    #            print("[server FileInput] EXCEPTION:", e, "\n", traceback.format_exc(), flush=True)
-
-    #    file_in.param.watch(_on_file_in, 'value')
-
-    #    controls = pn.Column(
-    #        pn.Spacer(height=10),
-    #        pn.Row(file_in, sizing_mode="stretch_width"),
-    #        pn.Row(status, sizing_mode="stretch_width", css_classes=["pv-status"]),
-    #        sizing_mode="stretch_width",
-    #    )
 
     # Build colored header with version + facility tag
     version = _get_app_version()
