@@ -7,8 +7,15 @@ import pandas as pd
 import panel as pn
 import plotly.graph_objects as go
 
+import scipy.cluster.hierarchy as sch
+from plotly.subplots import make_subplots
+
 from tabs.overview_shared import bind_uirevision
-from utils.layout_utils import FRAME_STYLES_TALL, make_vr
+from utils.layout_utils import (
+    FRAME_STYLES_TALL,
+    make_vr,
+    make_hr,
+    )
 from utils.session_state import SessionState
 from utils.utils import log_time
 
@@ -97,6 +104,11 @@ def _text_series(values: pd.Series) -> pd.Series:
     values = values.astype(object)
     return values.where(pd.notna(values), "").astype(str).str.strip()
 
+def _text_value(value, fallback: str = "") -> str:
+    if pd.isna(value):
+        return fallback
+    text = str(value).strip()
+    return text or fallback
 
 def _qvalue_plot_values(qvalues: np.ndarray) -> np.ndarray:
     """Return finite -log10(q) values while retaining underflowed q=0 rows."""
@@ -112,6 +124,33 @@ def _qvalue_plot_values(qvalues: np.ndarray) -> np.ndarray:
         scores = -np.log10(qvalues)
     scores[qvalues == 0.0] = zero_score
     return scores
+
+
+def _significance_symbols(
+    qvalues: np.ndarray,
+    sign_threshold: float,
+) -> np.ndarray:
+    """Return q-value stars, limited by the configured significance cutoff."""
+    qvalues = np.asarray(qvalues, dtype=float)
+    symbols = np.full(qvalues.shape, "", dtype=object)
+    significant = np.isfinite(qvalues) & (qvalues < float(sign_threshold))
+    symbols[significant] = "*"
+    symbols[significant & (qvalues < 0.01)] = "**"
+    symbols[significant & (qvalues < 0.001)] = "***"
+    return symbols
+
+
+def _significance_labels(
+    qvalues: np.ndarray,
+    symbols: np.ndarray,
+) -> np.ndarray:
+    qvalues = np.asarray(qvalues, dtype=float)
+    symbols = np.asarray(symbols, dtype=object)
+    labels = np.full(qvalues.shape, "not tested", dtype=object)
+    tested = np.isfinite(qvalues)
+    labels[tested] = "not significant"
+    labels[tested & (symbols != "")] = symbols[tested & (symbols != "")]
+    return labels
 
 
 def _marker_sizes(n_substrates: np.ndarray) -> np.ndarray:
@@ -148,7 +187,7 @@ def plot_kinase_volcano(
     sign_threshold: float = 0.05,
     highlight: str | None = None,
     width: int | None = None,
-    height: int = 1350,
+    height: int = 1150,
 ) -> go.Figure:
     """Plot contrast-local KSEA effects against kinase-level q-values."""
     results = _kinase_results(state.adata)
@@ -239,7 +278,7 @@ def plot_kinase_volcano(
                 "Gene: %{customdata[1]}<br>"
                 "UniProt: %{customdata[2]}<br>"
                 "Mean shift: %{x:.3f}<br>"
-                "KSEA z-score: %{customdata[3]:.3f}<br>"
+                "Z-score: %{customdata[3]:.3f}<br>"
                 "p-value: %{customdata[4]:.3e}<br>"
                 "q-value: %{customdata[5]:.3e}<br>"
                 "Substrates: %{customdata[6]:.0f}<br>"
@@ -352,16 +391,406 @@ def _selected_kinase_row(
     return sub.iloc[int(np.flatnonzero(matched)[0])]
 
 
+def _dendrogram_lines(
+    fig: go.Figure,
+    linkage: np.ndarray,
+    *,
+    orientation: str,
+    row: int,
+    col: int,
+) -> None:
+    linkage = np.asarray(linkage, dtype=float)
+    if linkage.ndim != 2 or linkage.shape[0] == 0:
+        return
+
+    dendrogram = sch.dendrogram(linkage, no_plot=True)
+    line_x: list[float | None] = []
+    line_y: list[float | None] = []
+
+    for icoord, dcoord in zip(
+        dendrogram["icoord"],
+        dendrogram["dcoord"],
+    ):
+        leaf_coord = (np.asarray(icoord, dtype=float) - 5.0) / 10.0
+        distance = np.asarray(dcoord, dtype=float)
+
+        if orientation == "top":
+            x, y = leaf_coord, distance
+        else:
+            x, y = distance, leaf_coord
+        line_x.extend([*x.tolist(), None])
+        line_y.extend([*y.tolist(), None])
+
+    fig.add_trace(
+        go.Scatter(
+            x=line_x,
+            y=line_y,
+            mode="lines",
+            line={"color": "#555", "width": 1},
+            hoverinfo="skip",
+            showlegend=False,
+        ),
+        row=row,
+        col=col,
+    )
+
+
+def _kinase_activity_heatmap(
+    adata,
+    results: pd.DataFrame,
+    profile_name: str = "significant",
+) -> pn.viewable.Viewable:
+    clustering = _kinase_activity(adata).get("clustering")
+    if not isinstance(clustering, Mapping):
+        return pn.pane.Alert(
+            "Kinase activity clustering is not available in this result.",
+            alert_type="light",
+            sizing_mode="stretch_width",
+        )
+    profiles = clustering.get("profiles")
+    if isinstance(profiles, Mapping):
+        profile = profiles.get(str(profile_name))
+    elif profile_name == "significant":
+        # Compatibility with results created before the toggle existed.
+        profile = clustering
+    else:
+        profile = None
+
+    if not isinstance(profile, Mapping):
+        return pn.pane.Alert(
+            "The all-tested clustering is not available in this result. "
+            "Rerun it with the current ProteoFlux version.",
+            alert_type="light",
+            sizing_mode="stretch_width",
+        )
+
+    kinase_ids = [
+        str(value) for value in profile.get("kinase_ids", [])
+    ]
+    contrast_names = [
+        str(value) for value in profile.get("contrast_names", [])
+    ]
+    kinase_order = [
+        str(value)
+        for value in profile.get("kinase_order", kinase_ids)
+    ]
+    contrast_order = [
+        str(value)
+        for value in profile.get("contrast_order", contrast_names)
+    ]
+
+    if not kinase_ids or not contrast_names:
+        if profile_name == "all_tested":
+            message = "No kinase had a valid KSEA test in any contrast."
+        else:
+            threshold = float(clustering.get("sign_threshold", 0.05))
+            message = (
+                f"No kinase was significant at q < {threshold:g} "
+                "in any contrast."
+            )
+        return pn.pane.Alert(
+            message,
+            alert_type="light",
+            sizing_mode="stretch_width",
+        )
+
+    work = results.copy()
+    work["kinase_id"] = _text_series(work["kinase_id"])
+    work["contrast"] = _text_series(work["contrast"])
+    for column in (
+        "activity_score",
+        "effect",
+        "qvalue",
+        "n_substrates",
+    ):
+        work[column] = pd.to_numeric(work[column], errors="coerce")
+
+    # Untested cells must stay blank, even if an old result contains
+    # placeholder numeric values.
+    untested = ~_tested_mask(work["tested"])
+    work.loc[
+        untested,
+        ["activity_score", "effect", "qvalue"],
+    ] = np.nan
+
+    def pivot(column: str) -> pd.DataFrame:
+        return (
+            work.pivot(
+                index="kinase_id",
+                columns="contrast",
+                values=column,
+            )
+            .reindex(index=kinase_order, columns=contrast_order)
+        )
+
+    activity = pivot("activity_score")
+    effects = pivot("effect")
+    qvalues = pivot("qvalue")
+    substrate_counts = pivot("n_substrates")
+
+    kinase_lookup = (
+        work.drop_duplicates("kinase_id", keep="first")
+        .set_index("kinase_id")
+    )
+
+    kinase_labels = []
+    kinase_genes = []
+    kinase_uniprots = []
+    for kinase_id in kinase_order:
+        row = kinase_lookup.loc[kinase_id]
+        kinase = _text_value(row.get("kinase", ""))
+        gene = _text_value(row.get("kinase_gene", ""))
+        uniprot = _text_value(row.get("kinase_uniprot", ""))
+
+        kinase_labels.append(kinase or gene or kinase_id)
+        kinase_genes.append(gene)
+        kinase_uniprots.append(uniprot)
+
+    z = activity.to_numpy(dtype=float)
+    finite = np.abs(z[np.isfinite(z)])
+    color_limit = float(np.max(finite)) if finite.size else 1.0
+    if color_limit <= 0.0:
+        color_limit = 1.0
+
+    qvalue_matrix = qvalues.to_numpy(dtype=float)
+    sign_threshold = float(clustering.get("sign_threshold", 0.05))
+    significance_symbols = _significance_symbols(
+        qvalue_matrix,
+        sign_threshold,
+    )
+    significance_labels = _significance_labels(
+        qvalue_matrix,
+        significance_symbols,
+    )
+
+    customdata = np.empty(
+        (len(kinase_order), len(contrast_order), 8),
+        dtype=object,
+    )
+    customdata[:, :, 0] = np.asarray(
+        kinase_labels, dtype=object
+    )[:, None]
+    customdata[:, :, 1] = np.asarray(
+        kinase_genes, dtype=object
+    )[:, None]
+    customdata[:, :, 2] = np.asarray(
+        kinase_uniprots, dtype=object
+    )[:, None]
+    customdata[:, :, 3] = effects.to_numpy(dtype=float)
+    customdata[:, :, 4] = qvalue_matrix
+    customdata[:, :, 5] = substrate_counts.to_numpy(dtype=float)
+    customdata[:, :, 6] = np.asarray(
+        [value.replace("_vs_", "_v_") for value in contrast_order],
+        dtype=object,
+    )[None, :]
+    customdata[:, :, 7] = significance_labels
+
+    contrast_labels = [
+        value.replace("_vs_", "_v_")
+        for value in contrast_order
+    ]
+    contrast_range = [-0.5, len(contrast_order) - 0.5]
+    kinase_range = [len(kinase_order) - 0.5, -0.5]
+
+    fig = make_subplots(
+        rows=2,
+        cols=2,
+        row_heights=[0.18, 0.82],
+        column_widths=[0.12, 0.88],
+        specs=[[None, {}], [{}, {}]],
+        shared_xaxes="columns",
+        shared_yaxes="rows",
+        horizontal_spacing=0.06,
+        vertical_spacing=0.01,
+    )
+
+    _dendrogram_lines(
+        fig,
+        profile.get(
+            "contrast_linkage",
+            np.empty((0, 4)),
+        ),
+        orientation="top",
+        row=1,
+        col=2,
+    )
+    _dendrogram_lines(
+        fig,
+        profile.get(
+            "kinase_linkage",
+            np.empty((0, 4)),
+        ),
+        orientation="left",
+        row=2,
+        col=1,
+    )
+
+    fig.add_trace(
+        go.Heatmap(
+            z=z,
+            x=np.arange(len(contrast_order)),
+            y=np.arange(len(kinase_order)),
+            customdata=customdata,
+            colorscale="RdBu_r",
+            zmin=-color_limit,
+            zmax=color_limit,
+            zmid=0.0,
+            xgap=1,
+            ygap=1,
+            colorbar={
+                "title": "Z-score",
+                "x": 1.12,
+            },
+            hovertemplate=(
+                "Kinase: %{customdata[0]}<br>"
+                "Gene: %{customdata[1]}<br>"
+                "UniProt: %{customdata[2]}<br>"
+                "Contrast: %{customdata[6]}<br>"
+                "Z-score: %{z:.3f}<br>"
+                "Mean shift: %{customdata[3]:.3f}<br>"
+                "q-value: %{customdata[4]:.3e}<br>"
+                "Significance: %{customdata[7]}<br>"
+                "Substrates: %{customdata[5]:.0f}"
+                "<extra></extra>"
+            ),
+        ),
+        row=2,
+        col=2,
+    )
+
+    star_rows, star_cols = np.nonzero(significance_symbols != "")
+    if star_rows.size:
+        star_values = z[star_rows, star_cols]
+        dark_cell = np.abs(star_values) >= 0.55 * color_limit
+        for use_dark_cells, text_color in (
+            (False, "#111"),
+            (True, "white"),
+        ):
+            keep = dark_cell == use_dark_cells
+            if not keep.any():
+                continue
+            fig.add_trace(
+                go.Scatter(
+                    x=star_cols[keep],
+                    y=star_rows[keep],
+                    mode="text",
+                    text=significance_symbols[
+                        star_rows[keep],
+                        star_cols[keep],
+                    ],
+                    textfont={"color": text_color, "size": 13},
+                    hoverinfo="skip",
+                    showlegend=False,
+                ),
+                row=2,
+                col=2,
+            )
+
+    heatmap_height = max(
+        520,
+        min(1050, 260 + 16 * len(kinase_order)),
+    )
+    fig.update_layout(
+        title={
+            "text": "Kinase activity across contrasts",
+            "x": 0.5,
+        },
+        height=heatmap_height,
+        autosize=True,
+        showlegend=False,
+        margin={
+            "l": 25,
+            "r": 150,
+            "t": 65,
+            "b": 100,
+        },
+        plot_bgcolor="white",
+    )
+
+    fig.update_xaxes(
+        showticklabels=False,
+        showgrid=False,
+        zeroline=False,
+        range=contrast_range,
+        row=1,
+        col=2,
+    )
+    fig.update_yaxes(
+        showticklabels=False,
+        showgrid=False,
+        zeroline=False,
+        row=1,
+        col=2,
+    )
+    fig.update_xaxes(
+        showticklabels=False,
+        showgrid=False,
+        zeroline=False,
+        autorange="reversed",
+        row=2,
+        col=1,
+    )
+    fig.update_yaxes(
+        tickmode="array",
+        tickvals=list(range(len(kinase_order))),
+        ticktext=kinase_labels,
+        showticklabels=True,
+        side="right",
+        ticklabelstandoff=40,
+        automargin=True,
+        showgrid=False,
+        zeroline=False,
+        range=kinase_range,
+        row=2,
+        col=1,
+    )
+    fig.update_xaxes(
+        tickmode="array",
+        tickvals=list(range(len(contrast_order))),
+        ticktext=contrast_labels,
+        showticklabels=True,
+        tickangle=-45,
+        title="Contrasts",
+        range=contrast_range,
+        row=2,
+        col=2,
+    )
+    fig.update_yaxes(
+        showticklabels=False,
+        range=kinase_range,
+        row=2,
+        col=2,
+    )
+
+    return pn.pane.Plotly(
+        fig,
+        height=heatmap_height,
+        sizing_mode="stretch_width",
+        config={"responsive": True},
+        styles={"overflow": "hidden"},
+    )
+
+
 def _contrast_sample_indices(adata, contrast: str) -> np.ndarray:
     if "_vs_" not in str(contrast):
         return np.array([], dtype=int)
 
     condition_a, condition_b = str(contrast).split("_vs_", 1)
     conditions = _text_series(adata.obs["CONDITION"]).to_numpy()
+
+    def condition_indices(condition: str) -> np.ndarray:
+        indices = np.flatnonzero(conditions == condition)
+        sample_names = (
+            adata.obs_names[indices]
+            .astype(str)
+            .to_numpy()
+        )
+        return indices[np.argsort(sample_names, kind="stable")]
+
     return np.concatenate(
         [
-            np.flatnonzero(conditions == condition_a),
-            np.flatnonzero(conditions == condition_b),
+            condition_indices(condition_a),
+            condition_indices(condition_b),
         ]
     )
 
@@ -377,11 +806,26 @@ def _kinase_substrate_heatmap(
     if row is None:
         return pn.Card(
             pn.pane.Markdown(
+                "**Contributing Phosphosites**",
+                styles={
+                    "font-size": "16px",
+                    "padding": "0",
+                    "line-height": "0px",
+                },
+            ),
+            make_hr(),
+            pn.pane.Markdown(
                 "Select a kinase to show its contributing phosphosite profiles."
             ),
-            title="Contributing phosphosites",
             width=410,
             collapsible=False,
+            hide_header=True,
+            styles={
+                "background": "#f9f9f9",
+                "border-radius": "8px",
+                "box-shadow": "3px 3px 5px #bcbcbc",
+                "padding": "8px",
+            },
         )
 
     kinase_id = str(row["kinase_id"])
@@ -405,11 +849,26 @@ def _kinase_substrate_heatmap(
     if not site_ids or sample_indices.size == 0:
         return pn.Card(
             pn.pane.Markdown(
+                "**Contributing Phosphosites**",
+                styles={
+                    "font-size": "16px",
+                    "padding": "0",
+                    "line-height": "0px",
+                },
+            ),
+            make_hr(),
+            pn.pane.Markdown(
                 "No contributing phosphosite profiles are available for this contrast."
             ),
-            title="Contributing phosphosites",
             width=410,
             collapsible=False,
+            hide_header=True,
+            styles={
+                "background": "#f9f9f9",
+                "border-radius": "8px",
+                "box-shadow": "3px 3px 5px #bcbcbc",
+                "padding": "8px",
+            },
         )
 
     matrix = adata.X[sample_indices, :][:, feature_indices]
@@ -420,31 +879,48 @@ def _kinase_substrate_heatmap(
     with np.errstate(invalid="ignore"):
         centered = absolute - np.nanmean(absolute, axis=1, keepdims=True)
 
+    site_log2fc = np.full(len(site_ids), np.nan, dtype=float)
     contrast_names = [str(value) for value in adata.uns.get("contrast_names", [])]
     if contrast in contrast_names and "log2fc" in adata.varm:
         contrast_index = contrast_names.index(contrast)
-        log2fc = np.asarray(
+        site_log2fc = np.asarray(
             adata.varm["log2fc"][feature_indices, contrast_index],
             dtype=float,
         ).ravel()
-        sort_values = np.where(np.isfinite(log2fc), log2fc, -np.inf)
+        sort_values = np.where(
+            np.isfinite(site_log2fc),
+            site_log2fc,
+            -np.inf,
+        )
         order = np.argsort(-sort_values, kind="stable")
         site_ids = [site_ids[index] for index in order]
         centered = centered[order]
         absolute = absolute[order]
+        site_log2fc = site_log2fc[order]
 
     sample_names = adata.obs_names[sample_indices].astype(str).tolist()
+    sample_conditions = _text_series(
+        adata.obs.iloc[sample_indices]["CONDITION"]
+    ).to_numpy(dtype=object)
     finite = np.abs(centered[np.isfinite(centered)])
     color_limit = float(np.max(finite)) if finite.size else 1.0
     if color_limit <= 0.0:
         color_limit = 1.0
+
+    customdata = np.empty(
+        (len(site_ids), len(sample_names), 3),
+        dtype=object,
+    )
+    customdata[:, :, 0] = absolute
+    customdata[:, :, 1] = sample_conditions[None, :]
+    customdata[:, :, 2] = site_log2fc[:, None]
 
     fig = go.Figure(
         go.Heatmap(
             z=centered,
             x=sample_names,
             y=site_ids,
-            customdata=absolute,
+            customdata=customdata,
             colorscale="RdBu_r",
             zmin=-color_limit,
             zmax=color_limit,
@@ -453,34 +929,53 @@ def _kinase_substrate_heatmap(
             hovertemplate=(
                 "Phosphosite: %{y}<br>"
                 "Sample: %{x}<br>"
+                "Condition: %{customdata[1]}<br>"
                 "Deviation from site mean: %{z:.3f}<br>"
-                "Final intensity: %{customdata:.3f}"
+                "Final intensity: %{customdata[0]:.3f}<br>"
+                "Contrast log2FC: %{customdata[2]:.3f}"
                 "<extra></extra>"
             ),
         )
     )
+    heatmap_height = max(
+        330,
+        min(650, 150 + 18 * len(site_ids)),
+    )
     fig.update_layout(
         title={"text": f"Substrate profiles — {kinase}", "x": 0.5},
-        height=max(330, min(650, 150 + 18 * len(site_ids))),
+        height=heatmap_height,
+        autosize=True,
         margin={"l": 110, "r": 20, "t": 55, "b": 90},
         xaxis={"title": "Samples", "tickangle": -45},
         yaxis={"title": "Phosphosites", "autorange": "reversed", "showticklabels":False},
     )
 
+    header=pn.Row(
+        pn.pane.Markdown(
+            "**Contributing Phosphosites**",
+            styles={"font-size": "16px", "padding": "0", "line-height": "0px"},
+        )
+    )
     return pn.Card(
+        header,
+        make_hr(),
         pn.pane.Plotly(
             fig,
+            height=heatmap_height,
             sizing_mode="stretch_width",
             config={"responsive": True},
+            styles={"overflow": "hidden"},
         ),
-        title="Contributing phosphosites",
         width=800,
+        height=heatmap_height + 65,
         collapsible=False,
+        hide_header=True,
         styles={
             "background": "#f9f9f9",
             "border-radius": "8px",
             "box-shadow": "3px 3px 5px #bcbcbc",
             "padding": "8px",
+            "overflow": "hidden",
         },
     )
 
@@ -494,11 +989,20 @@ def _kinase_detail_card(
     if row is None:
         return pn.Card(
             pn.pane.Markdown(
+                "**Kinase details**",
+                styles={
+                    "font-size": "16px",
+                    "padding": "0",
+                    "line-height": "0px",
+                },
+            ),
+            make_hr(),
+            pn.pane.Markdown(
                 "Click a kinase in the volcano or use **Search Kinase** to inspect it."
             ),
-            title="Kinase details",
             width=410,
             collapsible=False,
+            hide_header=True,
             styles={
                 "background": "#f9f9f9",
                 "border-radius": "8px",
@@ -507,28 +1011,24 @@ def _kinase_detail_card(
             },
         )
 
-    kinase = str(row.get("kinase", "") or row["kinase_id"])
-    gene = str(row.get("kinase_gene", "") or "n/a")
-    uniprot = str(row.get("kinase_uniprot", "") or "")
-    tested = bool(_tested_mask(pd.Series([row["tested"]]))[0])
-    reason = str(row.get("reason", "") or "").replace("_", " ")
-    test_status = (
-        "calculated"
-        if tested
-        else f"not calculated ({reason or 'ineligible'})"
+    kinase = _text_value(
+        row.get("kinase", ""),
+        str(row["kinase_id"]),
     )
+    gene = _text_value(row.get("kinase_gene", ""), "n/a")
+    uniprot = _text_value(row.get("kinase_uniprot", ""))
 
     Number = pn.indicators.Number
     effect = Number(
         name="Mean shift",
         value=float(row["effect"]),
         format="{value:.3f}",
-        default_color="purple",
+        default_color="red",
         font_size="12pt",
         styles={"flex": "1"},
     )
     activity = Number(
-        name="KSEA z-score",
+        name="Z-score",
         value=float(row["activity_score"]),
         format="{value:.3f}",
         default_color="purple",
@@ -553,45 +1053,62 @@ def _kinase_detail_card(
     )
 
     header = pn.pane.Markdown(
-        f"### {kinase}\n**Gene:** {gene}",
-        margin=(0, 0, 5, 0),
-    )
-    stats = pn.pane.Markdown(
-        "\n".join(
-            [
-                f"- Mean substrate log2FC: **{float(row['kinase_mean_log2fc']):.3f}**",
-                f"- Global mean log2FC: **{float(row['global_mean_log2fc']):.3f}**",
-                f"- p-value: **{float(row['pvalue']):.3e}**",
-                f"- KSEA test: **{test_status}**",
-            ]
-        ),
-        margin=(5, 0, 0, 0),
+        f"**Kinase**: {kinase}",
+        styles={"font-size": "16px", "padding": "0", "line-height": "0px"},
     )
 
-    footer = pn.pane.HTML("")
+    footer_left = pn.pane.HTML(
+        "<span style='font-size: 12px;'>"
+        f"p-value: <b>{float(row['pvalue']):.3e}</b>"
+        f" &nbsp;|&nbsp; Gene: <b>{gene}</b>"
+        f" &nbsp;|&nbsp; UniProt: <b>{uniprot or 'n/a'}</b>"
+        "</span>"
+    )
+
+    footer_right = pn.pane.HTML("")
     if uniprot:
-        footer = pn.pane.HTML(
+        footer_right = pn.pane.HTML(
             "<span style='font-size: 12px;'>"
+            "🔗 "
             f"<a href='https://www.uniprot.org/uniprotkb/{uniprot}/entry' "
             "target='_blank' rel='noopener'>UniProt Entry</a>"
-            "</span>"
+            "</span>",
+            styles={"text-align": "right"},
         )
+
+    footer = pn.Row(
+        footer_left,
+        footer_right,
+        sizing_mode="stretch_width",
+        styles={
+            "justify-content": "space-between",
+            "padding": "2px 8px 4px 0px",
+            "margin-top": "-6px",
+        },
+    )
+
+    card_style = {
+        "background": "#f9f9f9",
+        "align-items": "center",
+        "border-radius": "8px",
+        "text-align": "center",
+        "padding": "5px",
+        "box-shadow": "3px 3px 5px #bcbcbc",
+        "justify-content": "space-evenly",
+    }
 
     return pn.Card(
         header,
+        make_hr(),
         pn.Row(effect, activity, sizing_mode="stretch_width"),
+        make_hr(),
         pn.Row(qvalue, substrates, sizing_mode="stretch_width"),
-        stats,
+        make_hr(),
         footer,
-        title="Kinase details",
         width=800,
         collapsible=False,
-        styles={
-            "background": "#f9f9f9",
-            "border-radius": "8px",
-            "box-shadow": "3px 3px 5px #bcbcbc",
-            "padding": "8px",
-        },
+        hide_header=True,
+        styles=card_style,
     )
 
 
@@ -613,7 +1130,16 @@ def kinases_tab(state: SessionState):
         return pn.pane.Markdown("No kinase activity contrasts are available.")
 
     analysis = adata.uns.get("analysis", {}) or {}
-    sign_threshold = float(analysis.get("sign_threshold", 0.05))
+    clustering = _kinase_activity(adata).get("clustering", {}) or {}
+    sign_threshold_value = clustering.get(
+        "sign_threshold",
+        analysis.get("sign_threshold", 0.05),
+    )
+    sign_threshold = float(
+        0.05
+        if sign_threshold_value is None
+        else sign_threshold_value
+    )
 
     contrast_sel = pn.widgets.Select(
         name="Contrast",
@@ -637,7 +1163,7 @@ def kinases_tab(state: SessionState):
         sign_threshold=sign_threshold,
         highlight=search_input,
         width=None,
-        height=1350,
+        height=1150,
     )
     volcano_dmap = bind_uirevision(
         volcano_dmap,
@@ -646,7 +1172,7 @@ def kinases_tab(state: SessionState):
     )
     volcano_plot = pn.pane.Plotly(
         volcano_dmap,
-        height=1350,
+        #height=1150,
         margin=(0, 0, 0, 20),
         sizing_mode="stretch_width",
         config={"responsive": True},
@@ -684,6 +1210,68 @@ def kinases_tab(state: SessionState):
     )
 
     method = str(_kinase_activity(adata).get("method", "ksea")).upper()
+    activity_filter = pn.widgets.RadioButtonGroup(
+        name="Kinases",
+        options={
+            "Significant in ≥1 contrast": "significant",
+            "All tested": "all_tested",
+        },
+        value="significant",
+        button_type="default",
+        margin=(12,0,0,10),
+    )
+    activity_heatmap = pn.bind(
+        _kinase_activity_heatmap,
+        adata=adata,
+        results=results,
+        profile_name=activity_filter,
+    )
+    activity_info = pn.widgets.TooltipIcon(
+        value=f"""
+        Cells show signed Z-scores; untested kinase–contrast pairs are blank.
+        Significance symbols are * q < {sign_threshold:g}, ** q < 0.01,
+        and *** q < 0.001.
+        Kinases use average-linkage clustering with 1 − Spearman correlation.
+        Contrasts use 1 − |Spearman correlation|, so profiles that differ only
+        because the contrast direction is reversed can cluster together.
+        Missing values are median-filled only for linkage calculation.
+        """,
+        margin=0,
+        styles={"z-index": "10"},
+        stylesheets=[
+            """
+            :host {
+                width: 18px !important;
+                min-width: 18px !important;
+                max-width: 18px !important;
+                height: 18px !important;
+                min-height: 18px !important;
+                max-height: 18px !important;
+                margin: 0 !important;
+                padding: 0 !important;
+                position: static !important;
+            }
+            """
+        ],
+    )
+    activity_info_box = pn.Column(
+        activity_info,
+        width=18,
+        height=18,
+        min_width=18,
+        min_height=18,
+        margin=(10, 0, 0, 0),
+        styles={
+            "flex": "0 0 18px",
+            "padding": "0",
+            "margin": "0",
+            "overflow": "visible",
+            "align-self": "flex-start",
+            "justify-content": "flex-start",
+            "position": "relative",
+            "top": "18px",
+        },
+    )
     controls = pn.Row(
         contrast_sel,
         pn.Spacer(width=15),
@@ -709,13 +1297,13 @@ def kinases_tab(state: SessionState):
                 detail,
                 pn.Spacer(height=15),
                 substrate_heatmap,
-                width=1200,
+                width=840,
                 margin=(20, 20, 0, 0),
             ),
             sizing_mode="stretch_width",
             styles={"align-items": "stretch"},
         ),
-        height=1500,
+        height=1310,
         margin=(0, 0, 0, 20),
         sizing_mode="stretch_width",
         styles={
@@ -725,8 +1313,33 @@ def kinases_tab(state: SessionState):
         },
     )
 
+    clustering_pane = pn.Column(
+        pn.Row(
+            pn.pane.Markdown(
+                "##   Activity overview",
+                disable_anchors=True,
+            ),
+            activity_info_box,
+            pn.Spacer(width=10),
+            activity_filter,
+            margin=(0, 20, 0, 0),
+            sizing_mode="stretch_width",
+        ),
+        activity_heatmap,
+        margin=(0, 0, 0, 20),
+        sizing_mode="stretch_width",
+        styles={
+            "border-radius": "15px",
+            "box-shadow": "3px 3px 5px #bcbcbc",
+            "width": "98vw",
+            "overflow": "hidden",
+        },
+    )
+
     return pn.Column(
         pn.Spacer(height=10),
+        clustering_pane,
+        pn.Spacer(height=30),
         volcano_pane,
         pn.Spacer(height=30),
         sizing_mode="stretch_width",
