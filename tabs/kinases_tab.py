@@ -1,16 +1,24 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+import time
 
 import numpy as np
 import pandas as pd
 import panel as pn
 import plotly.graph_objects as go
+import requests
 
 import scipy.cluster.hierarchy as sch
 from plotly.subplots import make_subplots
 
-from tabs.overview_shared import bind_uirevision
+from components.selection_export import (
+    SelectionExportSpec,
+    build_kinase_selection_df,
+    make_volcano_selection_downloader,
+)
+from components.string_links import STRING_API_URL, STRING_CALLER_IDENTITY
+from tabs.overview_shared import STRING_SPECIES_OPTIONS, bind_uirevision
 from utils.layout_utils import (
     FRAME_STYLES_TALL,
     make_vr,
@@ -44,6 +52,16 @@ _REQUIRED_SUBSTRATE_COLUMNS = {
     "database_source",
 }
 
+_ENRICHMENT_CATEGORY_OPTIONS = {
+    "KEGG pathways": "KEGG",
+    "Reactome pathways": "RCTM",
+    "GO Biological Process": "Process",
+}
+_ENRICHMENT_MAX_TERMS = 12
+_ENRICHMENT_FDR_THRESHOLD = 0.05
+# False uses STRING's default whole-species background. Set to True to
+# restrict enrichment to the kinases that were eligible/tested by KSEA.
+_ENRICHMENT_USE_TESTED_BACKGROUND = False
 
 def _kinase_activity(adata) -> Mapping:
     payload = adata.uns.get("kinase_activity")
@@ -151,6 +169,263 @@ def _significance_labels(
     labels[tested] = "not significant"
     labels[tested & (symbols != "")] = symbols[tested & (symbols != "")]
     return labels
+
+
+def _string_identifier(row: pd.Series) -> str:
+    invalid = {"", "?", "nan", "none", "n/a", "na"}
+    for column in (
+        "kinase_uniprot",
+        "kinase_gene",
+        "kinase",
+        "kinase_id",
+    ):
+        value = _text_value(row.get(column, ""))
+        if value.casefold() not in invalid:
+            return value
+    return ""
+
+
+def _significant_kinases_by_contrast(
+    results: pd.DataFrame,
+    contrasts: list[str],
+    sign_threshold: float,
+) -> dict[str, dict[str, tuple[str, ...]]]:
+    work = results.copy()
+    work["contrast"] = _text_series(work["contrast"])
+    work["qvalue"] = pd.to_numeric(work["qvalue"], errors="coerce")
+    work["activity_score"] = pd.to_numeric(
+        work["activity_score"], errors="coerce"
+    )
+    work["_tested"] = _tested_mask(work["tested"])
+
+    output: dict[str, dict[str, tuple[str, ...]]] = {}
+    for contrast in contrasts:
+        sub = work.loc[
+            work["contrast"].eq(str(contrast))
+            & work["_tested"]
+            & work["qvalue"].lt(float(sign_threshold))
+        ]
+        output[str(contrast)] = {
+            direction: tuple(
+                sorted(
+                    {
+                        identifier
+                        for _, row in sub.loc[mask].iterrows()
+                        if (identifier := _string_identifier(row))
+                    },
+                    key=str.casefold,
+                )
+            )
+            for direction, mask in {
+                "activated": sub["activity_score"].gt(0.0),
+                "inhibited": sub["activity_score"].lt(0.0),
+            }.items()
+        }
+    return output
+
+
+def _tested_kinases_by_contrast(
+    results: pd.DataFrame,
+    contrasts: list[str],
+) -> dict[str, tuple[str, ...]]:
+    work = results.copy()
+    work["contrast"] = _text_series(work["contrast"])
+    work["_tested"] = _tested_mask(work["tested"])
+
+    output: dict[str, tuple[str, ...]] = {}
+    for contrast in contrasts:
+        sub = work.loc[
+            work["contrast"].eq(str(contrast)) & work["_tested"]
+        ]
+        identifiers = {
+            identifier
+            for _, row in sub.iterrows()
+            if (identifier := _string_identifier(row))
+        }
+        output[str(contrast)] = tuple(
+            sorted(identifiers, key=str.casefold)
+        )
+    return output
+
+
+def _string_post_json(method: str, parameters: dict) -> list[dict]:
+    response = requests.post(
+        f"{STRING_API_URL}/json/{method}",
+        data=parameters,
+        timeout=90,
+    )
+    response.raise_for_status()
+    payload = response.json()
+    if not isinstance(payload, list):
+        raise TypeError(
+            f"STRING {method!r} response must be a list of records."
+        )
+    return payload
+
+
+def _map_to_string_ids(
+    identifiers: tuple[str, ...],
+    species: int,
+) -> dict[str, str]:
+    ordered = tuple(dict.fromkeys(str(value) for value in identifiers if value))
+    if not ordered:
+        return {}
+
+    payload = _string_post_json(
+        "get_string_ids",
+        {
+            "identifiers": "\r".join(ordered),
+            "species": int(species),
+            "echo_query": 1,
+            "caller_identity": STRING_CALLER_IDENTITY,
+        },
+    )
+    mapping: dict[str, str] = {}
+    for record in payload:
+        try:
+            query_index = int(record["queryIndex"])
+            string_id = str(record["stringId"]).strip()
+        except (KeyError, TypeError, ValueError):
+            continue
+        if 0 <= query_index < len(ordered) and string_id:
+            mapping[ordered[query_index]] = string_id
+    return mapping
+
+
+def _string_enrichment(
+    query_string_ids: tuple[str, ...],
+    background_string_ids: tuple[str, ...],
+    species: int,
+    use_tested_background: bool,
+) -> list[dict]:
+    if len(query_string_ids) < 2:
+        return []
+    parameters = {
+        "identifiers": "\r".join(query_string_ids),
+        "species": int(species),
+        "caller_identity": STRING_CALLER_IDENTITY,
+    }
+    if use_tested_background:
+        if not set(query_string_ids).issubset(background_string_ids):
+            raise ValueError(
+                "Mapped STRING enrichment query is not a subset of its "
+                "background."
+            )
+        parameters["background_string_identifiers"] = "\r".join(
+            background_string_ids
+        )
+    return _string_post_json("enrichment", parameters)
+
+
+def _string_list(value) -> list[str]:
+    if isinstance(value, (list, tuple, set, np.ndarray, pd.Series)):
+        values = list(value)
+    else:
+        text = _text_value(value)
+        values = text.replace(";", ",").split(",") if text else []
+    return [
+        text
+        for item in values
+        if (text := _text_value(item))
+    ]
+
+
+def _string_enrichment_frame(
+    data: list[dict],
+    category: str,
+    query_sizes: dict[str, int],
+) -> pd.DataFrame:
+    columns = [
+        "term",
+        "description",
+        "direction",
+        "number_of_genes",
+        "number_of_genes_in_background",
+        "p_value",
+        "fdr",
+        "fdr_significant",
+        "score",
+        "query_fraction",
+        "contributors",
+    ]
+    frame = pd.DataFrame(data)
+    if frame.empty or "category" not in frame.columns:
+        return pd.DataFrame(columns=columns)
+
+    frame = frame.loc[frame["category"].astype(str).eq(str(category))].copy()
+    required = {
+        "term",
+        "description",
+        "number_of_genes",
+        "number_of_genes_in_background",
+        "p_value",
+        "fdr",
+    }
+    missing = sorted(required.difference(frame.columns))
+    if missing:
+        raise ValueError(
+            "STRING enrichment result is missing required fields: "
+            f"{missing!r}."
+        )
+    if frame.empty:
+        return pd.DataFrame(columns=columns)
+
+    if "_direction" not in frame.columns:
+        return pd.DataFrame(columns=columns)
+    frame["direction"] = frame["_direction"].astype(str)
+    frame = frame.loc[
+        frame["direction"].isin({"activated", "inhibited"})
+    ].copy()
+    if frame.empty:
+        return pd.DataFrame(columns=columns)
+
+    frame["p_value"] = pd.to_numeric(
+        frame["p_value"], errors="coerce"
+    )
+    frame["fdr"] = pd.to_numeric(frame["fdr"], errors="coerce")
+    frame["number_of_genes"] = pd.to_numeric(
+        frame["number_of_genes"], errors="coerce"
+    )
+    frame["number_of_genes_in_background"] = pd.to_numeric(
+        frame["number_of_genes_in_background"], errors="coerce"
+    )
+    frame = frame.loc[
+        np.isfinite(frame["p_value"])
+        & frame["p_value"].between(0.0, 1.0, inclusive="both")
+        & np.isfinite(frame["fdr"])
+        & frame["fdr"].between(0.0, 1.0, inclusive="both")
+        & np.isfinite(frame["number_of_genes"])
+    ].copy()
+    if frame.empty:
+        return pd.DataFrame(columns=columns)
+
+    frame["fdr_significant"] = (
+        frame["fdr"] < _ENRICHMENT_FDR_THRESHOLD
+    )
+    frame["score"] = _qvalue_plot_values(frame["fdr"].to_numpy(dtype=float))
+    denominators = frame["direction"].map(query_sizes).fillna(0).clip(lower=1)
+    frame["query_fraction"] = (
+        frame["number_of_genes"] / denominators
+    ).clip(0.0, 1.0)
+    names_column = "preferredNames" if "preferredNames" in frame else "inputGenes"
+    if names_column in frame:
+        frame["contributors"] = frame[names_column].map(
+            lambda value: ", ".join(_string_list(value))
+        )
+    else:
+        frame["contributors"] = ""
+
+    frame["term"] = frame["term"].astype(str)
+    frame["description"] = frame["description"].astype(str)
+    frame = (
+        frame.sort_values(
+            ["fdr", "number_of_genes", "description"],
+            ascending=[True, False, True],
+            kind="stable",
+        )
+        .drop_duplicates(["direction", "term"], keep="first")
+    )
+    return frame[columns].reset_index(drop=True)
 
 
 def _marker_sizes(n_substrates: np.ndarray) -> np.ndarray:
@@ -262,6 +537,7 @@ def plot_kinase_volcano(
             text=kinase_ids,
             customdata=np.column_stack(
                 [
+                    kinase_ids,
                     kinase_names,
                     kinase_genes,
                     kinase_uniprot,
@@ -274,16 +550,16 @@ def plot_kinase_volcano(
                 ]
             ),
             hovertemplate=(
-                "Kinase: %{customdata[0]}<br>"
-                "Gene: %{customdata[1]}<br>"
-                "UniProt: %{customdata[2]}<br>"
+                "Kinase: %{customdata[1]}<br>"
+                "Gene: %{customdata[2]}<br>"
+                "UniProt: %{customdata[3]}<br>"
                 "Mean shift: %{x:.3f}<br>"
-                "Z-score: %{customdata[3]:.3f}<br>"
-                "p-value: %{customdata[4]:.3e}<br>"
-                "q-value: %{customdata[5]:.3e}<br>"
-                "Substrates: %{customdata[6]:.0f}<br>"
-                "Mean substrate log2FC: %{customdata[7]:.3f}<br>"
-                "Global mean log2FC: %{customdata[8]:.3f}"
+                "Z-score: %{customdata[4]:.3f}<br>"
+                "p-value: %{customdata[5]:.3e}<br>"
+                "q-value: %{customdata[6]:.3e}<br>"
+                "Substrates: %{customdata[7]:.0f}<br>"
+                "Mean substrate log2FC: %{customdata[8]:.3f}<br>"
+                "Global mean log2FC: %{customdata[9]:.3f}"
                 "<extra></extra>"
             ),
             name="",
@@ -1112,6 +1388,355 @@ def _kinase_detail_card(
     )
 
 
+def _coordinated_enrichment_figure(
+    *,
+    contrasts: list[str],
+    data_by_contrast: dict[str, list[dict]],
+    errors_by_contrast: dict[str, dict[str, str]],
+    query_sizes: dict[str, dict[str, int]],
+    background_labels: dict[str, str],
+    category: str,
+    active_contrast: str,
+    descending: bool,
+    max_terms: int = _ENRICHMENT_MAX_TERMS,
+) -> go.Figure:
+    frames: dict[str, pd.DataFrame] = {}
+    for contrast in contrasts:
+        frames[contrast] = _string_enrichment_frame(
+            data_by_contrast.get(contrast, []),
+            category,
+            query_sizes.get(contrast, {}),
+        )
+
+    active = frames.get(active_contrast, pd.DataFrame())
+    if active.empty:
+        selected = active
+    else:
+        selected = (
+            active.sort_values(
+                ["fdr", "number_of_genes", "description"],
+                ascending=[True, False, True],
+                kind="stable",
+            )
+            .drop_duplicates("term", keep="first")
+            .head(int(max_terms))
+            .sort_values(
+                ["score", "description"],
+                ascending=[not bool(descending), True],
+                kind="stable",
+            )
+        )
+
+    term_order = selected["term"].astype(str).tolist()
+    term_labels = (
+        selected.drop_duplicates("term").set_index("term")["description"].to_dict()
+    )
+    term_positions = {
+        term: position for position, term in enumerate(term_order)
+    }
+
+    fig = make_subplots(
+        rows=1,
+        cols=len(contrasts),
+        shared_yaxes=True,
+        horizontal_spacing=min(0.04, 0.15 / max(len(contrasts), 1)),
+    )
+
+    plotted_frames: list[pd.DataFrame] = []
+    for contrast in contrasts:
+        frame = frames[contrast]
+        if term_order and not frame.empty:
+            visible = frame.loc[frame["term"].isin(term_order)].copy()
+            if not visible.empty:
+                plotted_frames.append(visible)
+    max_count = max(
+        (
+            float(frame["number_of_genes"].max())
+            for frame in plotted_frames
+            if not frame.empty
+        ),
+        default=1.0,
+    )
+    max_score = max(
+        (
+            float(frame["score"].max())
+            for frame in plotted_frames
+            if not frame.empty
+        ),
+        default=1.0,
+    )
+    x_max = max(1.0, max_score * 1.12)
+
+    for col, contrast in enumerate(contrasts, start=1):
+        frame = frames[contrast]
+        visible = (
+            frame.loc[frame["term"].isin(term_order)].copy()
+            if term_order and not frame.empty
+            else pd.DataFrame(columns=frame.columns)
+        )
+        if not visible.empty:
+            visible["_position"] = visible["term"].map(term_positions)
+            visible["_plot_position"] = visible["_position"] + np.where(
+                visible["direction"].eq("activated"),
+                -0.13,
+                0.13,
+            )
+            visible = visible.sort_values(
+                ["_position", "direction"], kind="stable"
+            )
+            counts = visible["number_of_genes"].to_numpy(dtype=float)
+            marker_sizes = 8.0 + 18.0 * np.sqrt(
+                np.clip(counts / max(max_count, 1.0), 0.0, 1.0)
+            )
+            direction_labels = visible["direction"].map(
+                {
+                    "activated": "Activated (KSEA Z > 0)",
+                    "inhibited": "Inhibited (KSEA Z < 0)",
+                }
+            )
+            direction_query_sizes = np.asarray(
+                [
+                    query_sizes.get(contrast, {}).get(direction, 0)
+                    for direction in visible["direction"]
+                ],
+                dtype=int,
+            )
+            direction_colors = np.where(
+                visible["direction"].eq("activated"),
+                "#d62728",
+                "#1f77b4",
+            )
+            marker_symbols = [
+                (
+                    "triangle-up" if direction == "activated"
+                    else "triangle-down"
+                ) + ("" if significant else "-open")
+                for direction, significant in zip(
+                    visible["direction"],
+                    visible["fdr_significant"],
+                )
+            ]
+            significance_labels = np.where(
+                visible["fdr_significant"],
+                "FDR-significant",
+                "Exploratory (FDR ≥ 0.05)",
+            )
+            customdata = np.empty((len(visible), 11), dtype=object)
+            customdata[:, 0] = visible["description"].astype(str).to_numpy()
+            customdata[:, 1] = visible["term"].astype(str).to_numpy()
+            customdata[:, 2] = visible["fdr"].to_numpy(dtype=float)
+            customdata[:, 3] = counts
+            customdata[:, 4] = visible[
+                "number_of_genes_in_background"
+            ].to_numpy(dtype=float)
+            customdata[:, 5] = direction_query_sizes
+            customdata[:, 6] = background_labels.get(contrast, "Unknown")
+            customdata[:, 7] = visible["contributors"].astype(str).to_numpy()
+            customdata[:, 8] = direction_labels.astype(str).to_numpy()
+            customdata[:, 9] = visible["p_value"].to_numpy(dtype=float)
+            customdata[:, 10] = significance_labels
+            fig.add_trace(
+                go.Scatter(
+                    x=visible["score"],
+                    y=visible["_plot_position"],
+                    mode="markers",
+                    marker={
+                        "size": marker_sizes,
+                        "color": direction_colors,
+                        "symbol": marker_symbols,
+                        "line": {
+                            "color": direction_colors,
+                            "width": np.where(
+                                visible["fdr_significant"], 0.5, 1.7
+                            ),
+                        },
+                    },
+                    customdata=customdata,
+                    hovertemplate=(
+                        "Term: %{customdata[0]}<br>"
+                        "ID: %{customdata[1]}<br>"
+                        f"Contrast: {contrast.replace('_vs_', '_v_')}<br>"
+                        "Direction: %{customdata[8]}<br>"
+                        "Status: %{customdata[10]}<br>"
+                        "−log10(FDR): %{x:.3f}<br>"
+                        "Raw p-value: %{customdata[9]:.3e}<br>"
+                        "FDR: %{customdata[2]:.3e}<br>"
+                        "Contributing kinases: %{customdata[3]:.0f} / "
+                        "%{customdata[5]:.0f}<br>"
+                        "Enrichment background: %{customdata[6]}<br>"
+                        "Background kinases with term: %{customdata[4]:.0f}<br>"
+                        "%{customdata[7]}"
+                        "<extra></extra>"
+                    ),
+                    showlegend=False,
+                ),
+                row=1,
+                col=col,
+            )
+
+        message = ""
+        if frame.empty:
+            if errors_by_contrast.get(contrast):
+                message = "STRING query failed"
+            elif not any(
+                size >= 2
+                for size in query_sizes.get(contrast, {}).values()
+            ):
+                message = "Fewer than 2 mapped kinases per direction"
+            else:
+                message = "No directional terms returned"
+        if message:
+            axis_ref = "x domain" if col == 1 else f"x{col} domain"
+            fig.add_annotation(
+                x=0.5,
+                y=0.5,
+                xref=axis_ref,
+                yref="paper",
+                text=message,
+                showarrow=False,
+                textangle=-90 if len(contrasts) > 5 else 0,
+                font={"color": "#888", "size": 11},
+            )
+
+        fig.update_xaxes(
+            title="−log10(FDR)",
+            range=[0.0, x_max],
+            showgrid=True,
+            gridcolor="#eeeeee",
+            zeroline=False,
+            row=1,
+            col=col,
+        )
+        fig.update_yaxes(
+            tickmode="array",
+            tickvals=list(range(len(term_order))),
+            ticktext=[term_labels[term] for term in term_order],
+            showticklabels=(col == 1),
+            range=[len(term_order) - 0.5, -0.5] if term_order else [-0.5, 0.5],
+            automargin=(col == 1),
+            showgrid=True,
+            gridcolor="#f2f2f2",
+            zeroline=False,
+            row=1,
+            col=col,
+        )
+
+    for name, symbol, color in (
+        ("Activated (KSEA Z > 0)", "triangle-up", "#d62728"),
+        ("Inhibited (KSEA Z < 0)", "triangle-down", "#1f77b4"),
+    ):
+        fig.add_trace(
+            go.Scatter(
+                x=[None],
+                y=[None],
+                mode="markers",
+                marker={"size": 11, "symbol": symbol, "color": color},
+                name=name,
+                showlegend=True,
+                hoverinfo="skip",
+            ),
+            row=1,
+            col=1,
+        )
+    fig.add_trace(
+        go.Scatter(
+            x=[None],
+            y=[None],
+            mode="markers",
+            marker={
+                "size": 11,
+                "symbol": "triangle-up-open",
+                "color": "#666",
+                "line": {"color": "#666", "width": 1.7},
+            },
+            name="Open symbol: exploratory (FDR ≥ 0.05)",
+            showlegend=True,
+            hoverinfo="skip",
+        ),
+        row=1,
+        col=1,
+    )
+
+    active_col = contrasts.index(active_contrast) + 1
+    active_xref = "x domain" if active_col == 1 else f"x{active_col} domain"
+    fig.add_shape(
+        type="rect",
+        xref=active_xref,
+        yref="paper",
+        x0=0.0,
+        x1=1.0,
+        y0=0.0,
+        y1=1.0,
+        fillcolor="rgba(31, 119, 180, 0.07)",
+        line={"color": "rgba(31, 119, 180, 0.75)", "width": 2},
+        layer="below",
+    )
+
+    if not term_order:
+        active_label = active_contrast.replace("_vs_", "_v_")
+        active_errors = errors_by_contrast.get(active_contrast, {})
+        if active_errors:
+            detail = "; ".join(
+                f"{direction}: {error}"
+                for direction, error in active_errors.items()
+            )
+            message = f"STRING enrichment failed for {active_label}: {detail}"
+        elif not any(
+            size >= 2
+            for size in query_sizes.get(active_contrast, {}).values()
+        ):
+            message = (
+                f"{active_label} has fewer than two mapped significant "
+                "kinases in each direction; STRING enrichment was not run."
+            )
+        else:
+            message = (
+                f"No directional terms were returned for "
+                f"{active_label} in this category."
+            )
+        fig.add_annotation(
+            x=0.5,
+            y=0.5,
+            xref="paper",
+            yref="paper",
+            text=message,
+            showarrow=False,
+            font={"color": "#666", "size": 14},
+        )
+
+    if term_order and not bool(active["fdr_significant"].any()):
+        fig.add_annotation(
+            x=0.5,
+            y=-0.18,
+            xref="paper",
+            yref="paper",
+            text=(
+                "No FDR-significant terms in the active contrast; showing "
+                "the strongest exploratory terms returned by STRING."
+            ),
+            showarrow=False,
+            font={"color": "#666", "size": 12},
+        )
+
+    fig.update_layout(
+        height=max(480, 175 + 30 * max(len(term_order), 8)),
+        autosize=True,
+        showlegend=True,
+        hovermode="closest",
+        margin={"l": 310, "r": 80, "t": 55, "b": 115},
+        plot_bgcolor="white",
+        paper_bgcolor="white",
+        legend={
+            "orientation": "h",
+            "x": 0.5,
+            "xanchor": "center",
+            "y": 1.04,
+            "yanchor": "bottom",
+        },
+    )
+    return fig
+
+
 def _contrast_options(adata, results: pd.DataFrame) -> list[str]:
     available = set(results["contrast"].astype(str))
     configured = [str(value) for value in adata.uns.get("contrast_names", [])]
@@ -1139,6 +1764,15 @@ def kinases_tab(state: SessionState):
         0.05
         if sign_threshold_value is None
         else sign_threshold_value
+    )
+    enrichment_queries = _significant_kinases_by_contrast(
+        results,
+        contrasts,
+        sign_threshold,
+    )
+    enrichment_backgrounds = _tested_kinases_by_contrast(
+        results,
+        contrasts,
     )
 
     contrast_sel = pn.widgets.Select(
@@ -1192,6 +1826,37 @@ def kinases_tab(state: SessionState):
                 search_input.value = kinase_id
 
     volcano_plot.param.watch(_on_volcano_click, "click_data")
+
+    def _kinase_selection_builder(**kwargs) -> pd.DataFrame:
+        return build_kinase_selection_df(
+            **kwargs,
+            sign_threshold=sign_threshold,
+        )
+
+    (
+        download_selection,
+        _on_volcano_selected_data,
+        _on_volcano_click_data,
+        _on_cohort_ids,
+    ) = make_volcano_selection_downloader(
+        state=state,
+        contrast_getter=lambda: str(contrast_sel.value),
+        spec=SelectionExportSpec(
+            filename="proteoflux_kinase_selection.csv",
+            label="Download selection",
+            uniprot_var_col="KINASE_UNIPROT",
+            id_col_name="KINASE_ID",
+        ),
+        selection_df_builder=_kinase_selection_builder,
+    )
+    volcano_plot.param.watch(
+        lambda event: _on_volcano_selected_data(event.new),
+        "selected_data",
+    )
+    volcano_plot.param.watch(
+        lambda event: _on_volcano_click_data(event.new),
+        "click_data",
+    )
 
     detail = pn.bind(
         _kinase_detail_card,
@@ -1272,6 +1937,306 @@ def kinases_tab(state: SessionState):
             "top": "18px",
         },
     )
+
+    species_sel = pn.widgets.Select(
+        name="Species",
+        options=STRING_SPECIES_OPTIONS,
+        value=None,
+        width=190,
+    )
+    category_sel = pn.widgets.Select(
+        name="Category",
+        options=_ENRICHMENT_CATEGORY_OPTIONS,
+        value="KEGG",
+        width=190,
+    )
+
+    enrichment_default = next(
+        (
+            contrast
+            for contrast in contrasts
+            if any(
+                len(identifiers) >= 2
+                for identifiers in enrichment_queries.get(
+                    contrast, {}
+                ).values()
+            )
+        ),
+        contrasts[0],
+    )
+    active_enrichment_contrast = pn.widgets.TextInput(
+        value=enrichment_default,
+        visible=False,
+    )
+    enrichment_descending = pn.widgets.Checkbox(
+        value=True,
+        visible=False,
+    )
+    enrichment_mapping_cache: dict[
+        tuple[int, tuple[str, ...]],
+        tuple[dict[str, str], str],
+    ] = {}
+    enrichment_cache: dict[
+        tuple[int, tuple[str, ...], tuple[str, ...], bool],
+        tuple[list[dict], str],
+    ] = {}
+    last_string_request = {"time": 0.0}
+
+    def _rate_limited_string_call(function, *args):
+        elapsed = time.monotonic() - last_string_request["time"]
+        if elapsed < 1.0:
+            time.sleep(1.0 - elapsed)
+        try:
+            return function(*args)
+        finally:
+            last_string_request["time"] = time.monotonic()
+
+    def _fetch_enrichment(species: int) -> tuple[
+        dict[str, list[dict]],
+        dict[str, dict[str, str]],
+        dict[str, dict[str, int]],
+        dict[str, str],
+    ]:
+        data_by_contrast: dict[str, list[dict]] = {}
+        errors_by_contrast: dict[str, dict[str, str]] = {}
+        query_sizes: dict[str, dict[str, int]] = {}
+        background_labels: dict[str, str] = {}
+
+        all_tested = tuple(
+            sorted(
+                {
+                    identifier
+                    for identifiers in enrichment_backgrounds.values()
+                    for identifier in identifiers
+                },
+                key=str.casefold,
+            )
+        )
+        mapping_key = (int(species), all_tested)
+        if mapping_key not in enrichment_mapping_cache:
+            try:
+                mapping = _rate_limited_string_call(
+                    _map_to_string_ids,
+                    all_tested,
+                    int(species),
+                )
+                enrichment_mapping_cache[mapping_key] = (mapping, "")
+            except Exception as exc:
+                enrichment_mapping_cache[mapping_key] = ({}, str(exc))
+
+        mapping, mapping_error = enrichment_mapping_cache[mapping_key]
+        for contrast in contrasts:
+            data_by_contrast[contrast] = []
+            errors_by_contrast[contrast] = {}
+            query_sizes[contrast] = {}
+            background_ids = tuple(
+                sorted(
+                    {
+                        mapping[identifier]
+                        for identifier in enrichment_backgrounds.get(
+                            contrast, ()
+                        )
+                        if identifier in mapping
+                    }
+                )
+            )
+            background_labels[contrast] = (
+                f"{len(background_ids)} KSEA-tested kinases"
+                if _ENRICHMENT_USE_TESTED_BACKGROUND
+                else "STRING species proteome"
+            )
+
+            if mapping_error:
+                errors_by_contrast[contrast]["mapping"] = (
+                    f"STRING identifier mapping failed: {mapping_error}"
+                )
+                continue
+
+            for direction in ("activated", "inhibited"):
+                identifiers = enrichment_queries.get(contrast, {}).get(
+                    direction, ()
+                )
+                query_ids = tuple(
+                    sorted(
+                        {
+                            mapping[identifier]
+                            for identifier in identifiers
+                            if identifier in mapping
+                        }
+                    )
+                )
+                query_sizes[contrast][direction] = len(query_ids)
+                if len(query_ids) < 2:
+                    continue
+
+                cache_key = (
+                    int(species),
+                    query_ids,
+                    (
+                        background_ids
+                        if _ENRICHMENT_USE_TESTED_BACKGROUND
+                        else ()
+                    ),
+                    _ENRICHMENT_USE_TESTED_BACKGROUND,
+                )
+                if cache_key not in enrichment_cache:
+                    try:
+                        response = _rate_limited_string_call(
+                            _string_enrichment,
+                            query_ids,
+                            background_ids,
+                            int(species),
+                            _ENRICHMENT_USE_TESTED_BACKGROUND,
+                        )
+                        enrichment_cache[cache_key] = (
+                            list(response or []),
+                            "",
+                        )
+                    except Exception as exc:
+                        enrichment_cache[cache_key] = ([], str(exc))
+
+                data, error = enrichment_cache[cache_key]
+                data_by_contrast[contrast].extend(
+                    {**record, "_direction": direction}
+                    for record in data
+                )
+                if error:
+                    errors_by_contrast[contrast][direction] = error
+        return (
+            data_by_contrast,
+            errors_by_contrast,
+            query_sizes,
+            background_labels,
+        )
+
+    def _enrichment_view(
+        species,
+        category: str,
+        active_contrast: str,
+        descending: bool,
+    ) -> pn.viewable.Viewable:
+        if species is None:
+            return pn.pane.Alert(
+                "Select a species to run STRING enrichment across contrasts.",
+                alert_type="light",
+                height=150,
+                sizing_mode="stretch_width",
+            )
+
+        (
+            data_by_contrast,
+            errors_by_contrast,
+            query_sizes,
+            background_labels,
+        ) = _fetch_enrichment(int(species))
+        figure = _coordinated_enrichment_figure(
+            contrasts=contrasts,
+            data_by_contrast=data_by_contrast,
+            errors_by_contrast=errors_by_contrast,
+            query_sizes=query_sizes,
+            background_labels=background_labels,
+            category=str(category),
+            active_contrast=str(active_contrast),
+            descending=bool(descending),
+        )
+        return pn.pane.Plotly(
+            figure,
+            sizing_mode="stretch_width",
+            config={"responsive": True},
+            styles={"overflow": "hidden"},
+        )
+
+    enrichment_plot = pn.bind(
+        _enrichment_view,
+        species=species_sel,
+        category=category_sel,
+        active_contrast=active_enrichment_contrast,
+        descending=enrichment_descending,
+    )
+
+    enrichment_header_buttons: dict[str, pn.widgets.Button] = {}
+
+    def _refresh_enrichment_headers() -> None:
+        active = str(active_enrichment_contrast.value)
+        descending = bool(enrichment_descending.value)
+        for contrast, button in enrichment_header_buttons.items():
+            label = contrast.replace("_vs_", "_v_")
+            if contrast == active:
+                arrow = "▼" if descending else "▲"
+                button.name = f"{label}  {arrow}"
+                button.button_type = "primary"
+            else:
+                button.name = label
+                button.button_type = "default"
+
+    def _activate_enrichment_contrast(_event, contrast: str) -> None:
+        if active_enrichment_contrast.value == contrast:
+            enrichment_descending.value = not enrichment_descending.value
+        else:
+            enrichment_descending.value = True
+            active_enrichment_contrast.value = contrast
+        _refresh_enrichment_headers()
+
+    for contrast in contrasts:
+        button = pn.widgets.Button(
+            name=contrast.replace("_vs_", "_v_"),
+            button_type="default",
+            height=34,
+            styles={"flex": "1 1 0", "min-width": "110px"},
+        )
+        button.on_click(
+            lambda event, contrast=contrast: _activate_enrichment_contrast(
+                event,
+                contrast,
+            )
+        )
+        enrichment_header_buttons[contrast] = button
+    _refresh_enrichment_headers()
+
+    enrichment_headers = pn.Row(
+        pn.Spacer(width=295),
+        pn.Row(
+            *enrichment_header_buttons.values(),
+            sizing_mode="stretch_width",
+            styles={"flex": "1", "gap": "4px"},
+        ),
+        pn.Spacer(width=105),
+        sizing_mode="stretch_width",
+        styles={"align-items": "center"},
+    )
+
+    enrichment_background_label = (
+        "KSEA-tested kinases"
+        if _ENRICHMENT_USE_TESTED_BACKGROUND
+        else "STRING species proteome"
+    )
+    enrichment_background_explanation = (
+        "the contrast-specific set of all KSEA-tested kinases"
+        if _ENRICHMENT_USE_TESTED_BACKGROUND
+        else "STRING's default whole-species proteome"
+    )
+    enrichment_info = pn.widgets.TooltipIcon(
+        value=f"""
+        KSEA-significant kinases (q < {sign_threshold:g}) are split by their
+        signed activity Z-score. STRING enrichment is run separately for
+        activated kinases (Z > 0) and inhibited kinases (Z < 0), using
+        {enrichment_background_explanation} as the enrichment background. All
+        identifiers are first mapped to unique STRING IDs; directional queries
+        with fewer than two mapped kinases are not run. The active contrast
+        defines the shared set and order of up to {_ENRICHMENT_MAX_TERMS} terms.
+        Click a contrast header to activate it; click it again to reverse the
+        order.
+        STRING returns terms passing its own raw-p reporting threshold; the
+        strongest returned terms remain visible even when none reaches FDR <
+        {_ENRICHMENT_FDR_THRESHOLD:g}. Red upward and blue downward triangles
+        indicate activation and inhibition. Filled symbols are FDR-significant;
+        open symbols are exploratory. Position is −log10(FDR), and size is the
+        contributing kinase count.
+        """,
+        margin=0,
+        styles={"z-index": "10"},
+    )
+
     controls = pn.Row(
         contrast_sel,
         pn.Spacer(width=15),
@@ -1280,9 +2245,11 @@ def kinases_tab(state: SessionState):
         search_input,
         pn.Row(clear_search, margin=(15, 0, 0, 0)),
         pn.Spacer(width=20),
+        download_selection,
+        pn.Spacer(width=20),
         pn.pane.Markdown(
-            f"**Method:** {method}  \n**q-value threshold:** {sign_threshold:g}",
-            margin=(0, 0, 0, 0),
+            f"**Method:** {method}",
+            margin=(13, 0, 0, 0),
         ),
         height=70,
     )
@@ -1336,11 +2303,51 @@ def kinases_tab(state: SessionState):
         },
     )
 
+    enrichment_pane = pn.Column(
+        pn.Row(
+            pn.pane.Markdown(
+                "##   Kinase pathway context",
+                disable_anchors=True,
+            ),
+            pn.Column(
+                enrichment_info,
+                width=18,
+                height=18,
+                margin=(18, 0, 0, 0),
+                styles={"overflow": "visible"},
+            ),
+            pn.Spacer(width=10),
+            species_sel,
+            pn.Spacer(width=12),
+            category_sel,
+            pn.Spacer(width=12),
+            pn.pane.Markdown(
+                f"**Background:** {enrichment_background_label}",
+                margin=(18, 0, 0, 0),
+            ),
+            margin=(0, 20, 0, 0),
+            sizing_mode="stretch_width",
+        ),
+        pn.Spacer(height=10),
+        enrichment_headers,
+        enrichment_plot,
+        margin=(0, 0, 0, 20),
+        sizing_mode="stretch_width",
+        styles={
+            "border-radius": "15px",
+            "box-shadow": "3px 3px 5px #bcbcbc",
+            "width": "98vw",
+            "overflow": "hidden",
+        },
+    )
+
     return pn.Column(
         pn.Spacer(height=10),
+        volcano_pane,
+        pn.Spacer(height=30),
         clustering_pane,
         pn.Spacer(height=30),
-        volcano_pane,
+        enrichment_pane,
         pn.Spacer(height=30),
         sizing_mode="stretch_width",
         styles=FRAME_STYLES_TALL,

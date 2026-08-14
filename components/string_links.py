@@ -17,7 +17,8 @@ def get_string_link(uniprot_id: str) -> str:
     try:
         # Step 1: UniProt → STRING ID
         r = requests.get(
-            "https://string-db.org/api/tsv/get_string_ids",
+            #"https://string-db.org/api/tsv/get_string_ids",
+            f"{STRING_API_URL}/tsv/get_string_ids",
             params={"identifiers": uniprot_id, "format": "tsv"},
             timeout=_DEFAULT_TIMEOUT,
         )
@@ -34,7 +35,8 @@ def get_string_link(uniprot_id: str) -> str:
 
         # Step 2: resolve redirect link
         link_r = requests.get(
-            "https://string-db.org/api/tsv/get_link",
+            #"https://string-db.org/api/tsv/get_link",
+            f"{STRING_API_URL}/tsv/get_link",
             params={"identifiers": string_id, "format": "tsv"},
             timeout=_DEFAULT_TIMEOUT,
         )
@@ -72,7 +74,8 @@ def get_string_id_mapping(
         "identifiers": "\r".join(clean_ids),
         "species": int(species),
         "caller_identity": STRING_CALLER_IDENTITY,
-        "limit": 1,
+        #"limit": 1,
+        "echo_query": 1,
     }
 
     try:

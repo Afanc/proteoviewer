@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Callable, Iterable, List, Optional
 
@@ -317,6 +318,183 @@ def build_volcano_selection_df(
 
     return df
 
+
+def build_kinase_selection_df(
+    state: SessionState,
+    contrast: str,
+    feature_ids: list[str],
+    *,
+    sign_threshold: float = 0.05,
+    uniprot_var_col: str = "KINASE_UNIPROT",
+    id_col_name: str = "KINASE_ID",
+) -> pd.DataFrame:
+    """Build a contrast-local KSEA volcano selection export."""
+    _require(bool(feature_ids), "No kinase volcano datapoints selected.")
+
+    payload = state.adata.uns.get("kinase_activity")
+    _require(
+        isinstance(payload, Mapping),
+        "Cannot export kinase selection: missing adata.uns['kinase_activity'].",
+    )
+    results = payload.get("results")
+    _require(
+        isinstance(results, pd.DataFrame),
+        "Cannot export kinase selection: kinase activity results are missing.",
+    )
+
+    required = {
+        "contrast",
+        "kinase_id",
+        "kinase",
+        "kinase_gene",
+        "kinase_uniprot",
+        "n_substrates",
+        "kinase_mean_log2fc",
+        "global_mean_log2fc",
+        "effect",
+        "activity_score",
+        "pvalue",
+        "qvalue",
+        "tested",
+    }
+    missing = sorted(required.difference(results.columns))
+    _require(
+        not missing,
+        "Cannot export kinase selection: required result columns are missing. "
+        f"Missing={missing!r}.",
+    )
+
+    sub = results.loc[
+        results["contrast"].astype(str).eq(str(contrast))
+    ].copy()
+    _require(
+        not sub.empty,
+        f"Cannot export kinase selection: contrast {contrast!r} was not found.",
+    )
+    sub["kinase_id"] = sub["kinase_id"].astype(str).str.strip()
+    _require(
+        not sub["kinase_id"].duplicated().any(),
+        "Cannot export kinase selection: kinase_id is not unique within "
+        f"contrast {contrast!r}.",
+    )
+    sub = sub.set_index("kinase_id", drop=False)
+
+    selected = list(dict.fromkeys(str(value) for value in feature_ids))
+    missing_ids = [value for value in selected if value not in sub.index]
+    _require(
+        not missing_ids,
+        "Cannot export kinase selection: selected kinase IDs were not found "
+        f"in contrast {contrast!r}. Missing={missing_ids!r}.",
+    )
+    sub = sub.loc[selected].copy()
+
+    if pd.api.types.is_bool_dtype(sub["tested"].dtype):
+        tested = sub["tested"].fillna(False).astype(bool)
+    else:
+        tested = (
+            sub["tested"]
+            .astype(str)
+            .str.strip()
+            .str.lower()
+            .isin({"true", "1", "yes"})
+        )
+
+    qvalue = pd.to_numeric(sub["qvalue"], errors="coerce")
+    activity_score = pd.to_numeric(sub["activity_score"], errors="coerce")
+    invalid_identifiers = {"", "?", "nan", "none", "n/a", "na"}
+
+    def _string_input(row: pd.Series) -> str:
+        for column in (
+            "kinase_uniprot",
+            "kinase_gene",
+            "kinase",
+            "kinase_id",
+        ):
+            value = row.get(column, "")
+            text = "" if pd.isna(value) else str(value).strip()
+            if text.casefold() not in invalid_identifiers:
+                return text
+        return ""
+
+    string_input = sub.apply(_string_input, axis=1)
+    significant = (
+        tested
+        & np.isfinite(qvalue)
+        & qvalue.lt(float(sign_threshold))
+    )
+    string_background = tested & string_input.ne("")
+    string_query_activated = (
+        significant & string_input.ne("") & activity_score.gt(0.0)
+    )
+    string_query_inhibited = (
+        significant & string_input.ne("") & activity_score.lt(0.0)
+    )
+    string_query = string_query_activated | string_query_inhibited
+    direction = pd.Series("not significant", index=sub.index, dtype=object)
+    direction.loc[significant] = "no signed score"
+    direction.loc[significant & activity_score.gt(0.0)] = "activated"
+    direction.loc[significant & activity_score.lt(0.0)] = "inhibited"
+    direction.loc[significant & activity_score.eq(0.0)] = "zero score"
+
+    sources = pd.Series("", index=sub.index, dtype=object)
+    relationships = payload.get("substrates")
+    if isinstance(relationships, pd.DataFrame) and {
+        "contrast",
+        "kinase_id",
+        "database_source",
+    }.issubset(relationships.columns):
+        rel = relationships.loc[
+            relationships["contrast"].astype(str).eq(str(contrast))
+        ].copy()
+        rel["kinase_id"] = rel["kinase_id"].astype(str).str.strip()
+        source_map = rel.groupby("kinase_id", sort=False)["database_source"].agg(
+            lambda values: "; ".join(
+                dict.fromkeys(
+                    text
+                    for value in values
+                    if (text := str(value).strip())
+                    and text.casefold() not in {"nan", "none"}
+                )
+            )
+        )
+        sources = source_map.reindex(sub.index).fillna("")
+
+    export = pd.DataFrame(index=sub.index)
+    export[id_col_name] = sub["kinase_id"].astype(str)
+    export["KINASE"] = sub["kinase"].astype(str)
+    export["KINASE_GENE"] = sub["kinase_gene"].astype(str)
+    export[uniprot_var_col] = sub["kinase_uniprot"].astype(str)
+    export["CONTRAST"] = str(contrast)
+    export["TESTED"] = tested.to_numpy(dtype=bool)
+    export["SIGNIFICANT"] = significant.to_numpy(dtype=bool)
+    export["SIGN_THRESHOLD"] = float(sign_threshold)
+    export["KSEA_DIRECTION"] = direction.astype(str)
+    export["STRING_INPUT_IDENTIFIER"] = string_input.astype(str)
+    export["STRING_QUERY_INPUT"] = string_query.to_numpy(dtype=bool)
+    export["STRING_QUERY_ACTIVATED_INPUT"] = (
+        string_query_activated.to_numpy(dtype=bool)
+    )
+    export["STRING_QUERY_INHIBITED_INPUT"] = (
+        string_query_inhibited.to_numpy(dtype=bool)
+    )
+    export["STRING_BACKGROUND_INPUT"] = string_background.to_numpy(dtype=bool)
+    export["N_SUBSTRATES"] = pd.to_numeric(
+        sub["n_substrates"], errors="coerce"
+    )
+    export["MEAN_SUBSTRATE_LOG2FC"] = pd.to_numeric(
+        sub["kinase_mean_log2fc"], errors="coerce"
+    )
+    export["GLOBAL_MEAN_LOG2FC"] = pd.to_numeric(
+        sub["global_mean_log2fc"], errors="coerce"
+    )
+    export["MEAN_SHIFT"] = pd.to_numeric(sub["effect"], errors="coerce")
+    export["ACTIVITY_Z_SCORE"] = activity_score
+    export["PVALUE"] = pd.to_numeric(sub["pvalue"], errors="coerce")
+    export["QVALUE"] = qvalue
+    export["DATABASE_SOURCE"] = sources.astype(str)
+    return export.reset_index(drop=True)
+
+
 def build_pelsa_selection_df(
     state: SessionState,
     contrast: str,
@@ -547,4 +725,3 @@ def make_adjacent_sites_csv_callback(
         return io.BytesIO(df.to_csv(index=False).encode("utf-8"))
 
     return _adjacent_sites_csv
-
