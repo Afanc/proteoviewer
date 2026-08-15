@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from html import escape
+from textwrap import wrap
 import time
 
 import numpy as np
@@ -57,8 +59,14 @@ _ENRICHMENT_CATEGORY_OPTIONS = {
     "Reactome pathways": "RCTM",
     "GO Biological Process": "Process",
 }
+_ENRICHMENT_METRIC_OPTIONS = {
+    "Signal": "signal",
+    "−log10(FDR)": "fdr",
+    "Contributing kinases": "number_of_genes",
+}
 _ENRICHMENT_MAX_TERMS = 12
-_ENRICHMENT_FDR_THRESHOLD = 0.05
+_ENRICHMENT_LABEL_WRAP_WIDTH = 44
+
 # False uses STRING's default whole-species background. Set to True to
 # restrict enrichment to the kinases that were eligible/tested by KSEA.
 _ENRICHMENT_USE_TESTED_BACKGROUND = False
@@ -343,7 +351,7 @@ def _string_enrichment_frame(
         "number_of_genes_in_background",
         "p_value",
         "fdr",
-        "fdr_significant",
+        "signal",
         "score",
         "query_fraction",
         "contributors",
@@ -399,10 +407,19 @@ def _string_enrichment_frame(
     if frame.empty:
         return pd.DataFrame(columns=columns)
 
-    frame["fdr_significant"] = (
-        frame["fdr"] < _ENRICHMENT_FDR_THRESHOLD
-    )
     frame["score"] = _qvalue_plot_values(frame["fdr"].to_numpy(dtype=float))
+    if "signal" in frame.columns:
+        frame["signal"] = pd.to_numeric(frame["signal"], errors="coerce")
+    else:
+        frame["signal"] = np.nan
+    missing_signal = ~np.isfinite(frame["signal"])
+    if missing_signal.any():
+        # STRING's table endpoint does not expose the graphical endpoint's
+        # composite signal in every API version. Raw enrichment evidence is
+        # the deterministic fallback; the exact raw p-value remains in hover.
+        frame.loc[missing_signal, "signal"] = _qvalue_plot_values(
+            frame.loc[missing_signal, "p_value"].to_numpy(dtype=float)
+        )
     denominators = frame["direction"].map(query_sizes).fillna(0).clip(lower=1)
     frame["query_fraction"] = (
         frame["number_of_genes"] / denominators
@@ -1396,16 +1413,32 @@ def _coordinated_enrichment_figure(
     query_sizes: dict[str, dict[str, int]],
     background_labels: dict[str, str],
     category: str,
+    contrast: str,
     active_contrast: str,
-    descending: bool,
+    metric: str,
+    show_term_labels: bool,
     max_terms: int = _ENRICHMENT_MAX_TERMS,
 ) -> go.Figure:
+    metric_columns = {
+        "signal": "signal",
+        "fdr": "score",
+        "number_of_genes": "number_of_genes",
+    }
+    metric_titles = {
+        "signal": "Signal",
+        "fdr": "−log10(FDR)",
+        "number_of_genes": "Contributing kinases",
+    }
+    if metric not in metric_columns:
+        raise ValueError(f"Unsupported enrichment metric: {metric!r}.")
+    metric_column = metric_columns[metric]
+
     frames: dict[str, pd.DataFrame] = {}
-    for contrast in contrasts:
-        frames[contrast] = _string_enrichment_frame(
-            data_by_contrast.get(contrast, []),
+    for contrast_name in contrasts:
+        frames[contrast_name] = _string_enrichment_frame(
+            data_by_contrast.get(contrast_name, []),
             category,
-            query_sizes.get(contrast, {}),
+            query_sizes.get(contrast_name, {}),
         )
 
     active = frames.get(active_contrast, pd.DataFrame())
@@ -1414,37 +1447,43 @@ def _coordinated_enrichment_figure(
     else:
         selected = (
             active.sort_values(
-                ["fdr", "number_of_genes", "description"],
-                ascending=[True, False, True],
+                [metric_column, "fdr", "number_of_genes", "description"],
+                ascending=[False, True, False, True],
                 kind="stable",
             )
             .drop_duplicates("term", keep="first")
             .head(int(max_terms))
-            .sort_values(
-                ["score", "description"],
-                ascending=[not bool(descending), True],
-                kind="stable",
-            )
         )
 
     term_order = selected["term"].astype(str).tolist()
-    term_labels = (
+    raw_term_labels = (
         selected.drop_duplicates("term").set_index("term")["description"].to_dict()
     )
+    wrapped_lines = {
+        term: wrap(
+            str(label),
+            width=_ENRICHMENT_LABEL_WRAP_WIDTH,
+            break_long_words=False,
+            break_on_hyphens=False,
+        )
+        for term, label in raw_term_labels.items()
+    }
+    term_labels = {
+        term: "<br>".join(escape(line) for line in lines)
+        for term, lines in wrapped_lines.items()
+    }
+    max_label_lines = max(
+        (len(lines) for lines in wrapped_lines.values()),
+        default=1,
+    )
+    row_height = max(30, 15 * max_label_lines + 6)
     term_positions = {
         term: position for position, term in enumerate(term_order)
     }
 
-    fig = make_subplots(
-        rows=1,
-        cols=len(contrasts),
-        shared_yaxes=True,
-        horizontal_spacing=min(0.04, 0.15 / max(len(contrasts), 1)),
-    )
-
     plotted_frames: list[pd.DataFrame] = []
-    for contrast in contrasts:
-        frame = frames[contrast]
+    for contrast_name in contrasts:
+        frame = frames[contrast_name]
         if term_order and not frame.empty:
             visible = frame.loc[frame["term"].isin(term_order)].copy()
             if not visible.empty:
@@ -1457,243 +1496,132 @@ def _coordinated_enrichment_figure(
         ),
         default=1.0,
     )
-    max_score = max(
+    max_metric = max(
         (
-            float(frame["score"].max())
+            float(frame[metric_column].max())
             for frame in plotted_frames
             if not frame.empty
         ),
         default=1.0,
     )
-    x_max = max(1.0, max_score * 1.12)
+    x_max = max(1.0, max_metric * 1.12)
 
-    for col, contrast in enumerate(contrasts, start=1):
-        frame = frames[contrast]
-        visible = (
-            frame.loc[frame["term"].isin(term_order)].copy()
-            if term_order and not frame.empty
-            else pd.DataFrame(columns=frame.columns)
+    frame = frames.get(contrast, pd.DataFrame())
+    visible = (
+        frame.loc[frame["term"].isin(term_order)].copy()
+        if term_order and not frame.empty
+        else pd.DataFrame(columns=frame.columns)
+    )
+    fig = go.Figure()
+    if not visible.empty:
+        visible["_position"] = visible["term"].map(term_positions)
+        visible["_metric_value"] = visible[metric_column]
+        visible = visible.sort_values(
+            ["_position", "direction"], kind="stable"
         )
-        if not visible.empty:
-            visible["_position"] = visible["term"].map(term_positions)
-            visible["_plot_position"] = visible["_position"] + np.where(
-                visible["direction"].eq("activated"),
-                -0.13,
-                0.13,
-            )
-            visible = visible.sort_values(
-                ["_position", "direction"], kind="stable"
-            )
-            counts = visible["number_of_genes"].to_numpy(dtype=float)
-            marker_sizes = 8.0 + 18.0 * np.sqrt(
-                np.clip(counts / max(max_count, 1.0), 0.0, 1.0)
-            )
-            direction_labels = visible["direction"].map(
-                {
-                    "activated": "Activated (KSEA Z > 0)",
-                    "inhibited": "Inhibited (KSEA Z < 0)",
-                }
-            )
-            direction_query_sizes = np.asarray(
-                [
-                    query_sizes.get(contrast, {}).get(direction, 0)
-                    for direction in visible["direction"]
-                ],
-                dtype=int,
-            )
-            direction_colors = np.where(
-                visible["direction"].eq("activated"),
-                "#d62728",
-                "#1f77b4",
-            )
-            marker_symbols = [
-                (
-                    "triangle-up" if direction == "activated"
-                    else "triangle-down"
-                ) + ("" if significant else "-open")
-                for direction, significant in zip(
-                    visible["direction"],
-                    visible["fdr_significant"],
-                )
-            ]
-            significance_labels = np.where(
-                visible["fdr_significant"],
-                "FDR-significant",
-                "Exploratory (FDR ≥ 0.05)",
-            )
-            customdata = np.empty((len(visible), 11), dtype=object)
-            customdata[:, 0] = visible["description"].astype(str).to_numpy()
-            customdata[:, 1] = visible["term"].astype(str).to_numpy()
-            customdata[:, 2] = visible["fdr"].to_numpy(dtype=float)
-            customdata[:, 3] = counts
-            customdata[:, 4] = visible[
-                "number_of_genes_in_background"
-            ].to_numpy(dtype=float)
-            customdata[:, 5] = direction_query_sizes
-            customdata[:, 6] = background_labels.get(contrast, "Unknown")
-            customdata[:, 7] = visible["contributors"].astype(str).to_numpy()
-            customdata[:, 8] = direction_labels.astype(str).to_numpy()
-            customdata[:, 9] = visible["p_value"].to_numpy(dtype=float)
-            customdata[:, 10] = significance_labels
-            fig.add_trace(
-                go.Scatter(
-                    x=visible["score"],
-                    y=visible["_plot_position"],
-                    mode="markers",
-                    marker={
-                        "size": marker_sizes,
-                        "color": direction_colors,
-                        "symbol": marker_symbols,
-                        "line": {
-                            "color": direction_colors,
-                            "width": np.where(
-                                visible["fdr_significant"], 0.5, 1.7
-                            ),
-                        },
-                    },
-                    customdata=customdata,
-                    hovertemplate=(
-                        "Term: %{customdata[0]}<br>"
-                        "ID: %{customdata[1]}<br>"
-                        f"Contrast: {contrast.replace('_vs_', '_v_')}<br>"
-                        "Direction: %{customdata[8]}<br>"
-                        "Status: %{customdata[10]}<br>"
-                        "−log10(FDR): %{x:.3f}<br>"
-                        "Raw p-value: %{customdata[9]:.3e}<br>"
-                        "FDR: %{customdata[2]:.3e}<br>"
-                        "Contributing kinases: %{customdata[3]:.0f} / "
-                        "%{customdata[5]:.0f}<br>"
-                        "Enrichment background: %{customdata[6]}<br>"
-                        "Background kinases with term: %{customdata[4]:.0f}<br>"
-                        "%{customdata[7]}"
-                        "<extra></extra>"
-                    ),
-                    showlegend=False,
-                ),
-                row=1,
-                col=col,
-            )
-
-        message = ""
-        if frame.empty:
-            if errors_by_contrast.get(contrast):
-                message = "STRING query failed"
-            elif not any(
-                size >= 2
-                for size in query_sizes.get(contrast, {}).values()
-            ):
-                message = "Fewer than 2 mapped kinases per direction"
-            else:
-                message = "No directional terms returned"
-        if message:
-            axis_ref = "x domain" if col == 1 else f"x{col} domain"
-            fig.add_annotation(
-                x=0.5,
-                y=0.5,
-                xref=axis_ref,
-                yref="paper",
-                text=message,
-                showarrow=False,
-                textangle=-90 if len(contrasts) > 5 else 0,
-                font={"color": "#888", "size": 11},
-            )
-
-        fig.update_xaxes(
-            title="−log10(FDR)",
-            range=[0.0, x_max],
-            showgrid=True,
-            gridcolor="#eeeeee",
-            zeroline=False,
-            row=1,
-            col=col,
+        counts = visible["number_of_genes"].to_numpy(dtype=float)
+        marker_sizes = 8.0 + 18.0 * np.sqrt(
+            np.clip(counts / max(max_count, 1.0), 0.0, 1.0)
         )
-        fig.update_yaxes(
-            tickmode="array",
-            tickvals=list(range(len(term_order))),
-            ticktext=[term_labels[term] for term in term_order],
-            showticklabels=(col == 1),
-            range=[len(term_order) - 0.5, -0.5] if term_order else [-0.5, 0.5],
-            automargin=(col == 1),
-            showgrid=True,
-            gridcolor="#f2f2f2",
-            zeroline=False,
-            row=1,
-            col=col,
+        direction_labels = visible["direction"].map(
+            {
+                "activated": "Activated (KSEA Z > 0)",
+                "inhibited": "Inhibited (KSEA Z < 0)",
+            }
+        )
+        direction_query_sizes = np.asarray(
+            [
+                query_sizes.get(contrast, {}).get(direction, 0)
+                for direction in visible["direction"]
+            ],
+            dtype=int,
+        )
+        direction_colors = np.where(
+            visible["direction"].eq("activated"),
+            "#d62728",
+            "#1f77b4",
         )
 
-    for name, symbol, color in (
-        ("Activated (KSEA Z > 0)", "triangle-up", "#d62728"),
-        ("Inhibited (KSEA Z < 0)", "triangle-down", "#1f77b4"),
-    ):
+        line_x: list[float | None] = []
+        line_y: list[float | None] = []
+        for value, position in zip(
+            visible["_metric_value"], visible["_position"]
+        ):
+            line_x.extend([0.0, float(value), None])
+            line_y.extend([float(position), float(position), None])
         fig.add_trace(
             go.Scatter(
-                x=[None],
-                y=[None],
-                mode="markers",
-                marker={"size": 11, "symbol": symbol, "color": color},
-                name=name,
-                showlegend=True,
+                x=line_x,
+                y=line_y,
+                mode="lines",
+                line={"color": "#a9a9a9", "width": 1.4},
                 hoverinfo="skip",
-            ),
-            row=1,
-            col=1,
+                showlegend=False,
+            )
         )
-    fig.add_trace(
-        go.Scatter(
-            x=[None],
-            y=[None],
-            mode="markers",
-            marker={
-                "size": 11,
-                "symbol": "triangle-up-open",
-                "color": "#666",
-                "line": {"color": "#666", "width": 1.7},
-            },
-            name="Open symbol: exploratory (FDR ≥ 0.05)",
-            showlegend=True,
-            hoverinfo="skip",
-        ),
-        row=1,
-        col=1,
-    )
 
-    active_col = contrasts.index(active_contrast) + 1
-    active_xref = "x domain" if active_col == 1 else f"x{active_col} domain"
-    fig.add_shape(
-        type="rect",
-        xref=active_xref,
-        yref="paper",
-        x0=0.0,
-        x1=1.0,
-        y0=0.0,
-        y1=1.0,
-        fillcolor="rgba(31, 119, 180, 0.07)",
-        line={"color": "rgba(31, 119, 180, 0.75)", "width": 2},
-        layer="below",
-    )
-
-    if not term_order:
-        active_label = active_contrast.replace("_vs_", "_v_")
-        active_errors = errors_by_contrast.get(active_contrast, {})
-        if active_errors:
-            detail = "; ".join(
-                f"{direction}: {error}"
-                for direction, error in active_errors.items()
+        customdata = np.empty((len(visible), 12), dtype=object)
+        customdata[:, 0] = visible["description"].astype(str).to_numpy()
+        customdata[:, 1] = visible["term"].astype(str).to_numpy()
+        customdata[:, 2] = visible["fdr"].to_numpy(dtype=float)
+        customdata[:, 3] = counts
+        customdata[:, 4] = visible[
+            "number_of_genes_in_background"
+        ].to_numpy(dtype=float)
+        customdata[:, 5] = direction_query_sizes
+        customdata[:, 6] = background_labels.get(contrast, "Unknown")
+        customdata[:, 7] = visible["contributors"].astype(str).to_numpy()
+        customdata[:, 8] = direction_labels.astype(str).to_numpy()
+        customdata[:, 9] = visible["p_value"].to_numpy(dtype=float)
+        customdata[:, 10] = visible["signal"].to_numpy(dtype=float)
+        customdata[:, 11] = visible["score"].to_numpy(dtype=float)
+        fig.add_trace(
+            go.Scatter(
+                x=visible["_metric_value"],
+                y=visible["_position"],
+                mode="markers",
+                marker={
+                    "size": marker_sizes,
+                    "color": direction_colors,
+                    "symbol": "circle",
+                    "line": {"color": "white", "width": 0.8},
+                },
+                customdata=customdata,
+                hovertemplate=(
+                    "Term: %{customdata[0]}<br>"
+                    "ID: %{customdata[1]}<br>"
+                    f"Contrast: {contrast.replace('_vs_', '_v_')}<br>"
+                    "Direction: %{customdata[8]}<br>"
+                    "Signal: %{customdata[10]:.3f}<br>"
+                    "−log10(FDR): %{customdata[11]:.3f}<br>"
+                    "Raw p-value: %{customdata[9]:.3e}<br>"
+                    "FDR: %{customdata[2]:.3e}<br>"
+                    "Contributing kinases: %{customdata[3]:.0f} / "
+                    "%{customdata[5]:.0f}<br>"
+                    "Enrichment background: %{customdata[6]}<br>"
+                    "Background kinases with term: %{customdata[4]:.0f}<br>"
+                    "%{customdata[7]}"
+                    "<extra></extra>"
+                ),
+                showlegend=False,
             )
-            message = f"STRING enrichment failed for {active_label}: {detail}"
+        )
+
+    message = ""
+    if frame.empty:
+        if errors_by_contrast.get(contrast):
+            message = "STRING query failed"
         elif not any(
-            size >= 2
-            for size in query_sizes.get(active_contrast, {}).values()
+            size >= 2 for size in query_sizes.get(contrast, {}).values()
         ):
-            message = (
-                f"{active_label} has fewer than two mapped significant "
-                "kinases in each direction; STRING enrichment was not run."
-            )
+            message = "No data available"
         else:
-            message = (
-                f"No directional terms were returned for "
-                f"{active_label} in this category."
-            )
+            message = "No data available"
+    elif not term_order:
+        message = "No match"
+    elif visible.empty:
+        message = "No match"
+    if message:
         fig.add_annotation(
             x=0.5,
             y=0.5,
@@ -1701,38 +1629,53 @@ def _coordinated_enrichment_figure(
             yref="paper",
             text=message,
             showarrow=False,
-            font={"color": "#666", "size": 14},
+            align="center",
+            font={"color": "#777", "size": 12},
         )
 
-    if term_order and not bool(active["fdr_significant"].any()):
-        fig.add_annotation(
-            x=0.5,
-            y=-0.18,
-            xref="paper",
-            yref="paper",
-            text=(
-                "No FDR-significant terms in the active contrast; showing "
-                "the strongest exploratory terms returned by STRING."
-            ),
-            showarrow=False,
-            font={"color": "#666", "size": 12},
-        )
+    is_active = contrast == active_contrast
+    border_color = "#4c78a8" if is_active else "#c7c7c7"
+    fig.update_xaxes(
+        title=metric_titles[metric],
+        range=[0.0, x_max],
+        showgrid=True,
+        gridcolor="#dedede",
+        zeroline=False,
+        showline=True,
+        mirror=True,
+        linecolor=border_color,
+        linewidth=2 if is_active else 1,
+    )
+    fig.update_yaxes(
+        tickmode="array",
+        tickvals=list(range(len(term_order))),
+        ticktext=[term_labels[term] for term in term_order],
+        showticklabels=bool(show_term_labels),
+        ticklabelstandoff=15 if show_term_labels else 0,
+        range=[len(term_order) - 0.5, -0.5] if term_order else [-0.5, 0.5],
+        automargin=bool(show_term_labels),
+        showgrid=True,
+        gridcolor="#e4e4e4",
+        zeroline=False,
+        showline=True,
+        mirror=True,
+        linecolor=border_color,
+        linewidth=2 if is_active else 1,
+    )
 
     fig.update_layout(
-        height=max(480, 175 + 30 * max(len(term_order), 8)),
+        height=max(460, 145 + row_height * max(len(term_order), 8)),
         autosize=True,
-        showlegend=True,
+        showlegend=False,
         hovermode="closest",
-        margin={"l": 310, "r": 80, "t": 55, "b": 115},
-        plot_bgcolor="white",
-        paper_bgcolor="white",
-        legend={
-            "orientation": "h",
-            "x": 0.5,
-            "xanchor": "center",
-            "y": 1.04,
-            "yanchor": "bottom",
+        margin={
+            "l": 300 if show_term_labels else 14,
+            "r": 14,
+            "t": 14,
+            "b": 65,
         },
+        plot_bgcolor="#edf4fb" if is_active else "#f4f4f4",
+        paper_bgcolor="white",
     )
     return fig
 
@@ -1950,6 +1893,12 @@ def kinases_tab(state: SessionState):
         value="KEGG",
         width=190,
     )
+    enrichment_metric_sel = pn.widgets.Select(
+        name="X axis",
+        options=_ENRICHMENT_METRIC_OPTIONS,
+        value="signal",
+        width=190,
+    )
 
     enrichment_default = next(
         (
@@ -1966,10 +1915,6 @@ def kinases_tab(state: SessionState):
     )
     active_enrichment_contrast = pn.widgets.TextInput(
         value=enrichment_default,
-        visible=False,
-    )
-    enrichment_descending = pn.widgets.Checkbox(
-        value=True,
         visible=False,
     )
     enrichment_mapping_cache: dict[
@@ -2109,11 +2054,14 @@ def kinases_tab(state: SessionState):
             background_labels,
         )
 
+    def _activate_enrichment_contrast(_event, contrast: str) -> None:
+        active_enrichment_contrast.value = contrast
+
     def _enrichment_view(
         species,
         category: str,
         active_contrast: str,
-        descending: bool,
+        metric: str,
     ) -> pn.viewable.Viewable:
         if species is None:
             return pn.pane.Alert(
@@ -2129,80 +2077,102 @@ def kinases_tab(state: SessionState):
             query_sizes,
             background_labels,
         ) = _fetch_enrichment(int(species))
-        figure = _coordinated_enrichment_figure(
-            contrasts=contrasts,
-            data_by_contrast=data_by_contrast,
-            errors_by_contrast=errors_by_contrast,
-            query_sizes=query_sizes,
-            background_labels=background_labels,
-            category=str(category),
-            active_contrast=str(active_contrast),
-            descending=bool(descending),
+        plot_column_width = 240
+        label_margin = 300
+        regular_margin = 14
+        first_column_width = (
+            plot_column_width + label_margin - regular_margin
         )
-        return pn.pane.Plotly(
-            figure,
-            sizing_mode="stretch_width",
-            config={"responsive": True},
-            styles={"overflow": "hidden"},
-        )
-
-    enrichment_plot = pn.bind(
-        _enrichment_view,
-        species=species_sel,
-        category=category_sel,
-        active_contrast=active_enrichment_contrast,
-        descending=enrichment_descending,
-    )
-
-    enrichment_header_buttons: dict[str, pn.widgets.Button] = {}
-
-    def _refresh_enrichment_headers() -> None:
-        active = str(active_enrichment_contrast.value)
-        descending = bool(enrichment_descending.value)
-        for contrast, button in enrichment_header_buttons.items():
-            label = contrast.replace("_vs_", "_v_")
-            if contrast == active:
-                arrow = "▼" if descending else "▲"
-                button.name = f"{label}  {arrow}"
-                button.button_type = "primary"
-            else:
-                button.name = label
-                button.button_type = "default"
-
-    def _activate_enrichment_contrast(_event, contrast: str) -> None:
-        if active_enrichment_contrast.value == contrast:
-            enrichment_descending.value = not enrichment_descending.value
-        else:
-            enrichment_descending.value = True
-            active_enrichment_contrast.value = contrast
-        _refresh_enrichment_headers()
-
-    for contrast in contrasts:
-        button = pn.widgets.Button(
-            name=contrast.replace("_vs_", "_v_"),
-            button_type="default",
-            height=34,
-            styles={"flex": "1 1 0", "min-width": "110px"},
-        )
-        button.on_click(
-            lambda event, contrast=contrast: _activate_enrichment_contrast(
-                event,
-                contrast,
+        first_button_offset = label_margin - regular_margin
+        contrast_columns: list[pn.Column] = []
+        for index, contrast in enumerate(contrasts):
+            button = pn.widgets.Button(
+                name=contrast.replace("_vs_", "_v_"),
+                button_type=(
+                    "primary" if contrast == active_contrast else "default"
+                ),
+                height=34,
+                margin=0,
+                sizing_mode="stretch_width",
             )
-        )
-        enrichment_header_buttons[contrast] = button
-    _refresh_enrichment_headers()
-
-    enrichment_headers = pn.Row(
-        pn.Spacer(width=295),
-        pn.Row(
-            *enrichment_header_buttons.values(),
+            button.on_click(
+                lambda event, contrast=contrast: (
+                    _activate_enrichment_contrast(event, contrast)
+                )
+            )
+            button_header = pn.Row(
+                *(
+                    [pn.Spacer(width=first_button_offset, margin=0)]
+                    if index == 0
+                    else []
+                ),
+                button,
+                height=34,
+                margin=(0, 0, 8, 0),
+                sizing_mode="stretch_width",
+            )
+            figure = _coordinated_enrichment_figure(
+                contrasts=contrasts,
+                data_by_contrast=data_by_contrast,
+                errors_by_contrast=errors_by_contrast,
+                query_sizes=query_sizes,
+                background_labels=background_labels,
+                category=str(category),
+                contrast=contrast,
+                active_contrast=str(active_contrast),
+                metric=str(metric),
+                show_term_labels=(index == 0),
+            )
+            plot = pn.pane.Plotly(
+                figure,
+                sizing_mode="stretch_width",
+                config={"responsive": True},
+                styles={"overflow": "hidden", "width": "100%"},
+            )
+            contrast_columns.append(
+                pn.Column(
+                    button_header,
+                    plot,
+                    sizing_mode="stretch_width",
+                    styles={
+                        "flex": (
+                            f"0 0 {first_column_width}px"
+                            if index == 0
+                            else f"0 0 {plot_column_width}px"
+                        ),
+                        "min-width": (
+                            f"{first_column_width}px"
+                            if index == 0
+                            else f"{plot_column_width}px"
+                        ),
+                        "max-width": (
+                            f"{first_column_width}px"
+                            if index == 0
+                            else f"{plot_column_width}px"
+                        ),
+                    },
+                )
+            )
+        return pn.Row(
+            *contrast_columns,
             sizing_mode="stretch_width",
-            styles={"flex": "1", "gap": "4px"},
+            styles={
+                "align-items": "stretch",
+                "gap": "8px",
+                "overflow-x": "auto",
+            },
+        )
+
+    enrichment_plot = pn.param.ParamFunction(
+        pn.bind(
+            _enrichment_view,
+            species=species_sel,
+            category=category_sel,
+            active_contrast=active_enrichment_contrast,
+            metric=enrichment_metric_sel,
         ),
-        pn.Spacer(width=105),
+        inplace=True,
         sizing_mode="stretch_width",
-        styles={"align-items": "center"},
     )
 
     enrichment_background_label = (
@@ -2223,18 +2193,25 @@ def kinases_tab(state: SessionState):
         {enrichment_background_explanation} as the enrichment background. All
         identifiers are first mapped to unique STRING IDs; directional queries
         with fewer than two mapped kinases are not run. The active contrast
-        defines the shared set and order of up to {_ENRICHMENT_MAX_TERMS} terms.
-        Click a contrast header to activate it; click it again to reverse the
-        order.
-        STRING returns terms passing its own raw-p reporting threshold; the
-        strongest returned terms remain visible even when none reaches FDR <
-        {_ENRICHMENT_FDR_THRESHOLD:g}. Red upward and blue downward triangles
-        indicate activation and inhibition. Filled symbols are FDR-significant;
-        open symbols are exploratory. Position is −log10(FDR), and size is the
-        contributing kinase count.
+        defines the shared top {_ENRICHMENT_MAX_TERMS} terms, ranked from best
+        to least by the selected X-axis metric.
         """,
         margin=0,
         styles={"z-index": "10"},
+    )
+    enrichment_legend = pn.pane.HTML(
+        """
+        <div style="display:flex;align-items:center;gap:22px;padding:0 4px;"
+             aria-label="Enrichment plot legend">
+          <span><span style="color:#d62728;font-size:20px;vertical-align:-1px;">●</span>
+            Activated (KSEA Z &gt; 0)</span>
+          <span><span style="color:#1f77b4;font-size:20px;vertical-align:-1px;">●</span>
+            Inhibited (KSEA Z &lt; 0)</span>
+          <span style="color:#666;position:relative;top:2px;">Dot size: contributing kinases</span>
+        </div>
+        """,
+        sizing_mode="stretch_width",
+        margin=(0, 0, 6, 0),
     )
 
     controls = pn.Row(
@@ -2321,6 +2298,8 @@ def kinases_tab(state: SessionState):
             pn.Spacer(width=12),
             category_sel,
             pn.Spacer(width=12),
+            enrichment_metric_sel,
+            pn.Spacer(width=12),
             pn.pane.Markdown(
                 f"**Background:** {enrichment_background_label}",
                 margin=(18, 0, 0, 0),
@@ -2329,7 +2308,7 @@ def kinases_tab(state: SessionState):
             sizing_mode="stretch_width",
         ),
         pn.Spacer(height=10),
-        enrichment_headers,
+        enrichment_legend,
         enrichment_plot,
         margin=(0, 0, 0, 20),
         sizing_mode="stretch_width",
