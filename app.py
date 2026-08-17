@@ -40,7 +40,7 @@ DEV = os.getenv("PV_DEV", "0") == "1"
 FROZEN = bool(getattr(sys, "frozen", False))
 DESKTOP = (sys.platform == "win32") and FROZEN
 
-APP_VERSION_DESKTOP = "1.9.2"
+APP_VERSION_DESKTOP = "1.10.1"
 
 def _resource_file(name: str) -> Path:
     """
@@ -451,10 +451,10 @@ def _lazy_tabs(state):
     ]
     if state.adata.uns['analysis'].get('analysis_type', "DIA") == "phospho":
         specs = [
-            ("Kinases", lambda: kinases_tab(state)),
             ("Overview",      lambda: overview_tab_phospho(state)),
-            ("Preprocessing-PO4", lambda: preprocessing_tab(state)),
-            ("Analysis-PO4", lambda: analysis_tab(state)),
+            ("Preprocessing", lambda: preprocessing_tab(state)),
+            ("Analysis", lambda: analysis_tab(state)),
+            ("Kinases", lambda: kinases_tab(state)),
         ]
     elif state.adata.uns['analysis'].get('analysis_type', "DIA") == "pelsa":
         specs = [

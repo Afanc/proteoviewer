@@ -2,12 +2,14 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from html import escape
+from itertools import combinations
 from textwrap import wrap
 import time
 
 import numpy as np
 import pandas as pd
 import panel as pn
+import plotly.express as px
 import plotly.graph_objects as go
 import requests
 
@@ -27,6 +29,7 @@ from utils.layout_utils import (
     make_hr,
     )
 from utils.session_state import SessionState
+from components.plot_utils import get_color_map
 from utils.utils import log_time
 
 
@@ -52,6 +55,12 @@ _REQUIRED_SUBSTRATE_COLUMNS = {
     "phosphosite_id",
     "matched_accession",
     "database_source",
+}
+
+_REQUIRED_CONDITION_KINASE_COLUMNS = {
+    "condition",
+    "kinase_id",
+    "n_substrates",
 }
 
 _ENRICHMENT_CATEGORY_OPTIONS = {
@@ -111,6 +120,29 @@ def _kinase_substrates(adata) -> pd.DataFrame:
             f"{missing!r}."
         )
     return substrates
+
+
+def _condition_kinases(adata) -> pd.DataFrame:
+    condition_kinases = _kinase_activity(adata).get("condition_kinases")
+    if condition_kinases is None:
+        return pd.DataFrame(columns=sorted(_REQUIRED_CONDITION_KINASE_COLUMNS))
+    if not isinstance(condition_kinases, pd.DataFrame):
+        raise TypeError(
+            "adata.uns['kinase_activity']['condition_kinases'] must be a "
+            "pandas DataFrame."
+        )
+
+    missing = sorted(
+        _REQUIRED_CONDITION_KINASE_COLUMNS.difference(
+            condition_kinases.columns
+        )
+    )
+    if missing:
+        raise ValueError(
+            "Condition-level kinase membership is missing required columns: "
+            f"{missing!r}."
+        )
+    return condition_kinases
 
 
 def _tested_mask(values: pd.Series) -> np.ndarray:
@@ -789,6 +821,7 @@ def _kinase_activity_heatmap(
 
     work = results.copy()
     work["kinase_id"] = _text_series(work["kinase_id"])
+    work["kinase_gene"] = _text_series(work["kinase_gene"])
     work["contrast"] = _text_series(work["contrast"])
     for column in (
         "activity_score",
@@ -1680,6 +1713,476 @@ def _coordinated_enrichment_figure(
     return fig
 
 
+def _maximal_uniform_subsets(
+    present_conditions: tuple[str, ...],
+    qualifying_pairs: set[frozenset[str]],
+) -> list[tuple[str, ...]]:
+    """Return inclusion-maximal subsets whose every pair qualifies."""
+    maximal: list[tuple[str, ...]] = []
+    for size in range(len(present_conditions), 1, -1):
+        for subset in combinations(present_conditions, size):
+            required_pairs = {
+                frozenset(pair) for pair in combinations(subset, 2)
+            }
+            if not required_pairs.issubset(qualifying_pairs):
+                continue
+            subset_set = set(subset)
+            if any(subset_set.issubset(existing) for existing in maximal):
+                continue
+            maximal.append(subset)
+    return maximal
+
+
+def _kinase_upset_figure(
+    adata,
+    results: pd.DataFrame,
+    condition_kinases: pd.DataFrame,
+    contrasts: list[str],
+    sign_threshold: float,
+) -> go.Figure:
+    conditions = sorted(
+        set(_text_series(adata.obs["CONDITION"]).tolist()),
+        key=str.casefold,
+    )
+    condition_color_map = get_color_map(
+        sorted(conditions, key=str.casefold),
+        palette=px.colors.qualitative.Plotly,
+        anchor=None,
+    )
+    condition_positions = {
+        condition: index for index, condition in enumerate(conditions)
+    }
+
+    if condition_kinases.empty:
+        fig = go.Figure()
+        fig.add_annotation(
+            x=0.5,
+            y=0.5,
+            xref="paper",
+            yref="paper",
+            text=(
+                "Condition-level kinase membership is unavailable.<br>"
+                "Rerun ProteoFlux to generate the condition subset plot."
+            ),
+            showarrow=False,
+            align="center",
+            font={"color": "#777", "size": 12},
+        )
+        fig.update_layout(
+            title={"text": "Kinase condition subsets", "x": 0.5},
+            height=440,
+            autosize=True,
+            margin={"l": 25, "r": 25, "t": 55, "b": 25},
+            plot_bgcolor="white",
+            paper_bgcolor="white",
+        )
+        fig.update_xaxes(visible=False)
+        fig.update_yaxes(visible=False)
+        return fig
+
+    membership = condition_kinases.copy()
+    membership["condition"] = _text_series(membership["condition"])
+    membership["kinase_id"] = _text_series(membership["kinase_id"])
+    membership = membership.loc[
+        membership["condition"].isin(conditions)
+        & membership["kinase_id"].ne("")
+    ].drop_duplicates(["condition", "kinase_id"], keep="first")
+
+    condition_sets = {
+        condition: set(
+            membership.loc[
+                membership["condition"].eq(condition), "kinase_id"
+            ]
+        )
+        for condition in conditions
+    }
+    presence_by_kinase: dict[str, tuple[str, ...]] = {}
+    for kinase_id in sorted(
+        set().union(*condition_sets.values()),
+        key=str.casefold,
+    ):
+        present = tuple(
+            condition
+            for condition in conditions
+            if kinase_id in condition_sets[condition]
+        )
+        if present:
+            presence_by_kinase[kinase_id] = present
+
+    work = results.copy()
+    work["contrast"] = _text_series(work["contrast"])
+    work["kinase_id"] = _text_series(work["kinase_id"])
+    work["qvalue"] = pd.to_numeric(work["qvalue"], errors="coerce")
+    work["_tested"] = _tested_mask(work["tested"])
+    work["_significant"] = (
+        work["_tested"]
+        & np.isfinite(work["qvalue"])
+        & work["qvalue"].lt(float(sign_threshold))
+    )
+
+    kinase_gene_by_id: dict[str, str] = {}
+    for kinase_id, kinase_gene in work[
+        ["kinase_id", "kinase_gene"]
+    ].itertuples(index=False, name=None):
+        if kinase_gene and kinase_id not in kinase_gene_by_id:
+            kinase_gene_by_id[kinase_id] = kinase_gene
+
+    def _hover_gene_preview(kinase_ids: set[str], limit: int = 4) -> str:
+        names = sorted(
+            {
+                kinase_gene_by_id.get(kinase_id, kinase_id)
+                for kinase_id in kinase_ids
+            },
+            key=str.casefold,
+        )
+        preview = ", ".join(names[:limit])
+        if len(names) > limit:
+            preview += f" (+{len(names) - limit} more)"
+        return preview or "None"
+
+    contrast_pairs: dict[str, frozenset[str]] = {}
+    for contrast in contrasts:
+        if "_vs_" not in str(contrast):
+            continue
+        condition_a, condition_b = str(contrast).split("_vs_", 1)
+        if (
+            condition_a in condition_positions
+            and condition_b in condition_positions
+            and condition_a != condition_b
+        ):
+            contrast_pairs[str(contrast)] = frozenset(
+                (condition_a, condition_b)
+            )
+
+    tested_pairs_by_kinase: dict[str, set[frozenset[str]]] = {}
+    significant_pairs_by_kinase: dict[str, set[frozenset[str]]] = {}
+    tested_rows = work.loc[
+        work["_tested"],
+        ["contrast", "kinase_id", "_significant"],
+    ]
+    for contrast, kinase_id, is_significant in tested_rows.itertuples(
+        index=False,
+        name=None,
+    ):
+        pair = contrast_pairs.get(str(contrast))
+        kinase_id = str(kinase_id)
+        if pair is not None and kinase_id in presence_by_kinase:
+            tested_pairs_by_kinase.setdefault(kinase_id, set()).add(pair)
+            if bool(is_significant):
+                significant_pairs_by_kinase.setdefault(
+                    kinase_id, set()
+                ).add(pair)
+
+    groups: dict[tuple[str, ...], dict[str, set[str]]] = {}
+    for kinase_id, present in presence_by_kinase.items():
+        tested_pairs = tested_pairs_by_kinase.get(kinase_id, set())
+        significant_pairs = significant_pairs_by_kinase.get(
+            kinase_id, set()
+        )
+        nonsignificant_pairs = tested_pairs.difference(significant_pairs)
+
+        significant_subsets = _maximal_uniform_subsets(
+            present,
+            significant_pairs,
+        )
+        nonsignificant_subsets = _maximal_uniform_subsets(
+            present,
+            nonsignificant_pairs,
+        )
+
+        for subset in significant_subsets:
+            groups.setdefault(
+                subset,
+                {"significant": set(), "other": set()},
+            )["significant"].add(kinase_id)
+        for subset in nonsignificant_subsets:
+            groups.setdefault(
+                subset,
+                {"significant": set(), "other": set()},
+            )["other"].add(kinase_id)
+
+        if (
+            len(present) >= 2
+            and not significant_subsets
+            and not nonsignificant_subsets
+        ):
+            groups.setdefault(
+                present,
+                {"significant": set(), "other": set()},
+            )["other"].add(kinase_id)
+
+    ordered_groups = sorted(
+        groups.items(),
+        key=lambda item: (
+            -len(item[1]["significant"]) - len(item[1]["other"]),
+            -len(item[0]),
+            tuple(condition_positions[condition] for condition in item[0]),
+        ),
+    )
+    subsets = [subset for subset, _ in ordered_groups]
+    significant_counts = [
+        len(counts["significant"]) for _, counts in ordered_groups
+    ]
+    nonsignificant_counts = [
+        len(counts["other"]) for _, counts in ordered_groups
+    ]
+    totals = np.asarray(significant_counts) + np.asarray(
+        nonsignificant_counts
+    )
+    x = np.arange(len(subsets), dtype=float)
+    subset_labels = [" + ".join(subset) for subset in subsets]
+    significant_names = [
+        _hover_gene_preview(counts["significant"])
+        for _, counts in ordered_groups
+    ]
+    nonsignificant_names = [
+        _hover_gene_preview(counts["other"])
+        for _, counts in ordered_groups
+    ]
+    set_sizes = [len(condition_sets[condition]) for condition in conditions]
+
+    fig = make_subplots(
+        rows=2,
+        cols=2,
+        column_widths=[0.16, 0.84],
+        row_heights=[0.68, 0.32],
+        horizontal_spacing=0.05,
+        vertical_spacing=0.12,
+    )
+    fig.add_trace(
+        go.Bar(
+            x=x,
+            y=nonsignificant_counts,
+            name="Non-significant in every contrast",
+            marker_color="#bdbdbd",
+            customdata=np.column_stack(
+                [subset_labels, nonsignificant_names]
+            ),
+            hovertemplate=(
+                "Condition subset: %{customdata[0]}<br>"
+                "Non-significant in every contrast: %{y:.0f}<br>"
+                "%{customdata[1]}"
+                "<extra></extra>"
+            ),
+        ),
+        row=1,
+        col=2,
+    )
+    fig.add_trace(
+        go.Bar(
+            x=x,
+            y=significant_counts,
+            name=f"Significant in every contrast",
+            marker_color="#8064a2",
+            customdata=np.column_stack(
+                [subset_labels, significant_names]
+            ),
+            hovertemplate=(
+                "Condition subset: %{customdata[0]}<br>"
+                "Significant in every contrast: %{y:.0f}<br>"
+                "%{customdata[1]}"
+                "<extra></extra>"
+            ),
+        ),
+        row=1,
+        col=2,
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=x,
+            y=totals,
+            mode="text",
+            text=[str(int(value)) for value in totals],
+            textposition="top center",
+            textfont={"color": "#555", "size": 10},
+            hoverinfo="skip",
+            showlegend=False,
+        ),
+        row=1,
+        col=2,
+    )
+    condition_y = np.arange(len(conditions), dtype=float)
+    fig.add_trace(
+        go.Bar(
+            x=set_sizes,
+            y=condition_y,
+            orientation="h",
+            marker_color=[
+                condition_color_map[condition] for condition in conditions
+            ],
+            customdata=np.asarray(conditions, dtype=object),
+            hovertemplate=(
+                "Condition: %{customdata}<br>"
+                "Eligible kinases: %{x:.0f}"
+                "<extra></extra>"
+            ),
+            showlegend=False,
+        ),
+        row=2,
+        col=1,
+    )
+
+    if conditions and subsets:
+        fig.add_trace(
+            go.Scatter(
+                x=np.repeat(x, len(conditions)),
+                y=np.tile(condition_y, len(subsets)),
+                mode="markers",
+                marker={"size": 8, "color": "#dedede"},
+                hoverinfo="skip",
+                showlegend=False,
+            ),
+            row=2,
+            col=2,
+        )
+
+        line_x: list[float | None] = []
+        line_y: list[float | None] = []
+        active_x: list[float] = []
+        active_y: list[float] = []
+        active_labels: list[str] = []
+        for position, subset, label in zip(x, subsets, subset_labels):
+            subset_positions = [
+                float(condition_positions[condition]) for condition in subset
+            ]
+            line_x.extend([float(position), float(position), None])
+            line_y.extend(
+                [min(subset_positions), max(subset_positions), None]
+            )
+            active_x.extend([float(position)] * len(subset_positions))
+            active_y.extend(subset_positions)
+            active_labels.extend([label] * len(subset_positions))
+
+        fig.add_trace(
+            go.Scatter(
+                x=line_x,
+                y=line_y,
+                mode="lines",
+                line={"color": "#555", "width": 2},
+                hoverinfo="skip",
+                showlegend=False,
+            ),
+            row=2,
+            col=2,
+        )
+        fig.add_trace(
+            go.Scatter(
+                x=active_x,
+                y=active_y,
+                mode="markers",
+                marker={"size": 10, "color": "#555"},
+                customdata=np.asarray(active_labels, dtype=object),
+                hovertemplate=(
+                    "Condition subset: %{customdata}<extra></extra>"
+                ),
+                showlegend=False,
+            ),
+            row=2,
+            col=2,
+        )
+
+    # Explicit annotations are more reliable than subplot tick labels here.
+    matrix_x0 = float(fig.layout.xaxis4.domain[0])
+    for condition, position in zip(conditions, condition_y):
+        fig.add_annotation(
+            x=matrix_x0 - 0.008,
+            y=float(position),
+            xref="paper",
+            yref="y4",
+            text=f"<b>{escape(condition)}</b>",
+            showarrow=False,
+            xanchor="right",
+            yanchor="middle",
+            font={"size": 13, "color": "#444"},
+        )
+
+    figure_height = max(460, 340 + 26 * len(conditions))
+    fig.update_layout(
+        title={"text": "Kinase condition subsets", "x": 0.61},
+        height=figure_height,
+        autosize=True,
+        barmode="stack",
+        bargap=0.28,
+        hovermode="closest",
+        legend={
+            "orientation": "v",
+            "x": -0.01,
+            "xanchor": "left",
+            "y": 0.85,
+            "yanchor": "bottom",
+        },
+        margin={"l": 100, "r": 25, "t": 70, "b": 35},
+        plot_bgcolor="white",
+        paper_bgcolor="white",
+    )
+    fig.update_xaxes(visible=False, row=1, col=1)
+    fig.update_yaxes(visible=False, row=1, col=1)
+    fig.update_xaxes(
+        showticklabels=False,
+        showgrid=False,
+        zeroline=False,
+        range=[-0.5, len(subsets) - 0.5],
+        row=1,
+        col=2,
+    )
+    fig.update_yaxes(
+        title="Kinases",
+        rangemode="tozero",
+        gridcolor="#e7e7e7",
+        zeroline=False,
+        row=1,
+        col=2,
+    )
+    fig.update_xaxes(
+        title={
+            "text": "Eligible kinases",
+            "font": {"size": 10, "color": "#666"},
+            "standoff": 4,
+        },
+        autorange="reversed",
+        showline=True,
+        linecolor="#aaa",
+        linewidth=1,
+        ticks="outside",
+        ticklen=3,
+        tickcolor="#aaa",
+        tickfont={"size": 9, "color": "#666"},
+        tickformat="d",
+        nticks=4,
+        showgrid=True,
+        gridcolor="#ececec",
+        gridwidth=1,
+        zeroline=False,
+        row=2,
+        col=1,
+    )
+    fig.update_yaxes(
+        range=[len(conditions) - 0.5, -0.5],
+        showticklabels=False,
+        showgrid=False,
+        zeroline=False,
+        row=2,
+        col=1,
+    )
+    fig.update_xaxes(
+        showticklabels=False,
+        showgrid=False,
+        zeroline=False,
+        range=[-0.5, len(subsets) - 0.5],
+        row=2,
+        col=2,
+    )
+    fig.update_yaxes(
+        range=[len(conditions) - 0.5, -0.5],
+        showticklabels=False,
+        showgrid=False,
+        zeroline=False,
+        row=2,
+        col=2,
+    )
+    return fig
+
+
 def _contrast_options(adata, results: pd.DataFrame) -> list[str]:
     available = set(results["contrast"].astype(str))
     configured = [str(value) for value in adata.uns.get("contrast_names", [])]
@@ -1691,14 +2194,16 @@ def _contrast_options(adata, results: pd.DataFrame) -> list[str]:
 @log_time("Preparing Kinases Tab")
 def kinases_tab(state: SessionState):
     adata = state.adata
+    activity_payload = _kinase_activity(adata)
     results = _kinase_results(adata)
     substrates = _kinase_substrates(adata)
+    condition_kinases = _condition_kinases(adata)
     contrasts = _contrast_options(adata, results)
     if not contrasts:
         return pn.pane.Markdown("No kinase activity contrasts are available.")
 
     analysis = adata.uns.get("analysis", {}) or {}
-    clustering = _kinase_activity(adata).get("clustering", {}) or {}
+    clustering = activity_payload.get("clustering", {}) or {}
     sign_threshold_value = clustering.get(
         "sign_threshold",
         analysis.get("sign_threshold", 0.05),
@@ -1707,6 +2212,74 @@ def kinases_tab(state: SessionState):
         0.05
         if sign_threshold_value is None
         else sign_threshold_value
+    )
+    method = _text_value(activity_payload.get("method", "ksea"), "ksea").upper()
+    min_substrates = activity_payload.get("min_substrates", "n/a")
+    database_metadata = activity_payload.get("database", {}) or {}
+    database_filename = (
+        _text_value(database_metadata.get("filename"), "Not recorded")
+        if isinstance(database_metadata, Mapping)
+        else _text_value(database_metadata, "Not recorded")
+    )
+    conditions = sorted(
+        set(_text_series(adata.obs["CONDITION"]).tolist()),
+        key=str.casefold,
+    )
+    enrichment_background_label = (
+        "KSEA-tested kinases"
+        if _ENRICHMENT_USE_TESTED_BACKGROUND
+        else "STRING species proteome"
+    )
+    summary_md = (
+        f"{len(conditions)} Conditions - {len(contrasts)} Contrasts\n\n"
+        f"**Method:** {method} (minimum {min_substrates} substrates)\n\n"
+        f"**Database:** `{database_filename}`\n\n"
+        f"**Background:** {enrichment_background_label}\n\n"
+    )
+    summary_pane = pn.pane.Markdown(
+        summary_md,
+        sizing_mode="stretch_width",
+        margin=(-10, 0, 0, 20),
+        styles={
+            "line-height": "1.4em",
+            "word-break": "break-word",
+            "overflow-wrap": "anywhere",
+            "min-width": "0",
+        },
+    )
+    upset_figure = _kinase_upset_figure(
+        adata,
+        results,
+        condition_kinases,
+        contrasts,
+        sign_threshold,
+    )
+    upset_height = int(upset_figure.layout.height or 460)
+    upset_plot = pn.pane.Plotly(
+        upset_figure,
+        height=upset_height,
+        margin=(0, 20, 0, 0),
+        sizing_mode="stretch_width",
+        config={"responsive": True},
+        styles={"flex": "1", "overflow": "hidden"},
+    )
+    kinase_summary_pane = pn.Row(
+        pn.Column(
+            pn.pane.Markdown("##   Summary", disable_anchors=True),
+            summary_pane,
+            styles={"flex": "0.32", "min-width": "0"},
+        ),
+        make_vr(),
+        pn.Spacer(width=20),
+        upset_plot,
+        height=max(500, upset_height + 20),
+        margin=(0, 0, 0, 20),
+        sizing_mode="stretch_width",
+        styles={
+            "border-radius": "15px",
+            "box-shadow": "3px 3px 5px #bcbcbc",
+            "width": "98vw",
+        },
     )
     enrichment_queries = _significant_kinases_by_contrast(
         results,
@@ -1801,6 +2374,15 @@ def kinases_tab(state: SessionState):
         "click_data",
     )
 
+    # Plotly click_data is sticky. Clearing the search must explicitly
+    # relinquish the click source so export priority falls back to
+    # cohort, then lasso, exactly as in the Overview tab.
+    def _on_search_cleared(event) -> None:
+        if not _text_value(event.new):
+            _on_volcano_click_data({})
+
+    search_input.param.watch(_on_search_cleared, "value")
+
     detail = pn.bind(
         _kinase_detail_card,
         results=results,
@@ -1817,7 +2399,6 @@ def kinases_tab(state: SessionState):
         kinase_token=search_input,
     )
 
-    method = str(_kinase_activity(adata).get("method", "ksea")).upper()
     activity_filter = pn.widgets.RadioButtonGroup(
         name="Kinases",
         options={
@@ -1828,12 +2409,29 @@ def kinases_tab(state: SessionState):
         button_type="default",
         margin=(12,0,0,10),
     )
-    activity_heatmap = pn.bind(
-        _kinase_activity_heatmap,
-        adata=adata,
-        results=results,
-        profile_name=activity_filter,
+    activity_heatmap_holder = pn.Column(
+        _kinase_activity_heatmap(
+            adata,
+            results,
+            profile_name=str(activity_filter.value),
+        ),
+        sizing_mode="stretch_width",
     )
+
+    def _update_activity_heatmap(event) -> None:
+        activity_heatmap_holder.loading = True
+        try:
+            activity_heatmap_holder[:] = [
+                _kinase_activity_heatmap(
+                    adata,
+                    results,
+                    profile_name=str(event.new),
+                )
+            ]
+        finally:
+            activity_heatmap_holder.loading = False
+
+    activity_filter.param.watch(_update_activity_heatmap, "value")
     activity_info = pn.widgets.TooltipIcon(
         value=f"""
         Cells show signed Z-scores; untested kinase–contrast pairs are blank.
@@ -2223,11 +2821,6 @@ def kinases_tab(state: SessionState):
         pn.Row(clear_search, margin=(15, 0, 0, 0)),
         pn.Spacer(width=20),
         download_selection,
-        pn.Spacer(width=20),
-        pn.pane.Markdown(
-            f"**Method:** {method}",
-            margin=(13, 0, 0, 0),
-        ),
         height=70,
     )
 
@@ -2269,7 +2862,7 @@ def kinases_tab(state: SessionState):
             margin=(0, 20, 0, 0),
             sizing_mode="stretch_width",
         ),
-        activity_heatmap,
+        activity_heatmap_holder,
         margin=(0, 0, 0, 20),
         sizing_mode="stretch_width",
         styles={
@@ -2293,17 +2886,14 @@ def kinases_tab(state: SessionState):
                 margin=(18, 0, 0, 0),
                 styles={"overflow": "visible"},
             ),
-            pn.Spacer(width=10),
+        ),
+        pn.Row(
+            pn.Spacer(width=15),
             species_sel,
             pn.Spacer(width=12),
             category_sel,
             pn.Spacer(width=12),
             enrichment_metric_sel,
-            pn.Spacer(width=12),
-            pn.pane.Markdown(
-                f"**Background:** {enrichment_background_label}",
-                margin=(18, 0, 0, 0),
-            ),
             margin=(0, 20, 0, 0),
             sizing_mode="stretch_width",
         ),
@@ -2322,9 +2912,11 @@ def kinases_tab(state: SessionState):
 
     return pn.Column(
         pn.Spacer(height=10),
-        volcano_pane,
+        kinase_summary_pane,
         pn.Spacer(height=30),
         clustering_pane,
+        pn.Spacer(height=30),
+        volcano_pane,
         pn.Spacer(height=30),
         enrichment_pane,
         pn.Spacer(height=30),
