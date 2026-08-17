@@ -21,7 +21,11 @@ from components.selection_export import (
     build_kinase_selection_df,
     make_volcano_selection_downloader,
 )
-from components.string_links import STRING_API_URL, STRING_CALLER_IDENTITY
+from components.string_links import (
+    STRING_API_URL,
+    STRING_CALLER_IDENTITY,
+    get_string_link,
+)
 from tabs.overview_shared import STRING_SPECIES_OPTIONS, bind_uirevision
 from utils.layout_utils import (
     FRAME_STYLES_TALL,
@@ -78,6 +82,7 @@ _ENRICHMENT_LABEL_WRAP_WIDTH = 44
 
 # False uses STRING's default whole-species background. Set to True to
 # restrict enrichment to the kinases that were eligible/tested by KSEA.
+# Still testing, restricting seems to always break all stat. power
 _ENRICHMENT_USE_TESTED_BACKGROUND = False
 
 def _kinase_activity(adata) -> Mapping:
@@ -604,11 +609,8 @@ def plot_kinase_volcano(
                 "UniProt: %{customdata[3]}<br>"
                 "Mean shift: %{x:.3f}<br>"
                 "Z-score: %{customdata[4]:.3f}<br>"
-                "p-value: %{customdata[5]:.3e}<br>"
                 "q-value: %{customdata[6]:.3e}<br>"
                 "Substrates: %{customdata[7]:.0f}<br>"
-                "Mean substrate log2FC: %{customdata[8]:.3f}<br>"
-                "Global mean log2FC: %{customdata[9]:.3f}"
                 "<extra></extra>"
             ),
             name="",
@@ -661,6 +663,31 @@ def plot_kinase_volcano(
             "showarrow": False,
         },
     ]
+
+    selected_indices = np.flatnonzero(selected)
+    if selected_indices.size:
+        index = int(selected_indices[0])
+        direction = 1 if x[index] >= 0.0 else -1
+        label = (
+            kinase_genes[index]
+            or kinase_names[index]
+            or kinase_ids[index]
+        )
+        annotations.append(
+            {
+                "x": float(x[index]) + direction * 0.05,
+                "y": float(y[index]) + 0.05,
+                "ax": float(x[index]) + direction * 0.5,
+                "ay": float(y[index]) + 0.5,
+                "xref": "x",
+                "yref": "y",
+                "axref": "x",
+                "ayref": "y",
+                "text": f"{escape(str(label))}",
+                "showarrow": True,
+                "arrowhead": 0,
+            }
+        )
 
     fig.update_layout(
         title={"text": "Kinase Volcano Plot", "x": 0.5},
@@ -1130,29 +1157,7 @@ def _kinase_substrate_heatmap(
 ) -> pn.viewable.Viewable:
     row = _selected_kinase_row(results, contrast, kinase_token)
     if row is None:
-        return pn.Card(
-            pn.pane.Markdown(
-                "**Contributing Phosphosites**",
-                styles={
-                    "font-size": "16px",
-                    "padding": "0",
-                    "line-height": "0px",
-                },
-            ),
-            make_hr(),
-            pn.pane.Markdown(
-                "Select a kinase to show its contributing phosphosite profiles."
-            ),
-            width=410,
-            collapsible=False,
-            hide_header=True,
-            styles={
-                "background": "#f9f9f9",
-                "border-radius": "8px",
-                "box-shadow": "3px 3px 5px #bcbcbc",
-                "padding": "8px",
-            },
-        )
+        return pn.Spacer(width=800, height=1)
 
     kinase_id = str(row["kinase_id"])
     kinase = str(row.get("kinase", "") or kinase_id)
@@ -1160,15 +1165,22 @@ def _kinase_substrate_heatmap(
         _text_series(substrates["contrast"]).eq(str(contrast))
         & _text_series(substrates["kinase_id"]).eq(kinase_id)
     )
-    site_ids = (
-        _text_series(substrates.loc[link_mask, "phosphosite_id"])
-        .drop_duplicates()
-        .tolist()
+    site_rows = (
+        substrates.loc[
+            link_mask,
+            ["phosphosite_id", "database_source"],
+        ]
+        .drop_duplicates("phosphosite_id")
     )
+    site_ids = _text_series(site_rows["phosphosite_id"]).tolist()
+    site_sources = _text_series(site_rows["database_source"]).tolist()
 
     feature_indices = adata.var_names.astype(str).get_indexer(site_ids)
     present = feature_indices >= 0
     site_ids = [site for site, keep in zip(site_ids, present) if keep]
+    site_sources = [
+        source for source, keep in zip(site_sources, present) if keep
+    ]
     feature_indices = feature_indices[present]
     sample_indices = _contrast_sample_indices(adata, contrast)
 
@@ -1220,6 +1232,7 @@ def _kinase_substrate_heatmap(
         )
         order = np.argsort(-sort_values, kind="stable")
         site_ids = [site_ids[index] for index in order]
+        site_sources = [site_sources[index] for index in order]
         centered = centered[order]
         absolute = absolute[order]
         site_log2fc = site_log2fc[order]
@@ -1234,12 +1247,16 @@ def _kinase_substrate_heatmap(
         color_limit = 1.0
 
     customdata = np.empty(
-        (len(site_ids), len(sample_names), 3),
+        (len(site_ids), len(sample_names), 4),
         dtype=object,
     )
     customdata[:, :, 0] = absolute
     customdata[:, :, 1] = sample_conditions[None, :]
     customdata[:, :, 2] = site_log2fc[:, None]
+    customdata[:, :, 3] = np.asarray(
+        site_sources,
+        dtype=object,
+    )[:, None]
 
     fig = go.Figure(
         go.Heatmap(
@@ -1254,6 +1271,7 @@ def _kinase_substrate_heatmap(
             colorbar={"title": "Deviation"},
             hovertemplate=(
                 "Phosphosite: %{y}<br>"
+                "Database source: %{customdata[3]}<br>"
                 "Sample: %{x}<br>"
                 "Condition: %{customdata[1]}<br>"
                 "Deviation from site mean: %{z:.3f}<br>"
@@ -1313,29 +1331,7 @@ def _kinase_detail_card(
 ) -> pn.viewable.Viewable:
     row = _selected_kinase_row(results, contrast, kinase_token)
     if row is None:
-        return pn.Card(
-            pn.pane.Markdown(
-                "**Kinase details**",
-                styles={
-                    "font-size": "16px",
-                    "padding": "0",
-                    "line-height": "0px",
-                },
-            ),
-            make_hr(),
-            pn.pane.Markdown(
-                "Click a kinase in the volcano or use **Search Kinase** to inspect it."
-            ),
-            width=410,
-            collapsible=False,
-            hide_header=True,
-            styles={
-                "background": "#f9f9f9",
-                "border-radius": "8px",
-                "box-shadow": "3px 3px 5px #bcbcbc",
-                "padding": "8px",
-            },
-        )
+        return pn.Spacer(width=800, height=1)
 
     kinase = _text_value(
         row.get("kinase", ""),
@@ -1343,6 +1339,8 @@ def _kinase_detail_card(
     )
     gene = _text_value(row.get("kinase_gene", ""), "n/a")
     uniprot = _text_value(row.get("kinase_uniprot", ""))
+    string_link = get_string_link(uniprot) if uniprot else ""
+
 
     Number = pn.indicators.Number
     effect = Number(
@@ -1393,11 +1391,19 @@ def _kinase_detail_card(
 
     footer_right = pn.pane.HTML("")
     if uniprot:
+        string_html = (
+            " &nbsp;|&nbsp; "
+            f"<a href='{escape(string_link, quote=True)}' "
+            "target='_blank' rel='noopener'>STRING Entry</a>"
+            if string_link
+            else ""
+        )
         footer_right = pn.pane.HTML(
             "<span style='font-size: 12px;'>"
             "🔗 "
             f"<a href='https://www.uniprot.org/uniprotkb/{uniprot}/entry' "
             "target='_blank' rel='noopener'>UniProt Entry</a>"
+            f"{string_html}"
             "</span>",
             styles={"text-align": "right"},
         )
@@ -1621,18 +1627,12 @@ def _coordinated_enrichment_figure(
                 },
                 customdata=customdata,
                 hovertemplate=(
-                    "Term: %{customdata[0]}<br>"
                     "ID: %{customdata[1]}<br>"
-                    f"Contrast: {contrast.replace('_vs_', '_v_')}<br>"
-                    "Direction: %{customdata[8]}<br>"
                     "Signal: %{customdata[10]:.3f}<br>"
                     "−log10(FDR): %{customdata[11]:.3f}<br>"
                     "Raw p-value: %{customdata[9]:.3e}<br>"
-                    "FDR: %{customdata[2]:.3e}<br>"
                     "Contributing kinases: %{customdata[3]:.0f} / "
                     "%{customdata[5]:.0f}<br>"
-                    "Enrichment background: %{customdata[6]}<br>"
-                    "Background kinases with term: %{customdata[4]:.0f}<br>"
                     "%{customdata[7]}"
                     "<extra></extra>"
                 ),
@@ -2106,7 +2106,7 @@ def _kinase_upset_figure(
         hovermode="closest",
         legend={
             "orientation": "v",
-            "x": -0.01,
+            "x": 0.0,
             "xanchor": "left",
             "y": 0.85,
             "yanchor": "bottom",
