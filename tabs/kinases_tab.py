@@ -753,6 +753,19 @@ def _dendrogram_lines(
 ) -> None:
     linkage = np.asarray(linkage, dtype=float)
     if linkage.ndim != 2 or linkage.shape[0] == 0:
+        # Keep the subplot axis alive so singleton labels remain visible.
+        fig.add_trace(
+            go.Scatter(
+                x=[0.0],
+                y=[0.0],
+                mode="markers",
+                marker={"opacity": 0.0},
+                hoverinfo="skip",
+                showlegend=False,
+            ),
+            row=row,
+            col=col,
+        )
         return
 
     dendrogram = sch.dendrogram(linkage, no_plot=True)
