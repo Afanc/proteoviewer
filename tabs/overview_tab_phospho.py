@@ -27,7 +27,8 @@ from components.overview_plots import (
 from components.selection_export import (
     SelectionExportSpec,
     make_volcano_selection_downloader,
-    make_adjacent_sites_csv_callback
+    make_adjacent_sites_csv_callback,
+    extract_feature_ids_from_selected_data,
 )
 from tabs.overview_shared import (
     make_id_sort_toggle,
@@ -45,6 +46,10 @@ from tabs.overview_shared import (
     bind_uirevision,
     wire_cohort_export_updates,
     filter_feature_ids_to_visible_volcano,
+    make_string_species_select,
+    feature_ids_to_string_proteins,
+    make_string_selected_feature_table,
+    make_string_enrichment_card,
 )
 from components.plot_utils import plot_pca_2d, plot_umap_2d, plot_mds_2d
 from components.string_links import get_string_link
@@ -328,6 +333,9 @@ def overview_tab_phospho(state: SessionState):
       - Volcanoes + detail panes
     """
     adata = state.adata
+    string_species_sel = make_string_species_select(width=150)
+    string_selected_feature_ids: list[str] = []
+
     preproc_cfg = adata.uns["preprocessing"]
     analysis_type  = preproc_cfg.get("analysis_type", "DIA")
     phospho_cfg = preproc_cfg.get("phospho", {}) or {}
@@ -556,7 +564,6 @@ def overview_tab_phospho(state: SessionState):
             id_col_name="PHOSPHOSITE_ID",
         ),
     )
-    volcano_plot.param.watch(lambda e: _on_volcano_selected_data(e.new), "selected_data")
     volcano_plot.param.watch(lambda e: _on_volcano_click_data(e.new), "click_data")
 
     # Cohort changes must update the export state immediately (priority: click > cohort > lasso).
@@ -607,15 +614,6 @@ def overview_tab_phospho(state: SessionState):
     layers_cov_sel = pn.widgets.Select(name="Flowthrough View", options=layers_cov, value=layers_cov[0],
                                        width=100, margin=(20, 0, 0, 0), visible=has_cov)
 
-    def _toggle_layers_visibility(event):
-        visible = bool(event.new)
-        layers_phos_sel.visible = visible
-        layers_cov_sel.visible = visible
-
-    search_input.param.watch(_toggle_layers_visibility, "value")
-    layers_phos_sel.visible = bool(search_input.value)
-    layers_cov_sel.visible = bool(search_input.value)
-
     main_info_holder = pn.Column()
     cov_info_holder = pn.Column(visible=has_cov)
     pep_table_holder = pn.Column()
@@ -623,24 +621,130 @@ def overview_tab_phospho(state: SessionState):
     cov_bar_holder = pn.Column(visible=has_cov)
     prec_trend_holder = pn.Column()
 
-    detail_panel = pn.Row(
-        pn.Column(
-            main_info_holder,
-            pn.Spacer(height=20),
-            pn.Row(cov_info_holder, pn.Spacer(width=20, visible=has_cov), pep_table_holder, width=800),
-            pn.Spacer(height=45),
-            main_bar_holder,
-            pn.Spacer(height=20),
-            cov_bar_holder,
-            pn.Spacer(height=20),
-            prec_trend_holder,
-            width=840,
+    site_detail_panel = pn.Column(
+        main_info_holder,
+        pn.Spacer(height=20),
+        pn.Row(
+            cov_info_holder,
+            pn.Spacer(width=20, visible=has_cov),
+            pep_table_holder,
+            width=800,
         ),
+        pn.Spacer(height=45),
+        main_bar_holder,
+        pn.Spacer(height=20),
+        cov_bar_holder,
+        pn.Spacer(height=20),
+        prec_trend_holder,
+        width=840,
+    )
+
+    string_enrichment_holder = pn.Column(
+        pn.Spacer(height=0),
+        width=840,
+        margin=(0, 0, 0, 0),
+    )
+
+    detail_mode_holder = pn.Column(
+        pn.Spacer(width=840, height=320),
+        width=840,
+    )
+
+    detail_panel = pn.Row(
+        detail_mode_holder,
         margin=(0, 0, 0, 0),
         styles={"margin-left": "auto"},
     )
 
     bokeh_doc = pn.state.curdoc
+
+    def _selected_sites_to_string_proteins(feature_ids: list[str]) -> list[str]:
+        return feature_ids_to_string_proteins(
+            adata,
+            feature_ids,
+            prefer_parent=True,
+            parent_col="PARENT_PROTEIN",
+        )
+
+    def _render_string_enrichment():
+        proteins = _selected_sites_to_string_proteins(
+            string_selected_feature_ids
+        )
+        return make_string_enrichment_card(
+            selected_feature_ids=string_selected_feature_ids,
+            proteins=proteins,
+            species=string_species_sel.value,
+            selected_table=make_string_selected_feature_table(
+                adata,
+                string_selected_feature_ids,
+                title="Selected phosphosites",
+                parent_col="PARENT_PROTEIN",
+                contrast=str(contrast_sel.value),
+            ),
+            width=820,
+        )
+
+    def _sync_detail_mode() -> None:
+        has_single_detail = bool(str(search_input.value or "").strip())
+        has_string_selection = bool(string_selected_feature_ids)
+
+        string_species_sel.visible = has_string_selection
+        layers_phos_sel.visible = has_single_detail
+        layers_cov_sel.visible = has_single_detail and has_cov
+
+        if has_single_detail:
+            detail_mode_holder[:] = [site_detail_panel]
+        elif has_string_selection:
+            detail_mode_holder[:] = [string_enrichment_holder]
+        else:
+            detail_mode_holder[:] = [pn.Spacer(width=840, height=320)]
+
+    def _update_string_enrichment(_=None) -> None:
+        string_enrichment_holder.loading = True
+        try:
+            string_enrichment_holder[:] = [_render_string_enrichment()]
+        except Exception as exc:
+            string_enrichment_holder[:] = [
+                pn.pane.Markdown(
+                    f"**STRING enrichment failed**  \n`{exc}`",
+                    styles={
+                        "background": "#fff3f3",
+                        "padding": "10px",
+                        "border-radius": "8px",
+                    },
+                    sizing_mode="stretch_width",
+                )
+            ]
+        finally:
+            string_enrichment_holder.loading = False
+        _sync_detail_mode()
+
+    def _on_phospho_selected_data(event) -> None:
+        selected_data = event.new
+        _on_volcano_selected_data(selected_data)
+
+        if selected_data is None or selected_data == {}:
+            string_selected_feature_ids.clear()
+            _update_string_enrichment()
+            return
+
+        if "points" in selected_data and not selected_data["points"]:
+            # Plotly can emit an empty transient event during redraws. Only a
+            # real clear-selection event should remove the current enrichment.
+            if selected_data.get("selector", "__missing__") is None:
+                return
+            string_selected_feature_ids.clear()
+            _update_string_enrichment()
+            return
+
+        string_selected_feature_ids.clear()
+        string_selected_feature_ids.extend(
+            extract_feature_ids_from_selected_data(selected_data)
+        )
+        _update_string_enrichment()
+
+    volcano_plot.param.watch(_on_phospho_selected_data, "selected_data")
+    string_species_sel.param.watch(_update_string_enrichment, "value")
 
     def _render_main_info():
         site_id = search_input.value
@@ -1072,15 +1176,21 @@ def overview_tab_phospho(state: SessionState):
         finally:
             prec_trend_holder.loading = False
 
+    def _update_detail(_=None) -> None:
+        _update_info()
+        _update_peptide_table()
+        _update_main_bar()
+        _update_cov_bar()
+        _update_precursor_trends()
+        _sync_detail_mode()
+
     # Wire events
-    search_input.param.watch(lambda _e: (_update_info(), _update_peptide_table(), _update_main_bar(), _update_cov_bar(), _update_precursor_trends()),
-                             "value")
-    contrast_sel.param.watch(lambda _e: (_update_info(), _update_peptide_table(), _update_main_bar(), _update_cov_bar(), _update_precursor_trends()),
-                             "value")
+    search_input.param.watch(_update_detail, "value")
+    contrast_sel.param.watch(_update_detail, "value")
     layers_phos_sel.param.watch(lambda _e: _update_main_bar(), "value")
     layers_cov_sel.param.watch(lambda _e: _update_cov_bar(), "value")
 
-    bokeh_doc.add_next_tick_callback(lambda: (_update_info(), _update_main_bar(), _update_cov_bar(), _update_peptide_table(), _update_precursor_trends()))
+    bokeh_doc.add_next_tick_callback(_update_detail)
 
     volcano_and_detail = pn.Row(
         pn.Column(
@@ -1143,6 +1253,8 @@ def overview_tab_phospho(state: SessionState):
             pn.Row(layers_cov_sel, margin=(-17, 0, 0, 0)),
             pn.Spacer(width=20),
             download_selection,
+            pn.Spacer(width=10),
+            string_species_sel,
             width=300,
             height=70,
         ),
