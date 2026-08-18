@@ -197,6 +197,7 @@ def _make_adata_views(adata):
 def _build_pipeline_summary(adata) -> str:
     preproc = adata.uns.get("preprocessing", {})
     analysis = adata.uns.get("analysis", {})
+    pilot_mode = bool(adata.uns.get("pilot_study_mode", False))
 
     filtering = preproc.get("filtering", {})
     normalization = preproc.get("normalization", {})
@@ -210,6 +211,11 @@ def _build_pipeline_summary(adata) -> str:
     phospho_cfg = preproc.get("phospho", {}) or {}
     multisite_mode = str(phospho_cfg.get("multisite_collapse_policy", "explode") or "explode")
     ebayes_method = analysis.get("ebayes_method", "limma")
+    differential_expression_txt = (
+        "Pilot study mode (statistical testing skipped)"
+        if pilot_mode
+        else f"eBayes via {ebayes_method}"
+    )
     input_layout = preproc.get("input_layout", "")
     quant_method = preproc.get("quantification", {}).get("peptide_rollup_method", "sum")
     if quant_method == "directlfq":
@@ -288,7 +294,7 @@ def _build_pipeline_summary(adata) -> str:
             - Phospho Localization Score ({loc_mode}, thr={loc_thr_txt}): {loc_txt}
         - **Normalization**: {norm_methods_str}
         - **Imputation**: {imp_method}
-        - **Differential expression**: eBayes via {ebayes_method}
+        - **Differential expression**: {differential_expression_txt}
 
         **Proteoflux Version** {pf_version}
         """
@@ -337,13 +343,10 @@ def overview_tab_phospho(state: SessionState):
     string_selected_feature_ids: list[str] = []
 
     preproc_cfg = adata.uns["preprocessing"]
+    pilot_mode = bool(adata.uns.get("pilot_study_mode", False))
     analysis_type  = preproc_cfg.get("analysis_type", "DIA")
     phospho_cfg = preproc_cfg.get("phospho", {}) or {}
     multisite_mode = str(phospho_cfg.get("multisite_collapse_policy", "explode") or "explode")
-
-    views = _make_adata_views(adata)
-    has_cov = bool(adata.uns["has_covariate"])
-    contrast_names = list(views["contrast_names"])
 
     # Summary / Intro 
     summary_md = _build_pipeline_summary(adata)
@@ -388,6 +391,24 @@ def overview_tab_phospho(state: SessionState):
         plot_mds_2d=plot_mds_2d,
         plot_umap_2d=plot_umap_2d,
     )
+
+    if pilot_mode:
+        return pn.Column(
+            pn.Spacer(height=10),
+            intro_pane,
+            pn.Spacer(height=30),
+            metrics_pane,
+            pn.Spacer(height=30),
+            clustering_pane,
+            pn.Spacer(height=30),
+            sizing_mode="stretch_width",
+            styles=FRAME_STYLES_TALL,
+        )
+
+    # Statistics-dependent views are only needed outside pilot mode.
+    views = _make_adata_views(adata)
+    has_cov = bool(adata.uns["has_covariate"])
+    contrast_names = list(views["contrast_names"])
 
     # Volcanoes 
     contrasts = contrast_names
