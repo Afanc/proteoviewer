@@ -67,6 +67,13 @@ _REQUIRED_CONDITION_KINASE_COLUMNS = {
     "n_substrates",
 }
 
+_REQUIRED_DATABASE_SUMMARY_COLUMNS = {
+    "filename",
+    "new_relationships",
+    "new_matched_relationships",
+    "new_matched_phosphosites",
+    "new_matched_kinases",
+}
 _ENRICHMENT_CATEGORY_OPTIONS = {
     "KEGG pathways": "KEGG",
     "Reactome pathways": "RCTM",
@@ -150,6 +157,29 @@ def _condition_kinases(adata) -> pd.DataFrame:
     return condition_kinases
 
 
+def _database_summary(adata) -> pd.DataFrame:
+    summary = _kinase_activity(adata).get("database_summary")
+    if summary is None:
+        return pd.DataFrame(
+            columns=sorted(_REQUIRED_DATABASE_SUMMARY_COLUMNS)
+        )
+    if not isinstance(summary, pd.DataFrame):
+        raise TypeError(
+            "adata.uns['kinase_activity']['database_summary'] must be a "
+            "pandas DataFrame."
+        )
+
+    missing = sorted(
+        _REQUIRED_DATABASE_SUMMARY_COLUMNS.difference(summary.columns)
+    )
+    if missing:
+        raise ValueError(
+            "KSEA database summary is missing required columns: "
+            f"{missing!r}."
+        )
+    return summary
+
+
 def _tested_mask(values: pd.Series) -> np.ndarray:
     if pd.api.types.is_bool_dtype(values.dtype):
         return values.fillna(False).to_numpy(dtype=bool)
@@ -172,6 +202,16 @@ def _text_value(value, fallback: str = "") -> str:
         return fallback
     text = str(value).strip()
     return text or fallback
+
+
+def _count_text(value, fallback: str = "Not recorded") -> str:
+    try:
+        if pd.isna(value):
+            return fallback
+        return f"{int(value):,}"
+    except (TypeError, ValueError, OverflowError):
+        return fallback
+
 
 def _qvalue_plot_values(qvalues: np.ndarray) -> np.ndarray:
     """Return finite -log10(q) values while retaining underflowed q=0 rows."""
@@ -1195,6 +1235,14 @@ def _kinase_substrate_heatmap(
         source for source, keep in zip(site_sources, present) if keep
     ]
     feature_indices = feature_indices[present]
+    if "GENE_NAMES" in adata.var.columns:
+        site_genes = (
+            _text_series(adata.var.iloc[feature_indices]["GENE_NAMES"])
+            .replace("", "n/a")
+            .tolist()
+        )
+    else:
+        site_genes = ["n/a"] * len(site_ids)
     sample_indices = _contrast_sample_indices(adata, contrast)
 
     if not site_ids or sample_indices.size == 0:
@@ -1246,6 +1294,7 @@ def _kinase_substrate_heatmap(
         order = np.argsort(-sort_values, kind="stable")
         site_ids = [site_ids[index] for index in order]
         site_sources = [site_sources[index] for index in order]
+        site_genes = [site_genes[index] for index in order]
         centered = centered[order]
         absolute = absolute[order]
         site_log2fc = site_log2fc[order]
@@ -1260,7 +1309,7 @@ def _kinase_substrate_heatmap(
         color_limit = 1.0
 
     customdata = np.empty(
-        (len(site_ids), len(sample_names), 4),
+        (len(site_ids), len(sample_names), 5),
         dtype=object,
     )
     customdata[:, :, 0] = absolute
@@ -1268,6 +1317,10 @@ def _kinase_substrate_heatmap(
     customdata[:, :, 2] = site_log2fc[:, None]
     customdata[:, :, 3] = np.asarray(
         site_sources,
+        dtype=object,
+    )[:, None]
+    customdata[:, :, 4] = np.asarray(
+        site_genes,
         dtype=object,
     )[:, None]
 
@@ -1284,6 +1337,7 @@ def _kinase_substrate_heatmap(
             colorbar={"title": "Deviation"},
             hovertemplate=(
                 "Phosphosite: %{y}<br>"
+                "Substrate gene: %{customdata[4]}<br>"
                 "Database source: %{customdata[3]}<br>"
                 "Sample: %{x}<br>"
                 "Condition: %{customdata[1]}<br>"
@@ -2211,6 +2265,7 @@ def kinases_tab(state: SessionState):
     results = _kinase_results(adata)
     substrates = _kinase_substrates(adata)
     condition_kinases = _condition_kinases(adata)
+    database_summary = _database_summary(adata)
     contrasts = _contrast_options(adata, results)
     if not contrasts:
         return pn.pane.Markdown("No kinase activity contrasts are available.")
@@ -2234,6 +2289,60 @@ def kinases_tab(state: SessionState):
         if isinstance(database_metadata, Mapping)
         else _text_value(database_metadata, "Not recorded")
     )
+    if isinstance(database_metadata, Mapping):
+        database_relationships = database_metadata.get("relationships")
+        matched_relationships = database_metadata.get(
+            "matched_relationships"
+        )
+        matched_phosphosites = database_metadata.get(
+            "matched_phosphosites"
+        )
+        matched_kinases = database_metadata.get("matched_kinases")
+    else:
+        database_relationships = None
+        matched_relationships = None
+        matched_phosphosites = None
+        matched_kinases = None
+
+    # Older H5AD files do not contain the global matched counts. Derive the
+    # closest equivalent from their compact per-contrast substrate links.
+    if matched_relationships is None:
+        matched_relationships = len(
+            substrates.drop_duplicates(["kinase_id", "phosphosite_id"])
+        )
+    if matched_phosphosites is None:
+        matched_phosphosites = substrates["phosphosite_id"].nunique()
+
+    if matched_kinases is None:
+        matched_kinases = substrates["kinase_id"].nunique()
+
+    relationship_summary = (
+        f"{_count_text(database_relationships)} unique relationships; "
+        f"{_count_text(matched_relationships)} kinase→site matches "
+        f"({_count_text(matched_phosphosites)} phosphosites, "
+        f"{_count_text(matched_kinases)} kinases across all conditions)"
+    )
+    if database_summary.empty:
+        database_summary_md = f"**Database:** `{database_filename}`\n\n"
+    else:
+        database_lines = []
+        for _, database_row in database_summary.iterrows():
+            database_lines.append(
+                f"- `{_text_value(database_row['filename'], 'Unknown')}` — "
+                f"+{_count_text(database_row['new_relationships'], '0')} "
+                "relationships; "
+                f"+{_count_text(database_row['new_matched_relationships'], '0')} "
+                "kinase→site matches "
+                f"(+{_count_text(database_row['new_matched_phosphosites'], '0')} "
+                "sites, "
+                f"+{_count_text(database_row['new_matched_kinases'], '0')} "
+                "kinases)"
+            )
+        database_summary_md = (
+            "**Databases — incremental additions in configured order:**\n\n"
+            + "\n".join(database_lines)
+            + "\n\n"
+        )
     conditions = sorted(
         set(_text_series(adata.obs["CONDITION"]).tolist()),
         key=str.casefold,
@@ -2246,7 +2355,8 @@ def kinases_tab(state: SessionState):
     summary_md = (
         f"{len(conditions)} Conditions - {len(contrasts)} Contrasts\n\n"
         f"**Method:** {method} (minimum {min_substrates} substrates)\n\n"
-        f"**Database:** `{database_filename}`\n\n"
+        f"{database_summary_md}"
+        f"**Total:** {relationship_summary}\n\n"
         f"**Background:** {enrichment_background_label}\n\n"
     )
     summary_pane = pn.pane.Markdown(
