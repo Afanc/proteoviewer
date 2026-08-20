@@ -2318,9 +2318,9 @@ def kinases_tab(state: SessionState):
 
     relationship_summary = (
         f"{_count_text(database_relationships)} unique relationships; "
-        f"{_count_text(matched_relationships)} kinase→site matches "
-        f"({_count_text(matched_phosphosites)} phosphosites, "
-        f"{_count_text(matched_kinases)} kinases across all conditions)"
+        f"{_count_text(matched_relationships)} kinase-site matches.\n\n"
+        f"**In this analysis:** {_count_text(matched_phosphosites)} phosphosites, "
+        f"{_count_text(matched_kinases)} kinases across all tested contrasts."
     )
     if database_summary.empty:
         database_summary_md = f"**Database:** `{database_filename}`\n\n"
@@ -2328,18 +2328,18 @@ def kinases_tab(state: SessionState):
         database_lines = []
         for _, database_row in database_summary.iterrows():
             database_lines.append(
-                f"- `{_text_value(database_row['filename'], 'Unknown')}` — "
+                f"- `{_text_value(database_row['filename'], 'Unknown')}` --- "
                 f"+{_count_text(database_row['new_relationships'], '0')} "
                 "relationships; "
                 f"+{_count_text(database_row['new_matched_relationships'], '0')} "
-                "kinase→site matches "
-                f"(+{_count_text(database_row['new_matched_phosphosites'], '0')} "
+                "kinase-site matches \n\n"
+                f"\t+{_count_text(database_row['new_matched_phosphosites'], '0')} "
                 "sites, "
                 f"+{_count_text(database_row['new_matched_kinases'], '0')} "
-                "kinases)"
+                "kinases across all tested contrasts."
             )
         database_summary_md = (
-            "**Databases — incremental additions in configured order:**\n\n"
+            "**Databases - incremental additions in configured order:**\n\n"
             + "\n".join(database_lines)
             + "\n\n"
         )
