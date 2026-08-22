@@ -602,7 +602,9 @@ def overview_tab_pelsa(state: SessionState):
 
     def _conc_label(value: float) -> str:
         value = float(value)
-        return "Control" if value == 0 else f"{value:g}"
+        if value == 0:
+            return "Control"
+        return f"{value:.2f}".rstrip("0").rstrip(".")
 
     ec50_range_idx_sel = pn.widgets.IntRangeSlider(
         name="",
@@ -610,7 +612,7 @@ def overview_tab_pelsa(state: SessionState):
         end=max(len(concentration_levels) - 1, 0),
         value=(0, max(len(concentration_levels) - 1, 0)),
         step=1,
-        width=140,
+        width=160,
         styles={"z-index": "10"},
         bar_color="blue",
         tooltips=False,
@@ -638,15 +640,14 @@ def overview_tab_pelsa(state: SessionState):
     ec50_range_label = pn.pane.HTML(
         pn.bind(_ec50_range_label, ec50_range_idx_sel),
         margin=(-30, 0, 0, 15),
-        width=140,
+        width=160,
     )
 
     ec50_range_controls = pn.Column(
         ec50_range_label,
         pn.Spacer(height=30),
         ec50_range_idx_sel,
-        width=140,
-        margin=(0, 0, 0, 10),
+        width=170,
     )
 
     hide_zero_q_sel = pn.widgets.Checkbox(
@@ -660,9 +661,11 @@ def overview_tab_pelsa(state: SessionState):
     )
     min_parent_support_sel = pn.widgets.DiscreteSlider(
         name="Min. sign. peptide / protein",
-        options=[*range(1, 11), 15, 20],
+        options=[25, 20, 15, *range(10, -1, -1)],
+        direction="rtl",
+        bar_color="blue",
         value=1,
-        width=160,
+        width=165,
         disabled=not has_parent_support,
     )
 
@@ -1461,18 +1464,19 @@ def overview_tab_pelsa(state: SessionState):
             color_by,
             pn.Spacer(width=20),
             pn.Column(
+                pn.Spacer(height=10),
                 ec50_range_controls,
                 pn.Spacer(height=10),
-                hide_zero_q_sel,
-                margin=(25, 0, 0, 0),
+                min_parent_support_sel,
                 width=220,
             ),
-            pn.Spacer(width=20),
+            pn.Spacer(width=10),
             pn.Column(
+                hide_zero_q_sel,
+                pn.Spacer(height=10),
                 top_peptide_per_parent_sel,
-                min_parent_support_sel,
-                margin=(-10, 0, 0, 0),
-                width=180,
+                width=190,
+                margin=(-10,5,5,5),
             ),
             pn.Spacer(width=20),
             make_vr(),
@@ -1480,6 +1484,7 @@ def overview_tab_pelsa(state: SessionState):
             pn.Column(
                 pn.pane.Markdown("**Cohort Inspector**", align="start", margin=(-20,0,0,10)),
                 search_field_sel,
+                margin=(-10,5,5,5),
             ),
             pn.Spacer(width=10),
             pn.Column(
