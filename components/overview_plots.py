@@ -1041,6 +1041,8 @@ def plot_pelsa_volcano(
     sign_threshold: float = 0.05,
     hide_zero_neglog10_q: bool = False,
     ec50_range: tuple[float, float] | None = None,
+    top_peptide_per_parent: bool = False,
+    min_significant_peptides_per_parent: int = 1,
     width: int = 900,
     height: int = 900,
 ) -> go.Figure:
@@ -1063,6 +1065,55 @@ def plot_pelsa_volcano(
         if "GENE_NAMES" in ad.var.columns
         else np.array([""] * len(ids), dtype=object)
     )
+    if "PARENT_PROTEIN" not in ad.var.columns:
+        raise KeyError(
+            "PELSA volcano parent-protein filters require "
+            "adata.var['PARENT_PROTEIN']."
+        )
+    parents = (
+        ad.var["PARENT_PROTEIN"]
+        .reindex(ids)
+        .astype("string")
+        .fillna("")
+        .str.strip()
+        .to_numpy()
+    )
+
+    support_column = str(
+        ad.uns.get("pelsa", {}).get(
+            "parent_significant_count_column",
+            "significant_peptides_per_parent",
+        )
+    )
+    if support_column in res.columns:
+        parent_support = pd.to_numeric(
+            res[support_column],
+            errors="coerce",
+        ).fillna(0).to_numpy(dtype=int)
+        parent_support_available = True
+    elif "PELSA_SIGNIFICANT_PEPTIDES_PER_PARENT" in ad.var.columns:
+        parent_support = (
+            pd.to_numeric(
+                ad.var["PELSA_SIGNIFICANT_PEPTIDES_PER_PARENT"].reindex(ids),
+                errors="coerce",
+            )
+            .fillna(0)
+            .to_numpy(dtype=int)
+        )
+        parent_support_available = True
+    else:
+        parent_support = np.zeros(len(ids), dtype=int)
+        parent_support_available = False
+
+    min_parent_support = (
+        int(min_significant_peptides_per_parent)
+        if parent_support_available
+        else 0
+    )
+    if min_parent_support < 0:
+        raise ValueError(
+            "min_significant_peptides_per_parent must be >= 0."
+        )
 
     fit_success = res["fit_success"].astype(bool).to_numpy()
     finite = fit_success & np.isfinite(x.to_numpy()) & np.isfinite(y.to_numpy())
@@ -1077,6 +1128,56 @@ def plot_pelsa_volcano(
         mask &= np.isfinite(ec50)
         mask &= ec50 >= lo
         mask &= ec50 <= hi
+
+    mask &= parent_support >= min_parent_support
+
+    if top_peptide_per_parent and parent_support_available and np.any(mask):
+        eligible = np.flatnonzero(mask)
+        parent_keys = parents[eligible].astype(object)
+        missing_parent = pd.Series(parent_keys).str.casefold().isin(
+            {"", "nan", "none", "na", "n/a", "?"}
+        ).to_numpy()
+        # Missing parent accessions are unrelated peptides, so do not collapse
+        # all of them into one artificial parent group.
+        parent_keys[missing_parent] = np.char.add(
+            "__peptide__:",
+            ids[eligible][missing_parent].astype(str),
+        )
+
+        pvalues = pd.to_numeric(
+            res.get("curve_p_value", np.nan),
+            errors="coerce",
+        )
+        if np.isscalar(pvalues):
+            pvalues = pd.Series(np.nan, index=res.index)
+        candidates = pd.DataFrame(
+            {
+                "_position": eligible,
+                "_parent": parent_keys,
+                "_qvalue": q.to_numpy(dtype=float)[eligible],
+                "_pvalue": pvalues.to_numpy(dtype=float)[eligible],
+                "_abs_effect": np.abs(x.to_numpy(dtype=float)[eligible]),
+                "_peptide_id": ids[eligible],
+            }
+        )
+        keep_positions = (
+            candidates.sort_values(
+                [
+                    "_qvalue",
+                    "_pvalue",
+                    "_abs_effect",
+                    "_peptide_id",
+                ],
+                ascending=[True, True, False, True],
+                na_position="last",
+                kind="stable",
+            )
+            .drop_duplicates("_parent", keep="first")["_position"]
+            .to_numpy(dtype=int)
+        )
+        top_mask = np.zeros(len(mask), dtype=bool)
+        top_mask[keep_positions] = True
+        mask &= top_mask
 
     sig = q.to_numpy(dtype=float) < float(sign_threshold)
     color_mode = str(color_by or "Significance")
@@ -1171,10 +1272,18 @@ def plot_pelsa_volcano(
             genes[mask],
             log10_ec50[mask].to_numpy(),
             ec50[mask],
+            parents[mask],
+            np.where(
+                parent_support_available,
+                parent_support[mask].astype(str),
+                "Not available",
+            ),
         ],
         hovertemplate=(
             "Peptide: %{customdata[0]}<br>"
             "Gene: %{customdata[1]}<br>"
+            "Parent protein: %{customdata[4]}<br>"
+            "Significant peptides for parent: %{customdata[5]}<br>"
             "Curve range log₂: %{x:.3f}<br>"
             "-log10(q): %{y:.2f}<br>"
             "log10 EC50: %{customdata[2]:.3g}<br>"
@@ -1867,4 +1976,3 @@ def plot_pelsa_local_stability_profile(
         yaxis=dict(title="Range log₂", range=[y_min, ymax], zeroline=True, zerolinecolor="black"),
     )
     return fig
-

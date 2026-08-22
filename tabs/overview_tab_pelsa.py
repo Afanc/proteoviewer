@@ -71,6 +71,37 @@ def _fmt_tags_list(tags):
         return ", ".join(str(t) for t in tags)
     return str(tags)
 
+
+def _ec50_slider_levels(
+    measured_concentrations,
+    *,
+    values_between: int = 5,
+) -> list[float]:
+    """Add log-spaced EC50 choices between measured positive doses."""
+    if values_between < 0:
+        raise ValueError("values_between must be >= 0.")
+
+    measured = np.asarray(measured_concentrations, dtype=float)
+    measured = np.sort(np.unique(measured[np.isfinite(measured)]))
+    if measured.size < 2 or values_between == 0:
+        return measured.astype(float).tolist()
+
+    levels: list[float] = [float(measured[0])]
+    for lower, upper in zip(measured[:-1], measured[1:]):
+        # Vehicle control is not meaningful on the logarithmic EC50 scale;
+        # retain zero without inventing values between it and the first dose.
+        if lower > 0.0 and upper > lower:
+            levels.extend(
+                np.geomspace(
+                    lower,
+                    upper,
+                    values_between + 2,
+                )[1:-1].astype(float).tolist()
+            )
+        levels.append(float(upper))
+    return levels
+
+
 @log_time("Preparing Overview Tab")
 def overview_tab_pelsa(state: SessionState):
     """
@@ -136,6 +167,50 @@ def overview_tab_pelsa(state: SessionState):
         if " | " in s:
             return s.rsplit(" | ", 1)[1].strip()
         return s
+
+    def _build_pelsa_selection_with_parent_support(
+        *args,
+        **kwargs,
+    ) -> pd.DataFrame:
+        exported = build_pelsa_selection_df(*args, **kwargs)
+        source_column = "PELSA_SIGNIFICANT_PEPTIDES_PER_PARENT"
+        export_column = "SIGNIFICANT_PEPTIDES_PER_PARENT"
+        if export_column in exported.columns:
+            return exported
+        if source_column not in adata.var.columns:
+            # Legacy H5AD: retain the original selection-export schema.
+            return exported
+
+        counts = pd.to_numeric(
+            adata.var[source_column],
+            errors="raise",
+        ).astype(int)
+        counts.index = counts.index.astype(str)
+
+        id_column = next(
+            (
+                column
+                for column in ("PEPTIDE", "PEPTIDE_ID", "peptide_id")
+                if column in exported.columns
+            ),
+            None,
+        )
+        if id_column is not None:
+            exported[export_column] = (
+                exported[id_column].astype(str).map(counts).fillna(0).astype(int)
+            )
+            return exported
+
+        feature_ids = [str(value) for value in kwargs.get("feature_ids", [])]
+        if len(feature_ids) != len(exported):
+            raise ValueError(
+                "Could not align parent significant-peptide counts to the "
+                "PELSA selection export."
+            )
+        exported[export_column] = (
+            counts.reindex(feature_ids).fillna(0).astype(int).to_numpy()
+        )
+        return exported
 
     string_species_sel = make_string_species_select(width=190)
     string_selected_feature_ids: list[str] = []
@@ -491,6 +566,16 @@ def overview_tab_pelsa(state: SessionState):
     )
 
     curve_results = pd.DataFrame(pelsa_uns["curve_results"])
+    parent_support_column = str(
+        pelsa_uns.get(
+            "parent_significant_count_column",
+            "significant_peptides_per_parent",
+        )
+    )
+    has_parent_support = (
+        parent_support_column in curve_results.columns
+        or "PELSA_SIGNIFICANT_PEPTIDES_PER_PARENT" in adata.var.columns
+    )
 
     def _slider_end(col: str, default: float) -> float:
         if col not in curve_results.columns:
@@ -501,7 +586,7 @@ def overview_tab_pelsa(state: SessionState):
             return default
         return max(default, float(vals.quantile(0.99)))
 
-    concentration_levels = sorted(
+    measured_concentration_levels = sorted(
         pd.to_numeric(
             adata.obs[concentration_col],
             errors="raise",
@@ -509,6 +594,10 @@ def overview_tab_pelsa(state: SessionState):
         .dropna()
         .unique()
         .tolist()
+    )
+    concentration_levels = _ec50_slider_levels(
+        measured_concentration_levels,
+        values_between=5,
     )
 
     def _conc_label(value: float) -> str:
@@ -563,6 +652,18 @@ def overview_tab_pelsa(state: SessionState):
     hide_zero_q_sel = pn.widgets.Checkbox(
         name="Hide Flat Curves (qval=1)",
         value=True,
+    )
+    top_peptide_per_parent_sel = pn.widgets.Checkbox(
+        name="Top peptide per protein",
+        value=False,
+        disabled=not has_parent_support,
+    )
+    min_parent_support_sel = pn.widgets.DiscreteSlider(
+        name="Min. sign. peptide / protein",
+        options=[*range(1, 11), 15, 20],
+        value=1,
+        width=160,
+        disabled=not has_parent_support,
     )
 
     search_input_name = "Search Peptide/Gene"
@@ -630,9 +731,15 @@ def overview_tab_pelsa(state: SessionState):
         highlight=pn.bind(_normalize_search_token, search_input),
         highlight_group=group_ids_selected,
         color_by=color_by,
-        sign_threshold=0.05,
+        sign_threshold=float(pelsa_uns.get("sign_threshold", 0.05)),
         hide_zero_neglog10_q=hide_zero_q_sel,
         ec50_range=pn.bind(_ec50_range_from_idx, ec50_range_idx_sel),
+        top_peptide_per_parent=(
+            top_peptide_per_parent_sel if has_parent_support else False
+        ),
+        min_significant_peptides_per_parent=(
+            min_parent_support_sel if has_parent_support else 0
+        ),
         width=None,
         height=900,
     )
@@ -676,7 +783,7 @@ def overview_tab_pelsa(state: SessionState):
             uniprot_var_col="PARENT_PROTEIN",
             id_col_name="PEPTIDE"
         ),
-        selection_df_builder=build_pelsa_selection_df,
+        selection_df_builder=_build_pelsa_selection_with_parent_support,
     )
 
     string_enrichment_holder = pn.Column(
@@ -1159,7 +1266,7 @@ def overview_tab_pelsa(state: SessionState):
         def _adjacent_peptides_csv() -> bytes:
             if not sibling_ids:
                 raise ValueError("No adjacent PELSA peptides to export.")
-            df_export = build_pelsa_selection_df(
+            df_export = _build_pelsa_selection_with_parent_support(
                 state=state,
                 contrast="pelsa_curve_fit",
                 feature_ids=sibling_ids,
@@ -1358,7 +1465,14 @@ def overview_tab_pelsa(state: SessionState):
                 pn.Spacer(height=10),
                 hide_zero_q_sel,
                 margin=(25, 0, 0, 0),
-                width=175,
+                width=220,
+            ),
+            pn.Spacer(width=20),
+            pn.Column(
+                top_peptide_per_parent_sel,
+                min_parent_support_sel,
+                margin=(-10, 0, 0, 0),
+                width=180,
             ),
             pn.Spacer(width=20),
             make_vr(),

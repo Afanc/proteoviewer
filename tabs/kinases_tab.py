@@ -74,6 +74,9 @@ _REQUIRED_DATABASE_SUMMARY_COLUMNS = {
     "new_matched_phosphosites",
     "new_matched_kinases",
 }
+
+_UPSET_MAX_SUBSETS = 25
+
 _ENRICHMENT_CATEGORY_OPTIONS = {
     "KEGG pathways": "KEGG",
     "Reactome pathways": "RCTM",
@@ -86,6 +89,8 @@ _ENRICHMENT_METRIC_OPTIONS = {
 }
 _ENRICHMENT_MAX_TERMS = 12
 _ENRICHMENT_LABEL_WRAP_WIDTH = 44
+_ENRICHMENT_MAX_CONTRASTS = 25
+
 
 # False uses STRING's default whole-species background. Set to True to
 # restrict enrichment to the kinases that were eligible/tested by KSEA.
@@ -1514,11 +1519,10 @@ def _kinase_detail_card(
 def _coordinated_enrichment_figure(
     *,
     contrasts: list[str],
-    data_by_contrast: dict[str, list[dict]],
+    frames: dict[str, pd.DataFrame],
     errors_by_contrast: dict[str, dict[str, str]],
     query_sizes: dict[str, dict[str, int]],
     background_labels: dict[str, str],
-    category: str,
     contrast: str,
     active_contrast: str,
     metric: str,
@@ -1538,14 +1542,6 @@ def _coordinated_enrichment_figure(
     if metric not in metric_columns:
         raise ValueError(f"Unsupported enrichment metric: {metric!r}.")
     metric_column = metric_columns[metric]
-
-    frames: dict[str, pd.DataFrame] = {}
-    for contrast_name in contrasts:
-        frames[contrast_name] = _string_enrichment_frame(
-            data_by_contrast.get(contrast_name, []),
-            category,
-            query_sizes.get(contrast_name, {}),
-        )
 
     active = frames.get(active_contrast, pd.DataFrame())
     if active.empty:
@@ -1785,19 +1781,74 @@ def _maximal_uniform_subsets(
     qualifying_pairs: set[frozenset[str]],
 ) -> list[tuple[str, ...]]:
     """Return inclusion-maximal subsets whose every pair qualifies."""
+    order = {
+        condition: index
+        for index, condition in enumerate(present_conditions)
+    }
+    present = set(present_conditions)
+    neighbours = {
+        condition: set()
+        for condition in present_conditions
+    }
+
+    for pair in qualifying_pairs:
+        members = [
+            condition
+            for condition in pair
+            if condition in present
+        ]
+        if len(members) != 2:
+            continue
+        left, right = members
+        neighbours[left].add(right)
+        neighbours[right].add(left)
+
     maximal: list[tuple[str, ...]] = []
-    for size in range(len(present_conditions), 1, -1):
-        for subset in combinations(present_conditions, size):
-            required_pairs = {
-                frozenset(pair) for pair in combinations(subset, 2)
-            }
-            if not required_pairs.issubset(qualifying_pairs):
-                continue
-            subset_set = set(subset)
-            if any(subset_set.issubset(existing) for existing in maximal):
-                continue
-            maximal.append(subset)
-    return maximal
+
+    def visit(
+        clique: set[str],
+        candidates: set[str],
+        excluded: set[str],
+    ) -> None:
+        if not candidates and not excluded:
+            if len(clique) >= 2:
+                maximal.append(
+                    tuple(sorted(clique, key=order.__getitem__))
+                )
+            return
+
+        pivot_pool = candidates | excluded
+        pivot = max(
+            pivot_pool,
+            key=lambda condition: len(
+                candidates & neighbours[condition]
+            ),
+            default=None,
+        )
+        extensions = candidates - (
+            neighbours[pivot] if pivot is not None else set()
+        )
+
+        for condition in sorted(
+            extensions,
+            key=order.__getitem__,
+        ):
+            visit(
+                clique | {condition},
+                candidates & neighbours[condition],
+                excluded & neighbours[condition],
+            )
+            candidates.remove(condition)
+            excluded.add(condition)
+
+    visit(set(), set(present_conditions), set())
+    return sorted(
+        maximal,
+        key=lambda subset: (
+            -len(subset),
+            tuple(order[condition] for condition in subset),
+        ),
+    )
 
 
 def _kinase_upset_figure(
@@ -1978,7 +2029,7 @@ def _kinase_upset_figure(
                 {"significant": set(), "other": set()},
             )["other"].add(kinase_id)
 
-    ordered_groups = sorted(
+    all_ordered_groups = sorted(
         groups.items(),
         key=lambda item: (
             -len(item[1]["significant"]) - len(item[1]["other"]),
@@ -1986,6 +2037,13 @@ def _kinase_upset_figure(
             tuple(condition_positions[condition] for condition in item[0]),
         ),
     )
+    total_group_count = len(all_ordered_groups)
+    ordered_groups = all_ordered_groups[:_UPSET_MAX_SUBSETS]
+    subset_title = "Kinase condition subsets"
+    if total_group_count > len(ordered_groups):
+        subset_title += (
+            f" — top {len(ordered_groups)} of {total_group_count}"
+        )
     subsets = [subset for subset, _ in ordered_groups]
     significant_counts = [
         len(counts["significant"]) for _, counts in ordered_groups
@@ -2165,7 +2223,7 @@ def _kinase_upset_figure(
 
     figure_height = max(460, 340 + 26 * len(conditions))
     fig.update_layout(
-        title={"text": "Kinase condition subsets", "x": 0.61},
+        title={"text": subset_title, "x": 0.61},
         height=figure_height,
         autosize=True,
         barmode="stack",
@@ -2256,6 +2314,26 @@ def _contrast_options(adata, results: pd.DataFrame) -> list[str]:
     ordered = [contrast for contrast in configured if contrast in available]
     ordered.extend(sorted(available.difference(ordered)))
     return ordered
+
+
+def _enrichment_contrast_page(
+    contrasts: list[str],
+    reference_contrast: str,
+    page_size: int = _ENRICHMENT_MAX_CONTRASTS,
+) -> list[str]:
+    """Return the fixed-size contrast page containing the reference."""
+    if page_size < 1:
+        raise ValueError("Enrichment contrast page size must be >= 1.")
+    if len(contrasts) <= page_size:
+        return list(contrasts)
+
+    try:
+        reference_index = contrasts.index(str(reference_contrast))
+    except ValueError:
+        reference_index = 0
+
+    page_start = (reference_index // page_size) * page_size
+    return list(contrasts[page_start : page_start + page_size])
 
 
 @log_time("Preparing Kinases Tab")
@@ -2634,9 +2712,13 @@ def kinases_tab(state: SessionState):
         ),
         contrasts[0],
     )
-    active_enrichment_contrast = pn.widgets.TextInput(
+    reference_mode = len(contrasts) > _ENRICHMENT_MAX_CONTRASTS
+    active_enrichment_contrast = pn.widgets.Select(
+        name="Reference contrast",
+        options=contrasts,
         value=enrichment_default,
-        visible=False,
+        visible=reference_mode,
+        width=220,
     )
     enrichment_mapping_cache: dict[
         tuple[int, tuple[str, ...]],
@@ -2657,7 +2739,10 @@ def kinases_tab(state: SessionState):
         finally:
             last_string_request["time"] = time.monotonic()
 
-    def _fetch_enrichment(species: int) -> tuple[
+    def _fetch_enrichment(
+        species: int,
+        requested_contrasts: list[str],
+    ) -> tuple[
         dict[str, list[dict]],
         dict[str, dict[str, str]],
         dict[str, dict[str, int]],
@@ -2672,8 +2757,10 @@ def kinases_tab(state: SessionState):
             sorted(
                 {
                     identifier
-                    for identifiers in enrichment_backgrounds.values()
-                    for identifier in identifiers
+                    for contrast in requested_contrasts
+                    for identifier in enrichment_backgrounds.get(
+                        contrast, ()
+                    )
                 },
                 key=str.casefold,
             )
@@ -2691,7 +2778,7 @@ def kinases_tab(state: SessionState):
                 enrichment_mapping_cache[mapping_key] = ({}, str(exc))
 
         mapping, mapping_error = enrichment_mapping_cache[mapping_key]
-        for contrast in contrasts:
+        for contrast in requested_contrasts:
             data_by_contrast[contrast] = []
             errors_by_contrast[contrast] = {}
             query_sizes[contrast] = {}
@@ -2791,13 +2878,29 @@ def kinases_tab(state: SessionState):
                 height=150,
                 sizing_mode="stretch_width",
             )
+        displayed_contrasts = _enrichment_contrast_page(
+            contrasts,
+            str(active_contrast),
+        )
 
         (
             data_by_contrast,
             errors_by_contrast,
             query_sizes,
             background_labels,
-        ) = _fetch_enrichment(int(species))
+        ) = _fetch_enrichment(
+            int(species),
+            displayed_contrasts,
+        )
+
+        frames = {
+            contrast: _string_enrichment_frame(
+                data_by_contrast.get(contrast, []),
+                str(category),
+                query_sizes.get(contrast, {}),
+            )
+            for contrast in displayed_contrasts
+        }
         plot_column_width = 240
         label_margin = 300
         regular_margin = 14
@@ -2806,7 +2909,7 @@ def kinases_tab(state: SessionState):
         )
         first_button_offset = label_margin - regular_margin
         contrast_columns: list[pn.Column] = []
-        for index, contrast in enumerate(contrasts):
+        for index, contrast in enumerate(displayed_contrasts):
             button = pn.widgets.Button(
                 name=contrast.replace("_vs_", "_v_"),
                 button_type=(
@@ -2833,12 +2936,11 @@ def kinases_tab(state: SessionState):
                 sizing_mode="stretch_width",
             )
             figure = _coordinated_enrichment_figure(
-                contrasts=contrasts,
-                data_by_contrast=data_by_contrast,
+                contrasts=displayed_contrasts,
+                frames=frames,
                 errors_by_contrast=errors_by_contrast,
                 query_sizes=query_sizes,
                 background_labels=background_labels,
-                category=str(category),
                 contrast=contrast,
                 active_contrast=str(active_contrast),
                 metric=str(metric),
@@ -2913,9 +3015,11 @@ def kinases_tab(state: SessionState):
         activated kinases (Z > 0) and inhibited kinases (Z < 0), using
         {enrichment_background_explanation} as the enrichment background. All
         identifiers are first mapped to unique STRING IDs; directional queries
-        with fewer than two mapped kinases are not run. The active contrast
+        with fewer than two mapped kinases are not run. The reference contrast
         defines the shared top {_ENRICHMENT_MAX_TERMS} terms, ranked from best
-        to least by the selected X-axis metric.
+        to least by the selected X-axis metric. For more than
+        {_ENRICHMENT_MAX_CONTRASTS} contrasts, only the page containing the
+        selected reference is queried and displayed.
         """,
         margin=0,
         styles={"z-index": "10"},
@@ -3013,6 +3117,11 @@ def kinases_tab(state: SessionState):
         pn.Row(
             pn.Spacer(width=15),
             species_sel,
+            *(
+                [pn.Spacer(width=12), active_enrichment_contrast]
+                if reference_mode
+                else []
+            ),
             pn.Spacer(width=12),
             category_sel,
             pn.Spacer(width=12),
