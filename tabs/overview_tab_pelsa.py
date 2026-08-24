@@ -604,7 +604,8 @@ def overview_tab_pelsa(state: SessionState):
         value = float(value)
         if value == 0:
             return "Control"
-        return f"{value:.2f}".rstrip("0").rstrip(".")
+        decimals = max(2, 1 - int(np.floor(np.log10(abs(value)))))
+        return f"{value:.{decimals}f}".rstrip("0").rstrip(".")
 
     ec50_range_idx_sel = pn.widgets.IntRangeSlider(
         name="",
