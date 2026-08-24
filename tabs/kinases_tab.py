@@ -2584,20 +2584,26 @@ def kinases_tab(state: SessionState):
 
     search_input.param.watch(_on_search_cleared, "value")
 
-    detail = pn.bind(
-        _kinase_detail_card,
-        results=results,
-        contrast=contrast_sel,
-        kinase_token=search_input,
+    detail = pn.panel(
+        pn.bind(
+            _kinase_detail_card,
+            results=results,
+            contrast=contrast_sel,
+            kinase_token=search_input,
+        ),
+        loading_indicator=False,
     )
 
-    substrate_heatmap = pn.bind(
-        _kinase_substrate_heatmap,
-        adata=adata,
-        results=results,
-        substrates=substrates,
-        contrast=contrast_sel,
-        kinase_token=search_input,
+    substrate_heatmap = pn.panel(
+        pn.bind(
+            _kinase_substrate_heatmap,
+            adata=adata,
+            results=results,
+            substrates=substrates,
+            contrast=contrast_sel,
+            kinase_token=search_input,
+        ),
+        loading_indicator=False,
     )
 
     activity_filter = pn.widgets.RadioButtonGroup(
