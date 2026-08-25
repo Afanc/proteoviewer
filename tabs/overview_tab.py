@@ -215,8 +215,13 @@ def overview_tab(state: SessionState):
     if "lc_conmed" in imp_method and "lc_conmed_lod_k" in imputation:
         lc_conmed_lod_k = preproc_cfg.get("imputation").get("lc_conmed_lod_k", "NA")
         lc_conmed_min_obs = preproc_cfg.get("imputation").get("lc_conmed_in_min_obs", "1")
+        lc_conmed_frac_min_obs = preproc_cfg.get("imputation").get("lc_conmed_frac_min_obs")
         extras.append(f"lod_k={lc_conmed_lod_k}")
-        extras.append(f"min_obs={lc_conmed_min_obs}")
+        if lc_conmed_min_obs is None and lc_conmed_frac_min_obs is not None:
+            extras.append(f"frac_min_obs={lc_conmed_frac_min_obs} per condition")
+        else:
+            extras.append(f"min_obs={lc_conmed_min_obs}")
+
     if extras:
         imp_method = f"{imp_method} ({', '.join(extras)})"
 
@@ -338,7 +343,7 @@ def overview_tab(state: SessionState):
     show_imp_cond2 = pn.widgets.Checkbox(name=f"", value=True)
 
     # Color selector
-    color_options = ["Significance"]
+    color_options = ["Significance", "Observations"]
     if "nrsc" in state.adata.varm:
         color_options.append("Norm. rel. SC")
     color_options.append("Avg Intensity")

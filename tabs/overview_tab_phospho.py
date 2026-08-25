@@ -269,8 +269,13 @@ def _build_pipeline_summary(adata) -> str:
     if "lc_conmed" in imp_method and "lc_conmed_lod_k" in imputation:
         lc_conmed_lod_k = preproc.get("imputation").get("lc_conmed_lod_k", "NA")
         lc_conmed_min_obs = preproc.get("imputation").get("lc_conmed_in_min_obs", "1")
+        lc_conmed_frac_min_obs = preproc.get("imputation").get("lc_conmed_frac_min_obs")
         extras.append(f"lod_k={lc_conmed_lod_k}")
-        extras.append(f"min_obs={lc_conmed_min_obs}")
+        if lc_conmed_min_obs is None and lc_conmed_frac_min_obs is not None:
+            extras.append(f"frac_min_obs={lc_conmed_frac_min_obs} per condition")
+        else:
+            extras.append(f"min_obs={lc_conmed_min_obs}")
+
     if extras:
         imp_method = f"{imp_method} ({', '.join(extras)})"
 
@@ -430,7 +435,7 @@ def overview_tab_phospho(state: SessionState):
     show_imp_cond1 = pn.widgets.Checkbox(name="", value=True)
     show_imp_cond2 = pn.widgets.Checkbox(name="", value=True)
 
-    color_options = ["Significance"] + (["Raw LogFC", "Adj. LogFC", "FT LogFC"] if has_cov else [])
+    color_options = ["Significance", "Observations"] + (["Raw LogFC", "Adj. LogFC", "FT LogFC"] if has_cov else [])
     color_by = pn.widgets.Select(name="Color by", options=color_options, value=color_options[0], width=120)
 
     make_toggle_label_updater(

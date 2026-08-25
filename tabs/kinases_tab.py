@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from html import escape
+import io
 from itertools import combinations
 from textwrap import wrap
 import time
@@ -1206,6 +1207,67 @@ def _contrast_sample_indices(adata, contrast: str) -> np.ndarray:
     )
 
 
+def _build_kinase_substrate_export_df(
+    *,
+    kinase_row: pd.Series,
+    contrast: str,
+    site_ids: list[str],
+    site_sources: list[str],
+    site_genes: list[str],
+    site_log2fc: np.ndarray,
+    sample_names: list[str],
+    sample_conditions: np.ndarray,
+    absolute: np.ndarray,
+    centered: np.ndarray,
+) -> pd.DataFrame:
+    """Build the long-form CSV payload behind a substrate heatmap."""
+    n_sites = len(site_ids)
+    n_samples = len(sample_names)
+    expected_shape = (n_sites, n_samples)
+    if absolute.shape != expected_shape or centered.shape != expected_shape:
+        raise ValueError(
+            "Kinase detail export matrices must have shape "
+            f"{expected_shape}; received {absolute.shape} and {centered.shape}."
+        )
+
+    return pd.DataFrame(
+        {
+            "CONTRAST": np.repeat(str(contrast), n_sites * n_samples),
+            "KINASE_ID": np.repeat(
+                _text_value(kinase_row.get("kinase_id", "")),
+                n_sites * n_samples,
+            ),
+            "KINASE": np.repeat(
+                _text_value(kinase_row.get("kinase", "")),
+                n_sites * n_samples,
+            ),
+            "KINASE_GENE": np.repeat(
+                _text_value(kinase_row.get("kinase_gene", "")),
+                n_sites * n_samples,
+            ),
+            "KINASE_UNIPROT": np.repeat(
+                _text_value(kinase_row.get("kinase_uniprot", "")),
+                n_sites * n_samples,
+            ),
+            "KSEA_Z_SCORE": np.repeat(
+                pd.to_numeric(kinase_row.get("activity_score"), errors="coerce"),
+                n_sites * n_samples,
+            ),
+            "PHOSPHOSITE_ID": np.repeat(site_ids, n_samples),
+            "SUBSTRATE_GENE": np.repeat(site_genes, n_samples),
+            "DATABASE_SOURCE": np.repeat(site_sources, n_samples),
+            "CONTRAST_LOG2FC": np.repeat(
+                np.asarray(site_log2fc, dtype=float),
+                n_samples,
+            ),
+            "SAMPLE": np.tile(sample_names, n_sites),
+            "CONDITION": np.tile(sample_conditions, n_sites),
+            "FINAL_INTENSITY": absolute.reshape(-1),
+            "DEVIATION_FROM_SITE_MEAN": centered.reshape(-1),
+        }
+    )
+
+
 def _kinase_substrate_heatmap(
     adata,
     results: pd.DataFrame,
@@ -1308,6 +1370,19 @@ def _kinase_substrate_heatmap(
     sample_conditions = _text_series(
         adata.obs.iloc[sample_indices]["CONDITION"]
     ).to_numpy(dtype=object)
+
+    export_frame = _build_kinase_substrate_export_df(
+        kinase_row=row,
+        contrast=contrast,
+        site_ids=site_ids,
+        site_sources=site_sources,
+        site_genes=site_genes,
+        site_log2fc=site_log2fc,
+        sample_names=sample_names,
+        sample_conditions=sample_conditions,
+        absolute=absolute,
+        centered=centered,
+    )
     finite = np.abs(centered[np.isfinite(centered)])
     color_limit = float(np.max(finite)) if finite.size else 1.0
     if color_limit <= 0.0:
@@ -1366,11 +1441,27 @@ def _kinase_substrate_heatmap(
         yaxis={"title": "Phosphosites", "autorange": "reversed", "showticklabels":False},
     )
 
+    download_detail = pn.widgets.FileDownload(
+        callback=lambda: io.BytesIO(
+            export_frame.to_csv(index=False).encode("utf-8")
+        ),
+        filename=(
+            "proteoflux_"
+            + "".join(c if c.isalnum() or c in "-_" else "_" for c in kinase)
+            + "_detail.csv"
+        ),
+        label="Download heatmap data",
+        button_type="success",
+        width=190,
+    )
     header=pn.Row(
         pn.pane.Markdown(
             "**Contributing Phosphosites**",
             styles={"font-size": "16px", "padding": "0", "line-height": "0px"},
-        )
+        ),
+        pn.Spacer(sizing_mode="stretch_width"),
+        download_detail,
+        sizing_mode="stretch_width",
     )
     return pn.Card(
         header,
@@ -2361,6 +2452,9 @@ def kinases_tab(state: SessionState):
     )
     method = _text_value(activity_payload.get("method", "ksea"), "ksea").upper()
     min_substrates = activity_payload.get("min_substrates", "n/a")
+    control_condition = _text_value(
+        activity_payload.get("control_condition", "")
+    )
     database_metadata = activity_payload.get("database", {}) or {}
     database_filename = (
         _text_value(database_metadata.get("filename"), "Not recorded")
@@ -2430,9 +2524,16 @@ def kinases_tab(state: SessionState):
         if _ENRICHMENT_USE_TESTED_BACKGROUND
         else "STRING species proteome"
     )
+    control_summary = (
+        f"**Contrasts:** versus control `{control_condition}` only "
+        "(original directions retained)\n\n"
+        if control_condition
+        else ""
+    )
     summary_md = (
         f"{len(conditions)} Conditions - {len(contrasts)} Contrasts\n\n"
         f"**Method:** {method} (minimum {min_substrates} substrates)\n\n"
+        f"{control_summary}"
         f"{database_summary_md}"
         f"**Total:** {relationship_summary}\n\n"
         f"**Background:** {enrichment_background_label}\n\n"

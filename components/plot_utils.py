@@ -1481,11 +1481,17 @@ def plot_volcanoes(
 
     sig_up   = (df_q[contrast] < sign_threshold) & (x > 0)
     sig_down = (df_q[contrast] < sign_threshold) & (x < 0)
+    observation_counts = n1 + n2
+    max_observations = rep1 + rep2
 
     colorscale = None
     colorbar   = None
     if color_by == "Significance":
         color_vals = np.where(sig_up, "red", np.where(sig_down, "blue", "gray"))
+    elif color_by == "Observations":
+        color_vals = observation_counts
+        colorscale = "thermal_r"
+        colorbar = dict(title=f"Observed samples / {max_observations}", len=0.5)
     elif color_by == "Avg Intensity":
         expr_layer = adata.X
         mat = expr_layer.toarray() if hasattr(expr_layer, "toarray") else expr_layer
@@ -1562,6 +1568,8 @@ def plot_volcanoes(
         v = v[np.isfinite(v)]
         if v.size == 0:
             vmin, vmax, cmid = 0.0, 1.0, None
+        elif color_by == "Observations":
+            vmin, vmax, cmid = 0.0, float(max_observations), None
         elif ("LogFC" in color_by) or (color_by == "Norm. rel. SC"):
             vmax = float(np.nanmax(np.abs(v)))
             vmin, vmax, cmid = -vmax, vmax, 0.0
@@ -1579,6 +1587,12 @@ def plot_volcanoes(
             coloraxis_showscale=True,
         )
 
+    hover_data = np.empty((len(feature_ids), 4), dtype=object)
+    hover_data[:, 0] = feature_ids
+    hover_data[:, 1] = genes
+    hover_data[:, 2] = observation_counts
+    hover_data[:, 3] = max_observations
+
     def add_group_trace(mask, name, symbol):
         # NOTE: keep 'text' = gene for click -> search to stay identical
         trace_kwargs = dict(
@@ -1593,10 +1607,11 @@ def plot_volcanoes(
             ),
             name=name,
             text=primary_ids[mask],
-            customdata=np.c_[feature_ids[mask], genes[mask]],
+            customdata=hover_data[mask],
             hovertemplate=(
                 "ID: %{customdata[0]}<br>"
                 "Gene: %{customdata[1]}<br>"
+                "Observations: %{customdata[2]:.0f} / %{customdata[3]:.0f}<br>"
                 "log2FC: %{x:.2f}<br>"
                 "-log10(q): %{y:.2f}<extra></extra>"
             ),
