@@ -268,7 +268,7 @@ def _build_pipeline_summary(adata) -> str:
         extras.append(f"rf_max_iter={imputation['rf_max_iter']}")
     if "lc_conmed" in imp_method and "lc_conmed_lod_k" in imputation:
         lc_conmed_lod_k = preproc.get("imputation").get("lc_conmed_lod_k", "NA")
-        lc_conmed_min_obs = preproc.get("imputation").get("lc_conmed_in_min_obs", "1")
+        lc_conmed_min_obs = preproc.get("imputation").get("lc_conmed_in_min_obs")
         lc_conmed_frac_min_obs = preproc.get("imputation").get("lc_conmed_frac_min_obs")
         extras.append(f"lod_k={lc_conmed_lod_k}")
         if lc_conmed_min_obs is None and lc_conmed_frac_min_obs is not None:
