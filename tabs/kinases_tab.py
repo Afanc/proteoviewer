@@ -2452,9 +2452,6 @@ def kinases_tab(state: SessionState):
     )
     method = _text_value(activity_payload.get("method", "ksea"), "ksea").upper()
     min_substrates = activity_payload.get("min_substrates", "n/a")
-    control_condition = _text_value(
-        activity_payload.get("control_condition", "")
-    )
     database_metadata = activity_payload.get("database", {}) or {}
     database_filename = (
         _text_value(database_metadata.get("filename"), "Not recorded")
@@ -2524,16 +2521,9 @@ def kinases_tab(state: SessionState):
         if _ENRICHMENT_USE_TESTED_BACKGROUND
         else "STRING species proteome"
     )
-    control_summary = (
-        f"**Contrasts:** versus control `{control_condition}` only "
-        "(original directions retained)\n\n"
-        if control_condition
-        else ""
-    )
     summary_md = (
         f"{len(conditions)} Conditions - {len(contrasts)} Contrasts\n\n"
         f"**Method:** {method} (minimum {min_substrates} substrates)\n\n"
-        f"{control_summary}"
         f"{database_summary_md}"
         f"**Total:** {relationship_summary}\n\n"
         f"**Background:** {enrichment_background_label}\n\n"
