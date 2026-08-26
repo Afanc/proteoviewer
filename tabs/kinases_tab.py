@@ -1870,14 +1870,20 @@ def _coordinated_enrichment_figure(
 def _maximal_uniform_subsets(
     present_conditions: tuple[str, ...],
     qualifying_pairs: set[frozenset[str]],
+    analyzed_pairs: set[frozenset[str]],
 ) -> list[tuple[str, ...]]:
-    """Return inclusion-maximal subsets whose every pair qualifies."""
+    """Return maximal subsets connected by qualifying contrasts.
+
+    An analyzed, non-qualifying pair breaks a subset. Pairs that were not
+    analyzed are neutral, allowing reference-centered contrasts to form a
+    higher-order condition subset.
+    """
     order = {
         condition: index
         for index, condition in enumerate(present_conditions)
     }
     present = set(present_conditions)
-    neighbours = {
+    qualifying_neighbours = {
         condition: set()
         for condition in present_conditions
     }
@@ -1891,8 +1897,18 @@ def _maximal_uniform_subsets(
         if len(members) != 2:
             continue
         left, right = members
-        neighbours[left].add(right)
-        neighbours[right].add(left)
+        qualifying_neighbours[left].add(right)
+        qualifying_neighbours[right].add(left)
+
+    neighbours = {
+        condition: set()
+        for condition in present_conditions
+    }
+    for left, right in combinations(present_conditions, 2):
+        pair = frozenset((left, right))
+        if pair in qualifying_pairs or pair not in analyzed_pairs:
+            neighbours[left].add(right)
+            neighbours[right].add(left)
 
     maximal: list[tuple[str, ...]] = []
 
@@ -1933,8 +1949,40 @@ def _maximal_uniform_subsets(
             excluded.add(condition)
 
     visit(set(), set(present_conditions), set())
+
+    # Neutral pairs may join unrelated partial designs inside a compatibility
+    # clique. Split those groups again using actual qualifying contrasts.
+    connected: set[frozenset[str]] = set()
+    for clique in maximal:
+        remaining = set(clique)
+        while remaining:
+            component: set[str] = set()
+            pending = {min(remaining, key=order.__getitem__)}
+            while pending:
+                condition = pending.pop()
+                if condition in component:
+                    continue
+                component.add(condition)
+                pending.update(
+                    qualifying_neighbours[condition]
+                    & set(clique)
+                    - component
+                )
+            remaining.difference_update(component)
+            if len(component) >= 2:
+                connected.add(frozenset(component))
+
+    maximal_connected = [
+        subset
+        for subset in connected
+        if not any(subset < other for other in connected)
+    ]
+    ordered = [
+        tuple(sorted(subset, key=order.__getitem__))
+        for subset in maximal_connected
+    ]
     return sorted(
-        maximal,
+        ordered,
         key=lambda subset: (
             -len(subset),
             tuple(order[condition] for condition in subset),
@@ -2062,6 +2110,7 @@ def _kinase_upset_figure(
             contrast_pairs[str(contrast)] = frozenset(
                 (condition_a, condition_b)
             )
+    analyzed_pairs = set(contrast_pairs.values())
 
     tested_pairs_by_kinase: dict[str, set[frozenset[str]]] = {}
     significant_pairs_by_kinase: dict[str, set[frozenset[str]]] = {}
@@ -2093,10 +2142,12 @@ def _kinase_upset_figure(
         significant_subsets = _maximal_uniform_subsets(
             present,
             significant_pairs,
+            analyzed_pairs,
         )
         nonsignificant_subsets = _maximal_uniform_subsets(
             present,
             nonsignificant_pairs,
+            analyzed_pairs,
         )
 
         for subset in significant_subsets:
@@ -2110,15 +2161,15 @@ def _kinase_upset_figure(
                 {"significant": set(), "other": set()},
             )["other"].add(kinase_id)
 
-        if (
-            len(present) >= 2
-            and not significant_subsets
-            and not nonsignificant_subsets
-        ):
-            groups.setdefault(
-                present,
-                {"significant": set(), "other": set()},
-            )["other"].add(kinase_id)
+        #if (
+        #    len(present) >= 2
+        #    and not significant_subsets
+        #    and not nonsignificant_subsets
+        #):
+        #    groups.setdefault(
+        #        present,
+        #        {"significant": set(), "other": set()},
+        #    )["other"].add(kinase_id)
 
     all_ordered_groups = sorted(
         groups.items(),
