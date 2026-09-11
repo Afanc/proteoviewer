@@ -951,6 +951,173 @@ def plot_ma(
     return fig_before, fig_after
 
 
+@log_time("Plotting normalization offsets")
+def plot_normalization_offsets(
+    adata: AnnData,
+    layer: str = "lognorm",
+) -> go.Figure:
+    """Compare median-normalization offsets from all observed vs complete features.
+
+    Offsets are centred across samples and expressed on the log2 scale. A
+    positive value is the amount that would be subtracted from that sample.
+    """
+    if layer not in adata.layers:
+        return _placeholder_plot(
+            "Median normalization offsets",
+            subtitle=f"Missing pre-normalization layer: {layer}",
+        )
+
+    matrix = adata.layers[layer]
+    if hasattr(matrix, "toarray"):
+        matrix = matrix.toarray()
+    matrix = np.asarray(matrix, dtype=float)
+    if matrix.ndim != 2 or matrix.shape[0] != adata.n_obs:
+        return _placeholder_plot(
+            "Median normalization offsets",
+            subtitle="Invalid pre-normalization intensity matrix",
+        )
+
+    finite_mask = np.isfinite(matrix)
+    matrix = np.where(finite_mask, matrix, np.nan)
+    intersection_mask = np.all(finite_mask, axis=0)
+    n_intersection = int(intersection_mask.sum())
+    if n_intersection == 0:
+        return _placeholder_plot(
+            "Median normalization offsets",
+            subtitle="No feature is observed in every sample",
+        )
+
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            message="All-NaN slice encountered",
+            category=RuntimeWarning,
+        )
+        full_medians = np.nanmedian(matrix, axis=1)
+        intersection_medians = np.nanmedian(matrix[:, intersection_mask], axis=1)
+
+    if not np.isfinite(full_medians).any() or not np.isfinite(intersection_medians).any():
+        return _placeholder_plot(
+            "Median normalization offsets",
+            subtitle="No finite sample medians could be calculated",
+        )
+
+    # The absolute target is arbitrary for between-sample normalization; centre
+    # both estimates so the plot compares their relative sample corrections.
+    full_offsets = full_medians - np.nanmedian(full_medians)
+    intersection_offsets = (
+        intersection_medians - np.nanmedian(intersection_medians)
+    )
+    difference = full_offsets - intersection_offsets
+
+    samples = [str(s) for s in adata.obs_names]
+    conditions = (
+        adata.obs["CONDITION"].astype(str).reindex(adata.obs_names).to_numpy()
+    )
+    customdata = conditions.reshape(-1, 1)
+
+    fig = make_subplots(
+        rows=2,
+        cols=1,
+        shared_xaxes=True,
+        vertical_spacing=0.10,
+        row_heights=[0.68, 0.32],
+    )
+    for values, name, color in (
+        (full_offsets, "All observed features", "#1f77b4"),
+        (intersection_offsets, "Complete-feature intersection", "#e45756"),
+    ):
+        fig.add_trace(
+            go.Scatter(
+                x=samples,
+                y=values,
+                mode="lines+markers",
+                name=name,
+                line=dict(color=color, width=2),
+                marker=dict(color=color, size=7),
+                customdata=customdata,
+                hovertemplate=(
+                    "Sample: %{x}<br>"
+                    "Condition: %{customdata[0]}<br>"
+                    "Offset subtracted: %{y:.3f}<extra>" + name + "</extra>"
+                ),
+            ),
+            row=1,
+            col=1,
+        )
+
+    delta_colors = np.where(difference >= 0, "#636EFA", "#EF553B")
+    fig.add_trace(
+        go.Bar(
+            x=samples,
+            y=difference,
+            name="Difference",
+            marker_color=delta_colors,
+            customdata=customdata,
+            hovertemplate=(
+                "Sample: %{x}<br>"
+                "Condition: %{customdata[0]}<br>"
+                "All − intersection: %{y:.3f}<extra></extra>"
+            ),
+            showlegend=False,
+        ),
+        row=2,
+        col=1,
+    )
+
+    fig.add_hline(y=0, line=dict(color="gray", dash="dot", width=1), row=1, col=1)
+    fig.add_hline(y=0, line=dict(color="gray", dash="dot", width=1), row=2, col=1)
+
+    levels = sorted(pd.unique(conditions).tolist())
+    cmap = get_color_map(levels, palette=None, anchor=None)
+    ticktext = [
+        f"<span style='color:{cmap[c]}'>{_abbr(s)}</span>"
+        for s, c in zip(samples, conditions)
+    ]
+    fig.update_xaxes(
+        tickmode="array",
+        tickvals=samples,
+        ticktext=ticktext,
+        tickangle=30,
+        row=2,
+        col=1,
+    )
+    fig.update_yaxes(title_text="Offset (log₂)", row=1, col=1)
+    fig.update_yaxes(title_text="All − intersection", row=2, col=1)
+    fig.update_xaxes(showline=True, linecolor="black", mirror=True)
+    fig.update_yaxes(showline=True, linecolor="black", mirror=True)
+
+    frac = n_intersection / max(int(adata.n_vars), 1)
+    fig.update_layout(
+        title=dict(
+            text=(
+                "Median normalization offsets"
+                f"<br><sub>Complete features: {n_intersection:,}/{adata.n_vars:,} "
+                f"({frac:.1%}); positive offsets are subtracted</sub>"
+            ),
+            x=0.5,
+        ),
+        template="plotly_white",
+        width=1200,
+        height=520,
+        hovermode="closest",
+        hoverlabel=dict(
+            bgcolor="white",
+            bordercolor="#666666",
+            font=dict(color="black"),
+        ),
+        legend=dict(
+            orientation="h",
+            x=0.0,
+            xanchor="left",
+            y=1.03,
+            yanchor="bottom",
+        ),
+        margin=dict(t=115, b=100),
+    )
+    return fig
+
+
 @log_time("Plotting violins rmad by condition")
 def plot_rmad_by_condition(adata: AnnData) -> go.Figure:
     """
@@ -1026,7 +1193,7 @@ def plot_mv_barplots(adata: AnnData):
     order = sample_names
     conds_arr = np.asarray(conds)
 
-    # use your stable palette mapping
+    # use palette mapping
     levels_sorted = sorted(set(conds_arr.astype(str)))
     for cond in levels_sorted:
         m = (conds_arr == cond)
@@ -1114,6 +1281,35 @@ def plot_mv_heatmaps(adata:AnnData):
     fig_corr.update_layout(margin=dict(pad=0))
 
     return (fig_binary, fig_corr)
+
+
+@log_time("Plotting Missing Values Reference Intensity Heatmap")
+def plot_mv_reference_intensity_heatmap(adata: AnnData) -> go.Figure:
+    """Show missing cells coloured by the feature intensity observed elsewhere."""
+    try:
+        return plot_binary_cluster_heatmap_plotly(
+            adata=adata,
+            cond_key="CONDITION",
+            layer="normalized",
+            intensity_layer="lognorm",
+            mode="reference_intensity",
+            title=(
+                "Missing Values by Reference Intensity"
+                "<br><sub>Colored cells are missing; color is the feature median "
+                "where observed; rows run from low to high mean intensity</sub>"
+            ),
+            width=900,
+            height=900,
+        )
+    except Exception as exc:
+        logger.warning(
+            "Missing-values reference-intensity heatmap unavailable (%s).",
+            exc,
+        )
+        return _placeholder_plot(
+            "Missing Values by Reference Intensity",
+            subtitle=str(exc),
+        )
 
 @log_time("Plotting Imputation Distribution by Condition")
 def plot_grouped_violin_imputation_by_condition(
@@ -1230,7 +1426,7 @@ def plot_grouped_violin_imputation_by_sample(
     imp_vals    = norm_flat[ mask_flat]
     imp_samps   = sample_flat[ mask_flat]
 
-    # 4) assemble the **same** long‐form DataFrame your loop makes :contentReference[oaicite:0]{index=0}
+    # 4) assemble the same long‐form DataFrame
     df = pd.DataFrame({
         'Sample'       : np.concatenate([meas_samps, imp_samps]),
         'Normalization': ['Measured'] * len(meas_vals) + ['Imputed'] * len(imp_vals),
@@ -1679,4 +1875,3 @@ def plot_grouped_violin_before_after_imputation_metrics_by_condition(
     fig_cv   = _one('CV')
     fig_rmad = _one('rMAD')
     return fig_cv, fig_rmad
-

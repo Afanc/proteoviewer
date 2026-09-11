@@ -2,7 +2,7 @@
 
 block_cipher = None
 
-VERSION = "1.10.2"
+VERSION = "1.10.3"
 
 from PyInstaller.utils.hooks import copy_metadata
 from glob import glob

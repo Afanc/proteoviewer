@@ -1181,24 +1181,95 @@ def plot_binary_cluster_heatmap_plotly(
     title: str = "Clustered Missing Values Heatmap",
     width: int = 800,
     height: int = 500,
+    mode: str = "pattern",
+    intensity_layer: str = "lognorm",
 ) -> go.Figure:
     """
-    Interactive Plotly heatmap of binary missingness, reordered by
-    precomputed sample/feature linkages in adata.uns, with a color strip
-    and legend for conditions.
+    Interactive Plotly missing-values heatmap.
+
+    ``mode='pattern'`` shows ordinary binary missingness and uses the
+    precomputed missingness clustering. With
+    ``mode='reference_intensity'``, only missing cells are coloured and their
+    value is the feature's median pre-normalization intensity across samples
+    where it was observed. In that mode, features are ordered from lowest to
+    highest mean observed intensity and samples retain their input order;
+    observed cells remain grey.
     """
 
-    # 1) build missingness DataFrame (features × samples)
-    missing = np.isnan(adata.layers[layer]).astype(int)  # samples × features
+    if mode not in {"pattern", "reference_intensity"}:
+        raise ValueError(
+            "Missing-values heatmap mode must be 'pattern' or "
+            f"'reference_intensity', got {mode!r}."
+        )
+
+    # 1) build display matrix (features × samples)
+    missing_source = adata.layers[layer]
+    if hasattr(missing_source, "toarray"):
+        missing_source = missing_source.toarray()
+    missing = np.isnan(np.asarray(missing_source))  # samples × features
+
+    if mode == "pattern":
+        values = missing.astype(np.uint8, copy=False)
+    else:
+        if intensity_layer not in adata.layers:
+            raise ValueError(
+                "Cannot plot missing-value reference intensities: missing "
+                f"layer {intensity_layer!r}."
+            )
+        intensity = adata.layers[intensity_layer]
+        if hasattr(intensity, "toarray"):
+            intensity = intensity.toarray()
+        intensity = np.asarray(intensity, dtype=float)
+        if intensity.shape != missing.shape:
+            raise ValueError(
+                "Missingness and intensity layers have different shapes: "
+                f"{missing.shape} vs {intensity.shape}."
+            )
+        intensity = np.where(np.isfinite(intensity), intensity, np.nan)
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore",
+                message="All-NaN slice encountered",
+                category=RuntimeWarning,
+            )
+            warnings.filterwarnings(
+                "ignore",
+                message="Mean of empty slice",
+                category=RuntimeWarning,
+            )
+            reference = np.nanmedian(intensity, axis=0)
+            feature_mean = np.nanmean(intensity, axis=0)
+        # Transparent/grey for observed cells; a missing cell is coloured by
+        # the abundance of that feature wherever it was actually measured.
+        values = np.where(missing, reference[None, :], np.nan)
+
     df = pd.DataFrame(
-        missing.T,                                      # features × samples
+        values.T,
         index=adata.var_names,
-        columns=adata.obs_names
+        columns=adata.obs_names,
     )
 
-    # 2) reorder according to .uns
-    feat_order   = adata.uns['missing_feature_order']
-    sample_order = adata.uns['missing_sample_order']
+    # 2) Binary mode uses the missingness clustering. For the reference-
+    # intensity diagnostic, retain the already selected feature subset but
+    # replace the cluster order with a stable low-to-high abundance order.
+    if mode == "pattern":
+        feat_order = list(adata.uns['missing_feature_order'])
+        sample_order = list(adata.uns['missing_sample_order'])
+    else:
+        selected_features = list(adata.uns['missing_feature_order'])
+        mean_by_feature = pd.Series(feature_mean, index=adata.var_names)
+        feat_order = (
+            mean_by_feature
+            .reindex(selected_features)
+            .sort_values(
+                ascending=True,
+                kind="mergesort",
+                na_position="last",
+            )
+            .index
+            .tolist()
+        )
+        sample_order = list(adata.obs_names)
     df = df.reindex(index=feat_order, columns=sample_order)
 
     # 3) make a condition→color mapping & color-strip
@@ -1208,17 +1279,64 @@ def plot_binary_cluster_heatmap_plotly(
     x_colors  = [cmap_cond[c] for c in cond_ser]
 
     # 4) draw the heatmap
-    fig = px.imshow(
-        df,
-        color_continuous_scale=[[0, '#f0f0f0'], [1, '#e34a33']],
-        zmin=0, zmax=1,
-        aspect="auto",
-        labels=dict(x="", y="", color="Missing"),
-        width=width, height=height,
-    )
+    if mode == "pattern":
+        fig = px.imshow(
+            df,
+            color_continuous_scale=[[0, '#f0f0f0'], [1, '#e34a33']],
+            zmin=0,
+            zmax=1,
+            aspect="auto",
+            labels=dict(x="", y="", color="Missing"),
+            width=width,
+            height=height,
+        )
+        fig.update_traces(showscale=False, hoverongaps=False)
+        fig.update_layout(coloraxis_showscale=False)
+    else:
+        finite = df.to_numpy(dtype=float)
+        finite = finite[np.isfinite(finite)]
+        if finite.size:
+            zmin, zmax = np.nanpercentile(finite, [2.0, 98.0])
+            if not np.isfinite(zmin) or not np.isfinite(zmax):
+                zmin, zmax = float(np.nanmin(finite)), float(np.nanmax(finite))
+            if zmin == zmax:
+                zmin -= 0.5
+                zmax += 0.5
+        else:
+            zmin, zmax = 0.0, 1.0
 
-    fig.update_traces(showscale=False)
-    fig.update_layout(coloraxis_showscale=False)
+        fig = px.imshow(
+            df,
+            color_continuous_scale="Turbo",
+            zmin=float(zmin),
+            zmax=float(zmax),
+            aspect="auto",
+            labels=dict(x="", y="", color="Median log₂ intensity"),
+            width=width,
+            height=height,
+        )
+        fig.update_traces(
+            hoverongaps=False,
+            hovertemplate=(
+                "Feature: %{y}<br>"
+                "Missing in: %{x}<br>"
+                "Median observed log₂ intensity: %{z:.2f}<extra></extra>"
+            ),
+        )
+        fig.update_layout(
+            plot_bgcolor="#f0f0f0",
+            coloraxis_colorbar=dict(
+                title="Median observed<br>log₂ intensity",
+                len=0.68,
+                y=0.62,
+            ),
+            legend=dict(
+                x=1.02,
+                xanchor="left",
+                y=0.08,
+                yanchor="bottom",
+            ),
+        )
 
     # 5) inject colored tick labels on x-axis
     short = [_abbr(s) for s in sample_order]
@@ -1243,9 +1361,13 @@ def plot_binary_cluster_heatmap_plotly(
     )
     fig.update_yaxes(showticklabels=False, showgrid=False)
 
-    # 7) add binary legend (Present vs Missing)
-    # Present = 0 = grey, Missing = 1 = red
-    for label, color in [("Present", "#f0f0f0"), ("Missing", "#e34a33")]:
+    # 7) add a compact categorical key beside the continuous scale/heatmap.
+    legend_items = (
+        [("Present", "#f0f0f0"), ("Missing", "#e34a33")]
+        if mode == "pattern"
+        else [("Observed", "#f0f0f0")]
+    )
+    for label, color in legend_items:
         fig.add_trace(go.Scatter(
             x=[None], y=[None],
             mode="markers",
@@ -1258,7 +1380,7 @@ def plot_binary_cluster_heatmap_plotly(
     # 8) finalize layout
     fig.update_layout(
         title=dict(text=title, x=0.5),
-        margin=dict(l=50, r=200, t=50, b=100),
+        margin=dict(l=50, r=200, t=80 if mode == "reference_intensity" else 50, b=100),
         xaxis_showgrid=False,
         yaxis_showgrid=False,
         hovermode="closest",

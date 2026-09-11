@@ -8,11 +8,13 @@ from components.preprocessing_plots import (
     plot_violin_intensity_by_condition,
     plot_violin_intensity_by_sample,
     plot_line_density_by_sample,
+    plot_normalization_offsets,
     plot_cv_by_condition,
     plot_rmad_by_condition,
     plot_ma,
     plot_mv_barplots,
     plot_mv_heatmaps,
+    plot_mv_reference_intensity_heatmap,
     plot_grouped_violin_imputation_by_condition,
     plot_grouped_violin_imputation_by_sample,
     plot_grouped_violin_imputation_metrics_by_condition,
@@ -371,16 +373,33 @@ def preprocessing_tab(state: SessionState):
         }
     )
 
+    normalization_offsets_pane = plotly_section(
+        plot_normalization_offsets(adata),
+        height=530,
+        flex="1",
+        margin=(0, 10, 0, -80),
+    )
+    normalization_offsets_row = make_row(
+        pn.pane.Markdown(
+            "##   Normalization offsets",
+            styles={"flex": "0.05", "z-index": "10"},
+        ),
+        normalization_offsets_pane,
+        height=550,
+        width="92vw",
+    )
+
     # Final Normalization pane
     norm_content = pn.Column(
         norm_violins_pane, pn.Spacer(height=30),
         norm_metrics_pane, pn.Spacer(height=30),
-        ma_pane,
+        ma_pane, pn.Spacer(height=30),
+        normalization_offsets_row,
     )
     normalization_pane = make_section(
         header="Normalization",
         row = norm_content,
-        height=1740,
+        height=2320,
         width='95vw',
         background= '#FFE0B2',
     )
@@ -401,6 +420,33 @@ def preprocessing_tab(state: SessionState):
     # Placeholders that will get the real panes inserted later (keeps look/size)
     mv_corr_holder   = pn.Column(height=600, sizing_mode="stretch_width", styles={"flex": "0.6"})
     mv_binary_holder = pn.Column(height=600, sizing_mode="stretch_width", styles={"flex": "1"})
+    mv_heatmap_toggle = pn.widgets.RadioButtonGroup(
+        name="",
+        options=["Pattern", "Reference intensity"],
+        value="Pattern",
+        button_type="default",
+        width=260,
+        styles={"z-index": "10"},
+    )
+    mv_heatmap_figures = {}
+
+    def show_mv_heatmap(mode: str):
+        fig = mv_heatmap_figures.get(mode)
+        if fig is None:
+            mv_binary_holder.loading = True
+            return
+        mv_binary_holder[:] = [plotly_section(
+            fig,
+            height=600,
+            flex="1",
+            margin=(0, 0, 0, 0),
+        )]
+        mv_binary_holder.loading = False
+
+    mv_heatmap_toggle.param.watch(
+        lambda event: show_mv_heatmap(event.new),
+        "value",
+    )
 
     # One-shot builder
     heatmaps_built = False
@@ -414,8 +460,10 @@ def preprocessing_tab(state: SessionState):
         mv_binary_holder.loading = True
 
         def compute():
-            # Compute both; binary is the heavy one. We insert both afterwards.
+            # Build the figures off the UI thread. Only the selected missingness
+            # view is mounted in the browser.
             binary_heatmap_fig, corr_heatmap_fig = plot_mv_heatmaps(adata)
+            reference_heatmap_fig = plot_mv_reference_intensity_heatmap(adata)
 
             def finish():
                 nonlocal heatmaps_built
@@ -425,12 +473,10 @@ def preprocessing_tab(state: SessionState):
                                                     flex="0.5",
                                                     margin=(0,-50,0,-50),
                                                     )]
-                mv_binary_holder[:] = [plotly_section(binary_heatmap_fig,
-                                                      height=600,
-                                                      flex="1",
-                                                      margin=(0,0,0,0))]
+                mv_heatmap_figures["Pattern"] = binary_heatmap_fig
+                mv_heatmap_figures["Reference intensity"] = reference_heatmap_fig
+                show_mv_heatmap(mv_heatmap_toggle.value)
                 mv_corr_holder.loading = False
-                mv_binary_holder.loading = False
                 heatmaps_built = True
 
             bokeh_doc.add_next_tick_callback(finish)
@@ -455,17 +501,27 @@ def preprocessing_tab(state: SessionState):
             ),
             make_hr(),
             pn.Spacer(width=20),
-            pn.Row(
-                mv_corr_holder,
-                pn.Spacer(width=10),
-                make_vr(),
-                mv_binary_holder,
-                height=530,
-                margin=(0, 0, 0, 0),
+            pn.Column(
+                pn.Row(
+                    pn.Spacer(sizing_mode="stretch_width"),
+                    mv_heatmap_toggle,
+                    sizing_mode="stretch_width",
+                    margin=(0, 20, 0, 0),
+                ),
+                pn.Row(
+                    mv_corr_holder,
+                    pn.Spacer(width=10),
+                    make_vr(),
+                    mv_binary_holder,
+                    height=600,
+                    margin=(0, 0, 0, 0),
+                ),
+                height=650,
+                sizing_mode="stretch_width",
             ),
             height=1260,
         ),
-        height=1160,
+        height=1280,
         width="92vw",
     )
 
@@ -533,7 +589,7 @@ def preprocessing_tab(state: SessionState):
         ),
         background="#FFCC80",
         width="95vw",
-        height=2380,
+        height=2500,
     )
 
     # final protein pane
@@ -549,7 +605,7 @@ def preprocessing_tab(state: SessionState):
         ),
         background="#FFF8F0",
         width="98vw",
-        height=4780,
+        height=5500,
     )
 
     return pn.Column(
