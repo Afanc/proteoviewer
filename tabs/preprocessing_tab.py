@@ -20,6 +20,7 @@ from components.preprocessing_plots import (
     plot_grouped_violin_imputation_metrics_by_condition,
     plot_grouped_violin_before_after_imputation_metrics_by_condition,
     plot_left_censoring_histogram,
+    plot_localization_score_histogram,
     plot_prec_pep_distributions,
     _placeholder_plot,
 )
@@ -52,9 +53,8 @@ def preprocessing_tab(state: SessionState):
         p_fig = hists.get('pep')
         prec_fig = hists.get('precursors')
     except Exception as e:
-        # Make it crystal clear in logs but keep the UI alive
         logger.warning(f"plot_filter_histograms failed ({e}); showing placeholders.")
-        q_fig = p_fig = r_fig = None
+        q_fig = p_fig = prec_fig = None
 
     # Graceful placeholders if any figure is missing
     q = plotly_section(q_fig if q_fig is not None else _placeholder_plot("q-value filtering"),
@@ -81,17 +81,43 @@ def preprocessing_tab(state: SessionState):
         width='95vw',
     )
 
+    analysis_type = str(
+        adata.uns.get("preprocessing", {}).get("analysis_type", "")
+    ).lower()
+    precursor_rows = [
+        filtering_row,
+        pn.Spacer(height=20),
+        censor_row,
+    ]
+    precursor_height = 940
+    if analysis_type == "phospho":
+        localization_fig = plotly_section(
+            plot_localization_score_histogram(adata),
+            height=400,
+            flex="1",
+            margin=(10, 10, 0, -150),
+        )
+        localization_row = make_row(
+            pn.pane.Markdown(
+                "##   Localization filtering",
+                styles={"flex": "0.07", "z-index": "10"},
+            ),
+            localization_fig,
+            height=420,
+            width="95vw",
+        )
+        precursor_rows.extend([pn.Spacer(height=20), localization_row])
+        precursor_height = 1380
+
     psm_pane = make_section(
         header="Precursor-level",
         row=pn.Column(
-            filtering_row,
-            pn.Spacer(height=20),
-            censor_row,
+            *precursor_rows,
             sizing_mode="stretch_width",
         ),
         background="#E3F2FD",
         width="98vw",
-        height=940,
+        height=precursor_height,
     )
 
     # Quantification
@@ -321,7 +347,7 @@ def preprocessing_tab(state: SessionState):
             try:
                 fig_before, fig_after = plot_ma(state.adata, sample)
             except Exception as e:
-                # If compute fails, we MUST still clear the spinner and show something.
+                # Always clear the spinner and display a placeholder after failure.
                 logger.exception("MA plot computation failed")
                 fig_before = _placeholder_plot("MA before normalization", subtitle=str(e))
                 fig_after  = _placeholder_plot("MA after normalization",  subtitle=str(e))
@@ -450,7 +476,7 @@ def preprocessing_tab(state: SessionState):
 
     # One-shot builder
     heatmaps_built = False
-    bokeh_doc = pn.state.curdoc  # you already use this for MA plots
+    bokeh_doc = pn.state.curdoc
 
     def build_mv_heatmaps_once():
         nonlocal heatmaps_built
@@ -467,7 +493,7 @@ def preprocessing_tab(state: SessionState):
 
             def finish():
                 nonlocal heatmaps_built
-                # Preserve your aesthetics by wrapping with plotly_section here
+                # Apply the standard plot container styling.
                 mv_corr_holder[:] = [plotly_section(corr_heatmap_fig,
                                                     height=600,
                                                     flex="0.5",

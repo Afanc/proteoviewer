@@ -1786,6 +1786,117 @@ def plot_left_censoring_histogram(adata: AnnData) -> go.Figure:
 
     return fig
 
+
+@log_time("Plotting phosphosite localization histogram")
+def plot_localization_score_histogram(adata: AnnData) -> go.Figure:
+    analysis_type = str(
+        adata.uns.get("preprocessing", {}).get("analysis_type", "")
+    ).lower()
+    if analysis_type != "phospho":
+        return _placeholder_plot(
+            "Phosphosite localization",
+            "Available only for phosphoproteomics",
+        )
+
+    meta = (
+        adata.uns.get("preprocessing", {})
+        .get("filtering", {})
+        .get("loc")
+    )
+    if not meta or meta.get("raw_values") is None:
+        return _placeholder_plot(
+            "Phosphosite localization",
+            "Pre-filter site-level localization scores are unavailable",
+        )
+
+    values = np.asarray(meta.get("raw_values", []), dtype=float)
+    values = values[np.isfinite(values)]
+    if values.size == 0:
+        return _placeholder_plot(
+            "Phosphosite localization",
+            "No finite localization scores available",
+        )
+
+    threshold = float(meta.get("threshold", 0.75))
+    mode = str(meta.get("mode", "soft")).lower()
+    aggregation = str(
+        meta.get("aggregation", "max" if mode == "soft" else "min")
+    ).lower()
+    kept_values = values[values >= threshold]
+    dropped_values = values[values < threshold]
+
+    xbins = dict(start=0.0, end=1.0, size=0.02)
+    fig = go.Figure()
+    fig.add_trace(
+        go.Histogram(
+            x=dropped_values,
+            xbins=xbins,
+            name="Filtered out",
+            marker=dict(color="red", line=dict(color="black", width=0.5)),
+            opacity=0.65,
+            hovertemplate="Localization score: %{x:.2f}<br>Count: %{y}<extra></extra>",
+        )
+    )
+    fig.add_trace(
+        go.Histogram(
+            x=kept_values,
+            xbins=xbins,
+            name="Kept",
+            marker=dict(color="blue", line=dict(color="black", width=0.5)),
+            opacity=0.65,
+            hovertemplate="Localization score: %{x:.2f}<br>Count: %{y}<extra></extra>",
+        )
+    )
+
+    for boundary, label in ((0.5, "Class III / II"), (0.75, "Class II / I")):
+        fig.add_vline(
+            x=boundary,
+            line=dict(color="black", dash="dash", width=1),
+            annotation_text=label,
+            annotation_position="top left",
+        )
+    if not np.isclose(threshold, 0.5) and not np.isclose(threshold, 0.75):
+        fig.add_vline(
+            x=threshold,
+            line=dict(color="red", dash="dot", width=1.5),
+            annotation_text="Configured cutoff",
+            annotation_position="bottom right",
+        )
+
+    kept = int(meta.get("number_kept", kept_values.size))
+    dropped = int(meta.get("number_dropped", dropped_values.size))
+    unscored = int(meta.get("number_unscored", 0))
+    fmt = lambda n: f"{n:,}".replace(",", "'")
+    aggregation_label = "maximum" if aggregation == "max" else "minimum"
+    unscored_note = (
+        f" (including unscored: {fmt(unscored)})" if unscored else ""
+    )
+    title = (
+        "Phosphosite localization<br>"
+        f"{mode.capitalize()} filter ({aggregation_label} per site), "
+        f"cutoff: ≥ {threshold:g}, kept: {fmt(kept)}, "
+        f"filtered out: {fmt(dropped)}{unscored_note}"
+    )
+
+    fig.update_layout(
+        title=dict(text=title, x=0.5),
+        barmode="overlay",
+        template="plotly_white",
+        width=900,
+        height=400,
+        xaxis_title="Localization probability",
+        yaxis_title="Phosphosites",
+        legend=dict(
+            orientation="v",
+            x=0.995,
+            xanchor="right",
+            y=1.10,
+            yanchor="top",
+        ),
+    )
+    fig.update_xaxes(range=[0.0, 1.0], showline=False, tickformat=".2f")
+    return fig
+
 @log_time("Plotting Before/After Imputation metrics by Condition")
 def plot_grouped_violin_before_after_imputation_metrics_by_condition(
     adata: AnnData,
