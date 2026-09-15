@@ -275,11 +275,11 @@ def overview_tab(state: SessionState):
 
     id_sort_toggle = make_id_sort_toggle(margin=(20, 0, 0, 20), width=170)
 
-    barplot_title = "Protein IDs by Sample and Category"
+    barplot_title = "Protein"
     if peptidomics_mode:
-        barplot_title = "Peptide IDs by Sample and Category"
+        barplot_title = "Peptide"
     if phospho_mode:
-        barplot_title = "Phosphosites by Sample and Category"
+        barplot_title = "Phosphosites"
 
     hist_ID_dmap = pn.bind(
         plot_barplot_proteins_per_sample,

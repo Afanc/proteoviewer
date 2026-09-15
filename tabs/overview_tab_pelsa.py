@@ -475,7 +475,7 @@ def overview_tab_pelsa(state: SessionState):
     def _pelsa_sort_arg(mode: str) -> str:
         return "group" if mode == "By concentration" else "sample"
 
-    barplot_title = "Peptide IDs by Sample and Category"
+    barplot_title = "Peptide"
 
     hist_ID_dmap = pn.bind(
         plot_barplot_proteins_per_sample,

@@ -271,6 +271,8 @@ def plot_stacked_proteins_by_category(
     samples = adata.obs.index.tolist()
     protein_ids  = adata.var.index.tolist()
 
+    plot_title = f"{title} IDs by Sample and Category"
+
     # now df is samples × proteins, no transpose needed
     df = pd.DataFrame(adata.layers['raw'],
                       index=samples,
@@ -294,7 +296,6 @@ def plot_stacked_proteins_by_category(
     sample_groups = adata.obs[group_key].astype(str)
     unique_groups = sorted(sample_groups.unique().tolist())
     group_color_map = get_color_map(unique_groups, px.colors.qualitative.Plotly)
-
 
     # default fills
     if category_colors is None:
@@ -434,9 +435,9 @@ def plot_stacked_proteins_by_category(
     # Layout: single (main) legend on the right; single‑click only
     fig.update_layout(
         barmode="stack",
-        title=dict(text=title, x=0.4),
+        title=dict(text=plot_title, x=0.4),
         xaxis_title="Sample",
-        yaxis_title="Number of Proteins",
+        yaxis_title=f"Number of {title}s",
         template="plotly_white",
         margin=dict(t=150, r=160, l=60, b=60),      # top margin for the horiz row
         legend=dict(

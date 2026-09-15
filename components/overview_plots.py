@@ -108,7 +108,7 @@ def plot_barplot_proteins_per_sample(
     adata,
     matrix_key: str = "normalized",
     bar_color: str = "teal",
-    title: str = "Protein IDs by Sample and Category",
+    title: str = "Protein",
     width: int = 900,
     height: int = 500,
     sort_by: str = "sample",
