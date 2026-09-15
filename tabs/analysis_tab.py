@@ -1,10 +1,7 @@
 import panel as pn
 import plotly.graph_objects as go
 from concurrent.futures import ThreadPoolExecutor
-from functools import partial
-from types import SimpleNamespace
 import traceback
-from contextlib import contextmanager
 
 from components.analysis_plots import (
     residual_variance_hist,
@@ -16,29 +13,138 @@ from components.analysis_plots import (
 
 from components.plot_utils import plot_pca_2d
 
-from utils.layout_utils import plotly_section, make_vr, make_hr, make_section, make_row, FRAME_STYLES
+from utils.layout_utils import plotly_section, make_vr, make_section, make_row, FRAME_STYLES
+
+
+def _build_clustering_pane(adata):
+    heatmap_toggle = pn.widgets.RadioButtonGroup(
+        name="Matrix",
+        options=["Deviations", "Intensities"],
+        value="Deviations",
+        button_type="default",
+        width=170,
+        styles={"z-index": "10"},
+        margin=(10, 0, 0, 0),
+    )
+
+    heatmap_pane = pn.pane.Plotly(
+        go.Figure(),
+        height=800,
+        sizing_mode="stretch_width",
+        config={"responsive": True},
+        margin=(0, 100, 0, -100),
+        styles={"width": "95vw"},
+    )
+    heatmap_holder = pn.Column(
+        pn.Spacer(height=800),
+        sizing_mode="stretch_width",
+        height=820,
+        margin=(0, 100, 0, -100),
+        styles={"flex": "1", "min-width": "0", "width": "95vw"},
+    )
+
+    heatmap_cache: dict[str, go.Figure] = {}
+    building: set[str] = set()
+    executor = ThreadPoolExecutor(max_workers=1)
+    bokeh_doc = pn.state.curdoc
+
+    def normalize_plotly(fig: go.Figure) -> go.Figure:
+        try:
+            fig.update_layout(autosize=True)
+            fig.layout.width = None
+            if getattr(fig.layout, "height", None) is not None:
+                fig.layout.height = None
+        except Exception:
+            pass
+        return fig
+
+    def mount_once():
+        if heatmap_pane not in heatmap_holder.objects:
+            heatmap_holder[:] = [heatmap_pane]
+
+    def apply_figure(fig: go.Figure):
+        heatmap_pane.object = fig
+        mount_once()
+
+    def build_async(mode: str, show_after_build: bool):
+        if mode in heatmap_cache or mode in building:
+            return
+        building.add(mode)
+        if show_after_build:
+            heatmap_holder.loading = True
+
+        def worker():
+            try:
+                fig = normalize_plotly(plot_h_clustering_heatmap(adata, mode=mode))
+
+                def finish():
+                    heatmap_cache[mode] = fig
+                    if show_after_build:
+                        apply_figure(fig)
+                        heatmap_holder.loading = False
+                    building.discard(mode)
+
+                bokeh_doc.add_next_tick_callback(finish)
+            except Exception as exc:
+                err_msg = str(exc)
+                tb = traceback.format_exc()
+
+                def fail():
+                    heatmap_holder[:] = [
+                        pn.pane.Alert(
+                            f"Failed to build hierarchical clustering heatmap for mode={mode}:\n\n{err_msg}\n\n{tb}",
+                            alert_type="danger",
+                            sizing_mode="stretch_width",
+                        )
+                    ]
+                    heatmap_holder.loading = False
+                    building.discard(mode)
+
+                bokeh_doc.add_next_tick_callback(fail)
+
+        executor.submit(worker)
+
+    def show_mode(mode: str):
+        if mode in heatmap_cache:
+            apply_figure(heatmap_cache[mode])
+        else:
+            build_async(mode, show_after_build=True)
+
+    def on_heatmap_mode(event):
+        if event.old != event.new:
+            show_mode(event.new)
+
+    heatmap_holder.loading = True
+    bokeh_doc.add_next_tick_callback(lambda: show_mode(heatmap_toggle.value))
+    heatmap_toggle.param.watch(on_heatmap_mode, "value")
+
+    clustering_row = make_row(
+        pn.pane.Markdown("##   Clustering", styles={"flex": "0.05", "z-index": "10"}),
+        pn.Spacer(width=50),
+        heatmap_toggle,
+        heatmap_holder,
+        height=830,
+    )
+    return make_section(
+        header="Expression",
+        row=clustering_row,
+        height=920,
+        width="98vw",
+        background="#FFF8F0",
+    )
+
 
 def analysis_tab(state):
     adata = state.adata
 
     if bool(adata.uns.get("pilot_study_mode", False)):
         return pn.Column(
-            pn.Spacer(height=10),
-            pn.pane.Alert(
-                "Pilot study mode: statistical testing was skipped by "
-                "ProteoFlux. Metrics and clustering remain available in "
-                "the Overview tab.",
-                alert_type="info",
-                sizing_mode="stretch_width",
-                margin=(0, 20, 0, 20),
-            ),
+            pn.Spacer(height=30),
+            _build_clustering_pane(adata),
             pn.Spacer(height=30),
             sizing_mode="stretch_width",
             styles=FRAME_STYLES,
         )
-
-    bokeh_doc = pn.state.curdoc
-    executor = ThreadPoolExecutor(max_workers=1)
 
     contrast_names = adata.uns.get("contrast_names")
     if contrast_names is None:
@@ -208,147 +314,7 @@ def analysis_tab(state):
         height=1540
     )
 
-    # Clustering
-
-    heatmap_toggle = pn.widgets.RadioButtonGroup(
-        name="Matrix",
-        options=["Deviations", "Intensities"],
-        value="Deviations",
-        button_type="default",
-        width=170,
-        styles={"z-index": "10"},
-        margin=(10, 0, 0, 0),
-    )
-
-    # One persistent pane for fast swaps
-    _heatmap_pane = pn.pane.Plotly(
-        go.Figure(),
-        height=800,
-        sizing_mode="stretch_width",
-        config={"responsive": True},
-        margin=(0,100,0,-100),
-        styles={'width': '95vw'},
-    )
-
-    # Holder starts with a Spacer so the first-load overlay is visible
-    heatmap_holder = pn.Column(
-        pn.Spacer(height=800),
-        sizing_mode="stretch_width",
-        height=820,
-        margin=(0,100,0,-100),
-        styles={"flex": "1", "min-width": "0", 'width': '95vw'},
-    )
-
-    # Cache & worker (single worker; build only on demand)
-    _heatmap_cache: dict[str, go.Figure] = {}
-    _building: set[str] = set()
-    _executor = ThreadPoolExecutor(max_workers=1)
-    bokeh_doc = pn.state.curdoc
-
-    def _render_heatmap(mode: str) -> go.Figure:
-        return plot_h_clustering_heatmap(adata, mode=mode)
-
-    def _normalize_plotly(fig: go.Figure) -> go.Figure:
-        # Clear hard sizes so Panel can stretch it
-        try:
-            fig.update_layout(autosize=True)
-            fig.layout.width = None
-            # Let the pane control height (we set pane height=800)
-            if getattr(fig.layout, "height", None) is not None:
-                fig.layout.height = None
-        except Exception:
-            pass
-        return fig
-
-    def _mount_once():
-        if _heatmap_pane not in heatmap_holder.objects:
-            heatmap_holder[:] = [_heatmap_pane]
-
-    def _apply_figure(fig: go.Figure):
-        _heatmap_pane.object = fig
-        _mount_once()
-
-    def _build_async(mode: str, show_after_build: bool):
-        if mode in _heatmap_cache or mode in _building:
-            return
-        _building.add(mode)
-        if show_after_build:
-            heatmap_holder.loading = True
-
-        def worker():
-            try:
-                fig = _normalize_plotly(_render_heatmap(mode))
-
-                def finish():
-                    _heatmap_cache[mode] = fig
-                    if show_after_build:
-                        _apply_figure(fig)
-                        heatmap_holder.loading = False
-                    _building.discard(mode)
-
-                bokeh_doc.add_next_tick_callback(finish)
-            except Exception as exc:
-                err_msg = str(exc)
-                tb = traceback.format_exc()
-
-                def fail():
-                    heatmap_holder[:] = [
-                        pn.pane.Alert(
-                            f"Failed to build hierarchical clustering heatmap for mode={mode}:\n\n{err_msg}\n\n{tb}",
-                            alert_type="danger",
-                            sizing_mode="stretch_width",
-                        )
-                    ]
-                    heatmap_holder.loading = False
-                    _building.discard(mode)
-
-                bokeh_doc.add_next_tick_callback(fail)
-
-            #fig = _normalize_plotly(_render_heatmap(mode))
-
-            #def finish():
-            #    _heatmap_cache[mode] = fig
-            #    if show_after_build:
-            #        _apply_figure(fig)
-            #        # Clear the overlay regardless of other background work
-            #        heatmap_holder.loading = False
-            #    _building.discard(mode)
-
-            #bokeh_doc.add_next_tick_callback(finish)
-
-        _executor.submit(worker)
-
-    def _show_mode(mode: str):
-        if mode in _heatmap_cache:
-            _apply_figure(_heatmap_cache[mode])  # instant swap
-        else:
-            _build_async(mode, show_after_build=True)
-
-    def _on_heatmap_mode(event):
-        if event.old == event.new:
-            return
-        _show_mode(event.new)
-
-    heatmap_holder.loading = True
-    bokeh_doc.add_next_tick_callback(lambda: _show_mode(heatmap_toggle.value))
-    heatmap_toggle.param.watch(_on_heatmap_mode, "value")
-
-    h_clustering_pane = make_row(
-        pn.pane.Markdown("##   Clustering", styles={"flex": "0.05", "z-index": "10"}),
-        pn.Spacer(width=50),
-        heatmap_toggle,
-        heatmap_holder,
-        height=830,
-    )
-
-    clustering_pane = make_section(
-            header ="Expression",
-            row=h_clustering_pane,
-            height=920,
-            width='98vw',
-            background="#FFF8F0",
-    )
-
+    clustering_pane = _build_clustering_pane(adata)
 
     layout = pn.Column(
         pn.Spacer(height=10),
@@ -362,4 +328,3 @@ def analysis_tab(state):
         styles=FRAME_STYLES,
     )
     return layout
-

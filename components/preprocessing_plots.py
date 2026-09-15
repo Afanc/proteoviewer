@@ -17,6 +17,7 @@ from components.plot_utils import (
     plot_binary_cluster_heatmap_plotly,
     color_ticks_by_condition,
     _abbr,
+    _sort_labels_numeric_aware,
 )
 from components.regression_normalization import compute_reference_values, compute_MA, fit_regression
 from utils.utils import logger, log_time
@@ -1010,10 +1011,26 @@ def plot_normalization_offsets(
     )
     difference = full_offsets - intersection_offsets
 
-    samples = [str(s) for s in adata.obs_names]
+    samples = np.asarray([str(s) for s in adata.obs_names], dtype=object)
     conditions = (
         adata.obs["CONDITION"].astype(str).reindex(adata.obs_names).to_numpy()
     )
+
+    # Group samples by condition while retaining their existing order within
+    # each condition.
+    levels = _sort_labels_numeric_aware(pd.unique(conditions).tolist())
+    condition_rank = {condition: rank for rank, condition in enumerate(levels)}
+    display_order = np.asarray(
+        sorted(
+            range(len(conditions)),
+            key=lambda index: condition_rank[conditions[index]],
+        )
+    )
+    samples = samples[display_order].tolist()
+    conditions = conditions[display_order]
+    full_offsets = full_offsets[display_order]
+    intersection_offsets = intersection_offsets[display_order]
+    difference = difference[display_order]
     customdata = conditions.reshape(-1, 1)
 
     fig = make_subplots(
@@ -1068,7 +1085,6 @@ def plot_normalization_offsets(
     fig.add_hline(y=0, line=dict(color="gray", dash="dot", width=1), row=1, col=1)
     fig.add_hline(y=0, line=dict(color="gray", dash="dot", width=1), row=2, col=1)
 
-    levels = sorted(pd.unique(conditions).tolist())
     cmap = get_color_map(levels, palette=None, anchor=None)
     ticktext = [
         f"<span style='color:{cmap[c]}'>{_abbr(s)}</span>"
