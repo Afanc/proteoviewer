@@ -30,7 +30,6 @@ from components.texts import (
 )
 from utils.utils import logger, log_time
 from utils.layout_utils import plotly_section, make_vr, make_hr, make_section, make_row, FRAME_STYLES
-from types import SimpleNamespace
 
 executor = ThreadPoolExecutor()
 
@@ -305,8 +304,8 @@ def preprocessing_tab(state: SessionState):
     # MA plots
     sample_sel = pn.widgets.Select(
         name="Sample",
-        options=list(state.adata.obs_names),
-        value=state.adata.obs_names[0],
+        options={"Select a sample…": None, **{s: s for s in state.adata.obs_names}},
+        value=None,
         width=150,
         styles={"z-index": "10"},
         margin=(-10,0,0,20),
@@ -333,21 +332,21 @@ def preprocessing_tab(state: SessionState):
         sample = event.new
         ma_generation["v"] += 1
         this_gen = ma_generation["v"]
+        plot_area.clear()
 
-        # Show "Computing…"; keep old plot to avoid model teardown races
+        if sample is None:
+            status_text.visible = False
+            return
+
+        # Keep the plot area empty until both figures are ready.
         status_text.visible = True
-        try:
-            # If Panel >=1.4, this overlays a spinner; safe no-op otherwise
-            plot_area.loading = True
-        except Exception:
-            pass
 
         def compute():
             """Compute MA plots in a worker thread; always schedule a UI update."""
             try:
                 fig_before, fig_after = plot_ma(state.adata, sample)
             except Exception as e:
-                # Always clear the spinner and display a placeholder after failure.
+                # Always clear the status and display a placeholder after failure.
                 logger.exception("MA plot computation failed")
                 fig_before = _placeholder_plot("MA before normalization", subtitle=str(e))
                 fig_after  = _placeholder_plot("MA after normalization",  subtitle=str(e))
@@ -358,10 +357,6 @@ def preprocessing_tab(state: SessionState):
                     return
                 plot_area[:] = [make_ma_row(fig_before, fig_after)]
                 status_text.visible = False
-                try:
-                    plot_area.loading = False
-                except Exception:
-                    pass
 
             # pn.state.curdoc can be None in odd build contexts; fall back gracefully.
             if bokeh_doc is not None:
@@ -372,14 +367,6 @@ def preprocessing_tab(state: SessionState):
         executor.submit(compute)
 
     sample_sel.param.watch(on_sample_change, "value")
-
-    # Initial lazy compute AFTER first paint
-    def _initial_ma():
-        on_sample_change(SimpleNamespace(new=sample_sel.value))
-    if bokeh_doc is not None:
-        bokeh_doc.add_next_tick_callback(_initial_ma)
-    else:
-        _initial_ma()
 
     ma_pane = pn.Row(
         pn.Column(
