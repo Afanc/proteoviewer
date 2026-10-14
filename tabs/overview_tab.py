@@ -579,10 +579,14 @@ def overview_tab(state: SessionState):
     )
 
     # bind a detail‐plot function to the same contrast & search_input
-    layers = ["Final", "Log-only", "Raw", "Spectral Counts"]
+    layers = ["Final", "Log-only", "Raw"]
+    if "spectral_counts" in adata.layers:
+        layers.append("Spectral Counts")
 
     layers_sel = pn.widgets.Select(
         name="Protein Data View",
+        description=("Spectral counts are not available for this dataset."
+                     if "spectral_counts" not in adata.layers else "Intensity or precursor evidence"),
         options=layers,
         value=layers[0],
         width=130,

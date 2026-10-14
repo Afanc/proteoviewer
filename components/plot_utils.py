@@ -17,6 +17,7 @@ from anndata import AnnData
 from matplotlib.colors import LinearSegmentedColormap
 import matplotlib.patches as mpatches
 from utils.utils import logger, log_time
+from utils.data_contract import require_unique_labels
 from functools import lru_cache
 
 def _abbr(s, head=12, tail=6):
@@ -27,7 +28,7 @@ def _label_as_str(x) -> str:
     try:
         v = float(x)
         if np.isfinite(v):
-            return f"{v:g}"
+            return np.format_float_positional(v, trim="-")
     except Exception:
         pass
     return str(x)
@@ -130,8 +131,9 @@ def _add_group_ellipses(
     Ellipses are attached to the same legendgroup as their points, but do not
     create separate legend entries.
     """
-    for group in sorted(df[group_col].astype(str).unique().tolist()):
-        sub = df[df[group_col].astype(str) == str(group)][[xcol, ycol]].dropna()
+    # Keep the same typed group keys used by the scatter's color map.
+    for group in sorted(df[group_col].unique().tolist()):
+        sub = df[df[group_col] == group][[xcol, ycol]].dropna()
         if sub.shape[0] < 3:
             continue
         cov = np.cov(sub.to_numpy().T)
@@ -166,6 +168,13 @@ def get_volcano_classification_masks(adata, contrast: str, min_nonimp_per_cond: 
     """
     grp1, grp2 = contrast.split("_vs_")
     miss = pd.DataFrame(adata.uns["missingness"])
+    require_unique_labels(adata.var_names, "Feature axis")
+    require_unique_labels(adata.obs_names, "Sample axis")
+    require_unique_labels(miss.index, "Missingness feature axis")
+    require_unique_labels(miss.columns, "Missingness condition axis")
+    # uns tables retain independent axes when AnnData is reordered/subsetted.
+    miss = miss.reindex(index=adata.var_names, columns=[grp1, grp2])
+    known = miss.notna().all(axis=1).to_numpy()
 
     rep1 = (adata.obs["CONDITION"] == grp1).sum()
     rep2 = (adata.obs["CONDITION"] == grp2).sum()
@@ -188,9 +197,9 @@ def get_volcano_classification_masks(adata, contrast: str, min_nonimp_per_cond: 
     a |= full_missing1
     b |= full_missing2
 
-    measured = (~a & ~b)
-    imp1     = (a & ~b)
-    imp2     = (b & ~a)
+    measured = (~a & ~b & known)
+    imp1     = (a & ~b & known)
+    imp2     = (b & ~a & known)
 
     measured &= ( (n1 >= min_nonimp_per_cond) | (n2 >= min_nonimp_per_cond) )
     imp1     &= (n2 >= min_nonimp_per_cond)
@@ -294,7 +303,11 @@ def plot_stacked_proteins_by_category(
         raise KeyError(f"Missing adata.obs[{group_key!r}] required for ID barplot grouping.")
 
     sample_groups = adata.obs[group_key].astype(str)
-    unique_groups = sorted(sample_groups.unique().tolist())
+    # Numeric PELSA doses sort numerically without rewriting sample metadata.
+    if pd.api.types.is_numeric_dtype(adata.obs[group_key]):
+        unique_groups = adata.obs[group_key].dropna().sort_values().astype(str).unique().tolist()
+    else:
+        unique_groups = sorted(sample_groups.unique().tolist())
     group_color_map = get_color_map(unique_groups, px.colors.qualitative.Plotly)
 
     # default fills
@@ -710,6 +723,15 @@ def _padded_range(vals, pad_frac=0.08):
         pad = (vmax - vmin) * pad_frac
     return [vmin - pad, vmax + pad]
 
+def pca_axis_options(adata, *obsm_keys):
+    """Offer the existing first-three-PC pairs only when their axes are present."""
+    keys = obsm_keys or ("X_pca",)
+    counts = [adata.obsm[key].shape[1] for key in keys if key in adata.obsm]
+    n = min(counts, default=0)
+    return {f"PC{i} vs PC{j}": (i, j)
+            for i, j in ((1, 2), (1, 3), (2, 3)) if j <= n}
+
+
 @log_time("Plotting PCA")
 def plot_pca_2d(
     adata: AnnData,
@@ -727,7 +749,10 @@ def plot_pca_2d(
     """
     2D PCA scatter of samples, colored by adata.obs[color_key].
     """
-    if obsm_key not in adata.obsm:
+    n_components = adata.obsm[obsm_key].shape[1] if obsm_key in adata.obsm else 0
+    valid_axes = (pc is not None and len(pc) == 2 and pc[0] != pc[1]
+                  and all(1 <= axis <= n_components for axis in pc))
+    if not valid_axes:
         fig = go.Figure()
         fig.update_layout(
             title=dict(text=f"{title} (not available)", x=0.5),
@@ -738,7 +763,9 @@ def plot_pca_2d(
             yaxis=dict(visible=False),
             annotations=[dict(
                 x=0.5, y=0.5, xref="paper", yref="paper",
-                text=f"PCA embedding not found in adata.obsm['{obsm_key}']",
+                text=(f"PCA embedding not found in adata.obsm['{obsm_key}']"
+                      if obsm_key not in adata.obsm else
+                      f"PCA has {n_components} component(s); two available components are required."),
                 showarrow=False,
                 font=dict(size=12, color="black"),
             )],
@@ -768,7 +795,7 @@ def plot_pca_2d(
             mode="markers+text" if annotate else "markers",
             text=sub.index.to_list(),
             textposition="top center",
-            name=lv,
+            name=str(lv),
             legendgroup=str(lv),
             marker=dict(color=palette[lv], size=8, line=dict(width=1, color="black")),
             hovertemplate = (f"Sample: %{{text}}")
@@ -811,7 +838,7 @@ def plot_umap_2d(
     2D UMAP scatter of samples, colored by adata.obs[color_key].
     """
     # Backward compatible: do not crash if UMAP is missing.
-    if "X_umap" not in adata.obsm:
+    if "X_umap" not in adata.obsm or adata.obsm["X_umap"].shape[1] < 2:
         fig = go.Figure()
         fig.update_layout(
             title=dict(text=f"{title} (not available)", x=0.5),
@@ -821,7 +848,7 @@ def plot_umap_2d(
             yaxis=dict(visible=False),
             annotations=[dict(
                 x=0.5, y=0.5, xref="paper", yref="paper",
-                text="UMAP embedding not found in adata.obsm['X_umap']",
+                text="UMAP requires an embedding with at least two components in obsm['X_umap'].",
                 showarrow=False,
                 font=dict(size=12, color="black"),
             )],
@@ -848,7 +875,7 @@ def plot_umap_2d(
             mode="markers+text" if annotate else "markers",
             text=sub.index.to_list(),
             textposition="top center",
-            name=lv,
+            name=str(lv),
             marker=dict(color=palette[lv], size=8, line=dict(width=1, color="black")),
             hovertemplate="Sample: %{text}")
         )
@@ -885,7 +912,7 @@ def plot_mds_2d(
     2D MDS scatter of samples, colored by adata.obs[color_key].
     Expects adata.obsm["X_mds"] with at least 2 columns.
     """
-    if "X_mds" not in adata.obsm:
+    if "X_mds" not in adata.obsm or adata.obsm["X_mds"].shape[1] < 2:
         fig = go.Figure()
         fig.update_layout(
             title=dict(text=f"{title} (not available)", x=0.5),
@@ -895,7 +922,7 @@ def plot_mds_2d(
             yaxis=dict(visible=False),
             annotations=[dict(
                 x=0.5, y=0.5, xref="paper", yref="paper",
-                text="MDS embedding not found in adata.obsm['X_mds']",
+                text="MDS requires an embedding with at least two components in obsm['X_mds'].",
                 showarrow=False,
                 font=dict(size=12, color="black"),
             )],
@@ -924,7 +951,7 @@ def plot_mds_2d(
             mode="markers+text" if annotate else "markers",
             text=sub.index.to_list(),
             textposition="top center",
-            name=lv,
+            name=str(lv),
             legendgroup=str(lv),
             marker=dict(color=palette[lv], size=8, line=dict(width=1, color="black")),
             hovertemplate="Sample: %{text}",
@@ -1504,24 +1531,9 @@ def plot_volcanoes(
     x = df_fc[contrast]
     y = -np.log10(df_q[contrast])
 
-    # Missingness-based initial classification
-    miss = pd.DataFrame(adata.uns["missingness"])
     grp1, grp2 = contrast.split("_vs_")
-
-    # number of replicates (for "fully missing" in legacy missingness)
-    cond = adata.obs["CONDITION"].astype(str).to_numpy()
-    idx1 = (cond == grp1)
-    idx2 = (cond == grp2)
-
-    rep1 = int(idx1.sum())
-    rep2 = int(idx2.sum())
-
-    a = miss[grp1].to_numpy() >= rep1   # fully missing in grp1
-    b = miss[grp2].to_numpy() >= rep2   # fully missing in grp2
-
-    measured_mask = (~a & ~b)
-    imp1_mask     = (a & ~b)   # missing grp1 only
-    imp2_mask     = (b & ~a)   # missing grp2 only
+    rep1 = int((adata.obs["CONDITION"] == grp1).sum())
+    rep2 = int((adata.obs["CONDITION"] == grp2).sum())
 
     # Per-condition raw non-imputed counts
     mat_raw = adata.layers.get("raw", adata.X)
@@ -1532,36 +1544,6 @@ def plot_volcanoes(
 
     n1 = np.sum(~np.isnan(mat[idx1, :]), axis=0).astype(int)
     n2 = np.sum(~np.isnan(mat[idx2, :]), axis=0).astype(int)
-    thr = int(min_nonimp_per_cond or 0)
-
-    # if raw says "zero non-imputed", treat as fully missing
-    full_missing1 = (n1 == 0)
-    full_missing2 = (n2 == 0)
-
-    a = a | full_missing1
-    b = b | full_missing2
-
-    # Recompute classification based on updated full-missing information
-    measured_mask = (~a & ~b)
-    imp1_mask     = (a & ~b)
-    imp2_mask     = (b & ~a)
-
-    # Apply min_nonimp_per_cond threshold *only to the measured side*
-    measured_mask &= ((n1 >= thr) & (n2 >= thr))
-    imp1_mask     &= (n2 >= thr)   # measured side = grp2
-    imp2_mask     &= (n1 >= thr)   # measured side = grp1
-
-    # Apply threshold:
-    #  - For "Observed in both": require both sides to meet the threshold
-    #  - For "Imputed in grp1": require >=thr on grp2 (the measured side)
-    #  - For "Imputed in grp2": require >=thr on grp1 (the measured side)
-    meets_both = (n1 >= thr) & (n2 >= thr)
-    meets_2    = (n2 >= thr)
-    meets_1    = (n1 >= thr)
-    measured_mask &= meets_both
-    imp1_mask     &= meets_2
-    imp2_mask     &= meets_1
-
     # initial classification
     measured_mask, imp1_mask, imp2_mask = get_volcano_classification_masks(
         adata, contrast, min_nonimp_per_cond, min_precursors
@@ -1668,7 +1650,7 @@ def plot_volcanoes(
         color_vals = df_raw[contrast].reindex(protids).to_numpy()
 
         colorscale = "thermal"
-        colorbar = dict(title="Adj. log₂ FC", len=0.5)
+        colorbar = dict(title=("Model log₂ FC" if "covariate_adjusted" in adata.varm else "Adj. log₂ FC"), len=0.5)
 
     elif color_by == "FT LogFC":
         raw = adata.varm["ft_log2fc"]

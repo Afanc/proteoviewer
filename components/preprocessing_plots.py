@@ -40,7 +40,7 @@ def prepare_long_df(
     sample_col: str = "Sample",
     intensity_col: str = "Intensity",
 ) -> pd.DataFrame:
-    """ Convert a wide-format DataFrame (samples as columns) to long-format, filter out non-positive intensities, optionally merge with a condition mapping, and add a processing label.
+    """Melt intensities without changing scale; omit missing/non-finite plot values.
     Args:
         df (pd.DataFrame): Wide-format DataFrame.
         label (str): The label to assign (e.g., "Imputed" or "Before/After").
@@ -51,7 +51,7 @@ def prepare_long_df(
         pd.DataFrame: Long-format DataFrame with 'Sample', 'Intensity', and the label_col.
     """
     df_long = df.melt(var_name=sample_col, value_name=intensity_col)
-    df_long = df_long[df_long[intensity_col] > 0].copy()
+    df_long = df_long[np.isfinite(df_long[intensity_col])].copy()
     if condition_mapping is not None:
         df_long = df_long.merge(condition_mapping, on=sample_col, how="left")
     df_long[label_col] = label
@@ -1623,20 +1623,23 @@ def plot_line_density_by_sample(
 
     def _densities(layer: str) -> Tuple[np.ndarray, Dict[str, np.ndarray]]:
         arr = adata.layers[layer]                 # shape: samples × proteins
-        # keep finite & positive values for range
-        vals = arr[np.isfinite(arr) & (arr > 0)]
+        # lognorm/normalized may legitimately contain zero or negative values.
+        vals = arr[np.isfinite(arr)]
         if vals.size == 0:
             # fallback to 0..1 to avoid NaNs
             x = np.linspace(0, 1, bins)
             return x, {s: np.zeros_like(x) for s in samples}
 
-        x = np.linspace(vals.min(), vals.max(), bins)
-        edges = np.linspace(vals.min(), vals.max(), bins + 1)
+        low, high = float(vals.min()), float(vals.max())
+        if low == high:
+            low, high = low - 0.5, high + 0.5
+        x = np.linspace(low, high, bins)
+        edges = np.linspace(low, high, bins + 1)
 
         ys: Dict[str, np.ndarray] = {}
         for i, s in enumerate(samples):
             v = arr[i, :]
-            v = v[np.isfinite(v) & (v > 0)]
+            v = v[np.isfinite(v)]
             if v.size == 0:
                 y = np.zeros(bins)
             else:

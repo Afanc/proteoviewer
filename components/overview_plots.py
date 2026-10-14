@@ -18,6 +18,7 @@ from components.plot_utils import (
 from components.domain_annotations import fetch_interpro_representative_domains
 
 from utils.utils import logger, log_time
+from utils.data_contract import require_unique_labels
 
 PELSA_LOCAL_STABILITY_COLORSCALE = [
     [0.00, "#73d055"],  # threshold entry: viridis-like yellow-green
@@ -246,6 +247,12 @@ def plot_intensity_by_protein(state, contrast, protein, layer):
         proc_data = ad.layers.get('spectral_counts')
         intensity_scale = "Spectral Counts"
         is_spectral = True
+        if proc_data is None:
+            fig = go.Figure()
+            fig.add_annotation(text="Spectral counts are not available for this dataset.",
+                               x=0.5, y=0.5, xref="paper", yref="paper", showarrow=False)
+            fig.update_layout(xaxis_visible=False, yaxis_visible=False)
+            return fig
 
     # extract processed and raw values for this protein
     y_vals = proc_data[:, col].A1 if hasattr(proc_data, "A1") else proc_data[:, col]
@@ -567,11 +574,11 @@ def plot_peptide_trends_centered(adata, uniprot_id: str, contrast: str) -> go.Fi
     # align columns to obs order, then filter to the contrast’s samples
     obs_order = list(map(str, adata.obs_names))
 
-    if cols != obs_order:
-        pos = {c: i for i, c in enumerate(cols)}
-        idx = [pos[c] for c in obs_order if c in pos]
-        X   = X[:, idx]
-        cols = [obs_order[i] for i in range(len(obs_order)) if obs_order[i] in pos]
+    require_unique_labels(rows, f"{src_key} row axis")
+    require_unique_labels(cols, f"{src_key} sample axis")
+    require_unique_labels(obs_order, "Sample axis")
+    X = pd.DataFrame(X, columns=cols).reindex(columns=obs_order).to_numpy()
+    cols = obs_order
 
     grp1, grp2 = contrast.split("_vs_")
     conds = adata.obs.loc[cols, "CONDITION"].astype(str).to_numpy()
@@ -1016,19 +1023,21 @@ def _pelsa_four_pl(x, pec50, slope, front, back):
     x = np.asarray(x, dtype=float)
     return back + (front - back) / (1.0 + np.power(10.0, slope * (x + pec50)))
 
-def _pelsa_x_tick_labels(sub: pd.DataFrame) -> tuple[list[float], list[str]]:
+def _pelsa_x_tick_labels(sub: pd.DataFrame, control_concentration: float = 0.0) -> tuple[list[float], list[str]]:
     tick_df = sub[["concentration", "log10_concentration"]].copy()
     tick_df["concentration"] = pd.to_numeric(tick_df["concentration"], errors="coerce")
     tick_df["log10_concentration"] = pd.to_numeric(
         tick_df["log10_concentration"],
         errors="coerce",
     )
+    tick_df["is_control"] = (sub["is_control"] if "is_control" in sub
+                             else tick_df["concentration"].eq(control_concentration))
     tick_df = tick_df.dropna().drop_duplicates().sort_values("log10_concentration")
 
     tickvals = tick_df["log10_concentration"].to_numpy(dtype=float).tolist()
     ticktext = [
-        "Control" if conc == 0 else f"{conc:g}"
-        for conc in tick_df["concentration"].to_numpy(dtype=float)
+        "Control" if is_control else np.format_float_positional(conc, trim="-")
+        for conc, is_control in zip(tick_df["concentration"], tick_df["is_control"])
     ]
     return tickvals, ticktext
 
@@ -1208,13 +1217,7 @@ def plot_pelsa_volcano(
             control_concentration = 0.0
 
         obs_conc = pd.to_numeric(ad.obs[concentration_col], errors="coerce").to_numpy(dtype=float)
-        control_mask = np.isclose(
-            obs_conc,
-            float(control_concentration),
-            rtol=1e-9,
-            atol=1e-12,
-            equal_nan=False,
-        )
+        control_mask = obs_conc == float(control_concentration)
         if not np.any(control_mask):
             raise ValueError(
                 "PELSA volcano control-intensity coloring found no samples at "
@@ -1463,7 +1466,9 @@ def plot_pelsa_curve(state, peptide_id: str, width: int = 800, height: int = 400
 
     fig.add_hline(y=0.0, line_dash="dot", line_color="black")
 
-    tickvals, ticktext = _pelsa_x_tick_labels(sub)
+    tickvals, ticktext = _pelsa_x_tick_labels(
+        sub, control_concentration=ad.uns["pelsa"].get("control_concentration", 0.0)
+    )
 
     fig.update_layout(
         title=dict(text="PELSA titration curve", x=0.5),

@@ -11,7 +11,7 @@ from components.analysis_plots import (
     plot_h_clustering_heatmap,
 )
 
-from components.plot_utils import plot_pca_2d
+from components.plot_utils import plot_pca_2d, pca_axis_options
 
 from utils.layout_utils import plotly_section, make_vr, make_section, make_row, FRAME_STYLES
 
@@ -188,14 +188,12 @@ def analysis_tab(state):
     )
 
     # section: batch correction / design-adjusted PCA diagnostic
+    pc_options = pca_axis_options(adata, "X_pca", "X_pca_design_adjusted")
     batch_pca_pc_sel = pn.widgets.Select(
         name="PCA axes",
-        options={
-            "PC1 vs PC2": (1, 2),
-            "PC1 vs PC3": (1, 3),
-            "PC2 vs PC3": (2, 3),
-        },
-        value=(1, 2),
+        options=pc_options,
+        value=next(iter(pc_options.values()), None),
+        disabled=not pc_options,
         width=110,
         margin=(-10, 0, 0, 20),
         styles={"z-index": "10"},
@@ -212,7 +210,7 @@ def analysis_tab(state):
     def batch_pca_row(pc, show_ellipses):
         before = plot_pca_2d(
             adata=adata,
-            pc=tuple(pc),
+            pc=tuple(pc) if pc is not None else None,
             color_key="CONDITION",
             title="PCA before batch correction",
             show_ellipses=bool(show_ellipses),
@@ -223,7 +221,7 @@ def analysis_tab(state):
         )
         after = plot_pca_2d(
             adata=adata,
-            pc=tuple(pc),
+            pc=tuple(pc) if pc is not None else None,
             color_key="CONDITION",
             title="PCA after batch correction",
             show_ellipses=bool(show_ellipses),

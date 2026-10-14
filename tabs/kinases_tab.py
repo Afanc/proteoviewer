@@ -36,6 +36,7 @@ from utils.layout_utils import (
 from utils.session_state import SessionState
 from components.plot_utils import get_color_map
 from utils.utils import log_time
+from utils.data_contract import kinase_method_labels
 
 
 _REQUIRED_RESULT_COLUMNS = {
@@ -94,7 +95,7 @@ _ENRICHMENT_MAX_CONTRASTS = 25
 
 
 # False uses STRING's default whole-species background. Set to True to
-# restrict enrichment to the kinases that were eligible/tested by KSEA.
+# restrict enrichment to the kinases that were eligible/tested by the producer method.
 # Still testing, restricting seems to always break all stat. power
 _ENRICHMENT_USE_TESTED_BACKGROUND = False
 
@@ -180,7 +181,7 @@ def _database_summary(adata) -> pd.DataFrame:
     )
     if missing:
         raise ValueError(
-            "KSEA database summary is missing required columns: "
+            "Kinase database summary is missing required columns: "
             f"{missing!r}."
         )
     return summary
@@ -564,7 +565,8 @@ def plot_kinase_volcano(
     width: int | None = None,
     height: int = 1150,
 ) -> go.Figure:
-    """Plot contrast-local KSEA effects against kinase-level q-values."""
+    """Plot stored contrast-local kinase effects against kinase-level q-values."""
+    labels = kinase_method_labels(_kinase_activity(state.adata).get("method", "ksea"))
     results = _kinase_results(state.adata)
     sub = results.loc[results["contrast"].astype(str).eq(str(contrast))].copy()
 
@@ -653,8 +655,8 @@ def plot_kinase_volcano(
                 "Kinase: %{customdata[1]}<br>"
                 "Gene: %{customdata[2]}<br>"
                 "UniProt: %{customdata[3]}<br>"
-                "Mean shift: %{x:.3f}<br>"
-                "Z-score: %{customdata[4]:.3f}<br>"
+                f"{labels['effect']}: " "%{x:.3f}<br>"
+                f"{labels['score']}: " "%{customdata[4]:.3f}<br>"
                 "q-value: %{customdata[6]:.3e}<br>"
                 "Substrates: %{customdata[7]:.0f}<br>"
                 "<extra></extra>"
@@ -736,7 +738,7 @@ def plot_kinase_volcano(
         )
 
     fig.update_layout(
-        title={"text": "Kinase Volcano Plot", "x": 0.5},
+        title={"text": f"{labels['method']} Kinase Volcano Plot", "x": 0.5},
         annotations=annotations,
         width=width,
         height=height,
@@ -760,7 +762,7 @@ def plot_kinase_volcano(
                 "line": {"color": "black", "dash": "dash"},
             },
         ],
-        xaxis={"title": "Mean substrate shift vs background (log2FC)"},
+        xaxis={"title": labels["effect_axis"]},
         yaxis={"title": "-log10(kinase q-value)"},
     )
     return fig
@@ -851,6 +853,7 @@ def _kinase_activity_heatmap(
     results: pd.DataFrame,
     profile_name: str = "significant",
 ) -> pn.viewable.Viewable:
+    labels = kinase_method_labels(_kinase_activity(adata).get("method", "ksea"))
     clustering = _kinase_activity(adata).get("clustering")
     if not isinstance(clustering, Mapping):
         return pn.pane.Alert(
@@ -892,7 +895,7 @@ def _kinase_activity_heatmap(
 
     if not kinase_ids or not contrast_names:
         if profile_name == "all_tested":
-            message = "No kinase had a valid KSEA test in any contrast."
+            message = f"No kinase had a valid {labels['method']} test in any contrast."
         else:
             threshold = float(clustering.get("sign_threshold", 0.05))
             message = (
@@ -1050,7 +1053,7 @@ def _kinase_activity_heatmap(
             xgap=1,
             ygap=1,
             colorbar={
-                "title": "Z-score",
+                "title": labels["score"],
                 "x": 1.12,
             },
             hovertemplate=(
@@ -1058,8 +1061,8 @@ def _kinase_activity_heatmap(
                 "Gene: %{customdata[1]}<br>"
                 "UniProt: %{customdata[2]}<br>"
                 "Contrast: %{customdata[6]}<br>"
-                "Z-score: %{z:.3f}<br>"
-                "Mean shift: %{customdata[3]:.3f}<br>"
+                f"{labels['score']}: " "%{z:.3f}<br>"
+                f"{labels['effect']}: " "%{customdata[3]:.3f}<br>"
                 "q-value: %{customdata[4]:.3e}<br>"
                 "Significance: %{customdata[7]}<br>"
                 "Substrates: %{customdata[5]:.0f}"
@@ -1104,7 +1107,7 @@ def _kinase_activity_heatmap(
     )
     fig.update_layout(
         title={
-            "text": "Kinase activity across contrasts",
+            "text": f"{labels['method']} kinase activity across contrasts",
             "x": 0.5,
         },
         height=heatmap_height,
@@ -1219,8 +1222,10 @@ def _build_kinase_substrate_export_df(
     sample_conditions: np.ndarray,
     absolute: np.ndarray,
     centered: np.ndarray,
+    method: str | None = None,
 ) -> pd.DataFrame:
     """Build the long-form CSV payload behind a substrate heatmap."""
+    labels = kinase_method_labels(method if method is not None else kinase_row.get("method", "ksea"))
     n_sites = len(site_ids)
     n_samples = len(sample_names)
     expected_shape = (n_sites, n_samples)
@@ -1249,7 +1254,8 @@ def _build_kinase_substrate_export_df(
                 _text_value(kinase_row.get("kinase_uniprot", "")),
                 n_sites * n_samples,
             ),
-            "KSEA_Z_SCORE": np.repeat(
+            "METHOD": np.repeat(labels["method"], n_sites * n_samples),
+            labels["substrate_score_column"]: np.repeat(
                 pd.to_numeric(kinase_row.get("activity_score"), errors="coerce"),
                 n_sites * n_samples,
             ),
@@ -1275,6 +1281,8 @@ def _kinase_substrate_heatmap(
     contrast: str,
     kinase_token: str | None,
 ) -> pn.viewable.Viewable:
+    method = _kinase_activity(adata).get("method", "ksea")
+    labels = kinase_method_labels(method)
     row = _selected_kinase_row(results, contrast, kinase_token)
     if row is None:
         return pn.Spacer(width=800, height=1)
@@ -1372,6 +1380,7 @@ def _kinase_substrate_heatmap(
     ).to_numpy(dtype=object)
 
     export_frame = _build_kinase_substrate_export_df(
+        method=method,
         kinase_row=row,
         contrast=contrast,
         site_ids=site_ids,
@@ -1433,7 +1442,7 @@ def _kinase_substrate_heatmap(
         min(650, 150 + 18 * len(site_ids)),
     )
     fig.update_layout(
-        title={"text": f"Substrate profiles — {kinase}", "x": 0.5},
+        title={"text": f"{labels['method']} substrate profiles — {kinase}", "x": 0.5},
         height=heatmap_height,
         autosize=True,
         margin={"l": 110, "r": 20, "t": 55, "b": 90},
@@ -1491,10 +1500,13 @@ def _kinase_detail_card(
     results: pd.DataFrame,
     contrast: str,
     kinase_token: str | None,
+    method: str | None = None,
 ) -> pn.viewable.Viewable:
     row = _selected_kinase_row(results, contrast, kinase_token)
     if row is None:
         return pn.Spacer(width=800, height=1)
+
+    labels = kinase_method_labels(method if method is not None else row.get("method", "ksea"))
 
     kinase = _text_value(
         row.get("kinase", ""),
@@ -1507,7 +1519,7 @@ def _kinase_detail_card(
 
     Number = pn.indicators.Number
     effect = Number(
-        name="Mean shift",
+        name=labels["effect"],
         value=float(row["effect"]),
         format="{value:.3f}",
         default_color="red",
@@ -1515,7 +1527,7 @@ def _kinase_detail_card(
         styles={"flex": "1"},
     )
     activity = Number(
-        name="Z-score",
+        name=labels["score"],
         value=float(row["activity_score"]),
         format="{value:.3f}",
         default_color="purple",
@@ -1540,7 +1552,7 @@ def _kinase_detail_card(
     )
 
     header = pn.pane.Markdown(
-        f"**Kinase**: {kinase}",
+        f"**{labels['method']} kinase**: {kinase}",
         styles={"font-size": "16px", "padding": "0", "line-height": "0px"},
     )
 
@@ -1619,7 +1631,9 @@ def _coordinated_enrichment_figure(
     metric: str,
     show_term_labels: bool,
     max_terms: int = _ENRICHMENT_MAX_TERMS,
+    method: str = "ksea",
 ) -> go.Figure:
+    labels = kinase_method_labels(method)
     metric_columns = {
         "signal": "signal",
         "fdr": "score",
@@ -1718,8 +1732,8 @@ def _coordinated_enrichment_figure(
         )
         direction_labels = visible["direction"].map(
             {
-                "activated": "Activated (KSEA Z > 0)",
-                "inhibited": "Inhibited (KSEA Z < 0)",
+                "activated": f"Activated ({labels['method']} {labels['score']} > 0)",
+                "inhibited": f"Inhibited ({labels['method']} {labels['score']} < 0)",
             }
         )
         direction_query_sizes = np.asarray(
@@ -2501,7 +2515,8 @@ def kinases_tab(state: SessionState):
         if sign_threshold_value is None
         else sign_threshold_value
     )
-    method = _text_value(activity_payload.get("method", "ksea"), "ksea").upper()
+    labels = kinase_method_labels(activity_payload.get("method", "ksea"))
+    method = labels["method"]
     min_substrates = activity_payload.get("min_substrates", "n/a")
     database_metadata = activity_payload.get("database", {}) or {}
     database_filename = (
@@ -2568,7 +2583,7 @@ def kinases_tab(state: SessionState):
         key=str.casefold,
     )
     enrichment_background_label = (
-        "KSEA-tested kinases"
+        f"{method}-tested kinases"
         if _ENRICHMENT_USE_TESTED_BACKGROUND
         else "STRING species proteome"
     )
@@ -2729,6 +2744,7 @@ def kinases_tab(state: SessionState):
     detail = pn.panel(
         pn.bind(
             _kinase_detail_card,
+            method=method,
             results=results,
             contrast=contrast_sel,
             kinase_token=search_input,
@@ -2783,7 +2799,7 @@ def kinases_tab(state: SessionState):
     activity_filter.param.watch(_update_activity_heatmap, "value")
     activity_info = pn.widgets.TooltipIcon(
         value=f"""
-        Cells show signed Z-scores; untested kinase–contrast pairs are blank.
+        Cells show {method} {labels['score']}; untested kinase–contrast pairs are blank.
         Significance symbols are * q < {sign_threshold:g}, ** q < 0.01,
         and *** q < 0.001.
         Kinases use average-linkage clustering with 1 − Spearman correlation.
@@ -2942,7 +2958,7 @@ def kinases_tab(state: SessionState):
                 )
             )
             background_labels[contrast] = (
-                f"{len(background_ids)} KSEA-tested kinases"
+                f"{len(background_ids)} {method}-tested kinases"
                 if _ENRICHMENT_USE_TESTED_BACKGROUND
                 else "STRING species proteome"
             )
@@ -3084,6 +3100,7 @@ def kinases_tab(state: SessionState):
                 sizing_mode="stretch_width",
             )
             figure = _coordinated_enrichment_figure(
+                method=method,
                 contrasts=displayed_contrasts,
                 frames=frames,
                 errors_by_contrast=errors_by_contrast,
@@ -3147,20 +3164,20 @@ def kinases_tab(state: SessionState):
     )
 
     enrichment_background_label = (
-        "KSEA-tested kinases"
+        f"{method}-tested kinases"
         if _ENRICHMENT_USE_TESTED_BACKGROUND
         else "STRING species proteome"
     )
     enrichment_background_explanation = (
-        "the contrast-specific set of all KSEA-tested kinases"
+        f"the contrast-specific set of all {method}-tested kinases"
         if _ENRICHMENT_USE_TESTED_BACKGROUND
         else "STRING's default whole-species proteome"
     )
     enrichment_info = pn.widgets.TooltipIcon(
         value=f"""
-        KSEA-significant kinases (q < {sign_threshold:g}) are split by their
-        signed activity Z-score. STRING enrichment is run separately for
-        activated kinases (Z > 0) and inhibited kinases (Z < 0), using
+        {method}-significant kinases (q < {sign_threshold:g}) are split by their
+        signed {labels['score']}. STRING enrichment is run separately for
+        activated kinases (score > 0) and inhibited kinases (score < 0), using
         {enrichment_background_explanation} as the enrichment background. All
         identifiers are first mapped to unique STRING IDs; directional queries
         with fewer than two mapped kinases are not run. The reference contrast
@@ -3173,13 +3190,13 @@ def kinases_tab(state: SessionState):
         styles={"z-index": "10"},
     )
     enrichment_legend = pn.pane.HTML(
-        """
+        f"""
         <div style="display:flex;align-items:center;gap:22px;padding:0 4px;"
              aria-label="Enrichment plot legend">
           <span><span style="color:#d62728;font-size:20px;vertical-align:-1px;">●</span>
-            Activated (KSEA Z &gt; 0)</span>
+            Activated ({method} {labels['score']} &gt; 0)</span>
           <span><span style="color:#1f77b4;font-size:20px;vertical-align:-1px;">●</span>
-            Inhibited (KSEA Z &lt; 0)</span>
+            Inhibited ({method} {labels['score']} &lt; 0)</span>
           <span style="color:#666;position:relative;top:2px;">Dot size: contributing kinases</span>
         </div>
         """,

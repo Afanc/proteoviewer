@@ -11,6 +11,7 @@ import pandas as pd
 import panel as pn
 
 from utils.session_state import SessionState
+from utils.data_contract import covariate_adjusted, require_unique_labels, kinase_method_labels
 
 
 @dataclass(frozen=True)
@@ -226,6 +227,8 @@ def build_volcano_selection_df(
     samples = list(map(str, adata.obs_names))
 
     # Validate feature ids exist and map to indices
+    require_unique_labels(adata.var_names, "Feature axis")
+    require_unique_labels(adata.obs_names, "Sample axis")
     var_index = {str(v): i for i, v in enumerate(map(str, adata.var_names))}
     idx: list[int] = []
     for fid in feature_ids:
@@ -276,6 +279,9 @@ def build_volcano_selection_df(
         df[f"ADJUSTED_LOG2FC_{ctag}"] = df_fc_adj.loc[df.index, contrast].astype(float).values
         df[f"ADJUSTED_PVALUE_{ctag}"] = df_p_adj.loc[df.index, contrast].astype(float).values
         df[f"ADJUSTED_QVALUE_{ctag}"] = df_q_adj.loc[df.index, contrast].astype(float).values
+        provenance = covariate_adjusted(adata, contrast)
+        if provenance is not None:
+            df[f"COVARIATE_ADJUSTED_{ctag}"] = provenance.reindex(df.index)
 
         if df_cov_part is not None:
             df[f"COVARIATE_PART_{ctag}"] = df_cov_part.loc[df.index, contrast].astype(float).values
@@ -328,7 +334,7 @@ def build_kinase_selection_df(
     uniprot_var_col: str = "KINASE_UNIPROT",
     id_col_name: str = "KINASE_ID",
 ) -> pd.DataFrame:
-    """Build a contrast-local KSEA volcano selection export."""
+    """Build a contrast-local kinase selection export using the producer method."""
     _require(bool(feature_ids), "No kinase volcano datapoints selected.")
 
     payload = state.adata.uns.get("kinase_activity")
@@ -337,6 +343,7 @@ def build_kinase_selection_df(
         "Cannot export kinase selection: missing adata.uns['kinase_activity'].",
     )
     results = payload.get("results")
+    labels = kinase_method_labels(payload.get("method", "ksea"))
     _require(
         isinstance(results, pd.DataFrame),
         "Cannot export kinase selection: kinase activity results are missing.",
@@ -468,7 +475,8 @@ def build_kinase_selection_df(
     export["TESTED"] = tested.to_numpy(dtype=bool)
     export["SIGNIFICANT"] = significant.to_numpy(dtype=bool)
     export["SIGN_THRESHOLD"] = float(sign_threshold)
-    export["KSEA_DIRECTION"] = direction.astype(str)
+    export["METHOD"] = labels["method"]
+    export[labels["direction_column"]] = direction.astype(str)
     export["STRING_INPUT_IDENTIFIER"] = string_input.astype(str)
     export["STRING_QUERY_INPUT"] = string_query.to_numpy(dtype=bool)
     export["STRING_QUERY_ACTIVATED_INPUT"] = (
@@ -487,8 +495,8 @@ def build_kinase_selection_df(
     export["GLOBAL_MEAN_LOG2FC"] = pd.to_numeric(
         sub["global_mean_log2fc"], errors="coerce"
     )
-    export["MEAN_SHIFT"] = pd.to_numeric(sub["effect"], errors="coerce")
-    export["ACTIVITY_Z_SCORE"] = activity_score
+    export[labels["effect_column"]] = pd.to_numeric(sub["effect"], errors="coerce")
+    export[labels["score_column"]] = activity_score
     export["PVALUE"] = pd.to_numeric(sub["pvalue"], errors="coerce")
     export["QVALUE"] = qvalue
     export["DATABASE_SOURCE"] = sources.astype(str)

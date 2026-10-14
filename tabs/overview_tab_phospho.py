@@ -12,6 +12,7 @@ import pandas as pd
 import panel as pn
 from bokeh.models.widgets.tables import NumberFormatter
 from utils.session_state import SessionState
+from utils.data_contract import covariate_inference_labels
 
 from components.overview_plots import (
     plot_barplot_proteins_per_sample,
@@ -157,9 +158,11 @@ def _make_adata_views(adata):
     df_cov_part = _df_opt("cov_part")
 
     # layers frequently queried
-    spectral_counts = pd.DataFrame(
-        adata.layers["spectral_counts"], index=adata.obs_names, columns=var_index
-    )
+    sc = adata.layers.get("spectral_counts")
+    spectral_counts = None
+    if sc is not None:
+        sc = sc.toarray() if hasattr(sc, "toarray") else sc
+        spectral_counts = pd.DataFrame(sc, index=adata.obs_names, columns=var_index)
 
     # optional layer
     locprob = adata.layers.get("locprob", None)
@@ -419,15 +422,17 @@ def overview_tab_phospho(state: SessionState):
     contrasts = contrast_names
     contrast_sel = pn.widgets.Select(name="Contrast", options=contrasts, value=contrasts[0], width=180)
 
-    # which volcano to plot
+    # Current standard statistics may contain both adjusted and fallback cells.
+    has_provenance = "covariate_adjusted" in adata.varm
+    standard_label = "Phospho (model)" if has_provenance else "Phospho (adj.)"
     volcano_src_opts = (["Phospho (raw)"] if not has_cov
-                        else ["Phospho (adj.)", "Phospho (raw)", "Flowthrough"])
+                        else [standard_label, "Phospho (raw)", "Flowthrough"])
     volcano_src_sel = pn.widgets.Select(name="Volcano source", options=volcano_src_opts, value=volcano_src_opts[0], width=130)
 
     def _volcano_dtype(label: str) -> str:
         return {
             "Phospho (raw)"      : "phospho",
-            "Phospho (adj.)" : "default",
+            standard_label : "default",
             "Flowthrough"   : "flowthrough",
         }[label]
 
@@ -436,7 +441,8 @@ def overview_tab_phospho(state: SessionState):
     show_imp_cond2 = pn.widgets.Checkbox(name="", value=True)
 
     color_options = ["Significance", "Observations"] + (["Raw LogFC", "Adj. LogFC", "FT LogFC"] if has_cov else [])
-    color_by = pn.widgets.Select(name="Color by", options=color_options, value=color_options[0], width=120)
+    color_labels = {("Model LogFC" if has_provenance and c == "Adj. LogFC" else c): c for c in color_options}
+    color_by = pn.widgets.Select(name="Color by", options=color_labels, value=color_options[0], width=120)
 
     make_toggle_label_updater(
         contrast_sel=contrast_sel,
@@ -796,7 +802,7 @@ def overview_tab_phospho(state: SessionState):
         lfc_raw = float(df_raw_fc.loc[site_id, contrast])
         cov_piece = float(df_cov_part.loc[site_id, contrast]) if df_cov_part is not None else float("nan")
 
-        loc_score = "n/a"
+        loc_score = float("nan")
         if df_locprob is not None:
             col = df_locprob.columns[idx]
             loc_score = float(np.nanmax(df_locprob[col].values))
@@ -804,8 +810,12 @@ def overview_tab_phospho(state: SessionState):
         parent_pep = str(vcol("PARENT_PEPTIDE_ID").iloc[idx]) if vcol("PARENT_PEPTIDE_ID") is not None else "n/a"
         parent_prot = str(vcol("PARENT_PROTEIN").iloc[idx]) if vcol("PARENT_PROTEIN") is not None else "n/a"
 
-        # Precursors (site, mean spectral counts)
-        pep_num_prec = int(np.nanmax(views["spectral_counts"].loc[:, site_id]))
+        # Optional precursor evidence: absent/all-missing is not a measured zero.
+        pep_num_prec = "Not available"
+        if views["spectral_counts"] is not None:
+            counts = views["spectral_counts"].loc[:, site_id].dropna()
+            if not counts.empty:
+                pep_num_prec = f"{counts.max():g}"
 
         uid_for_link = _first_token(parent_prot) or ""
         string_link = _cached_string_link(uid_for_link)
@@ -818,9 +828,11 @@ def overview_tab_phospho(state: SessionState):
         loc_ind = Number(name="Max(Loc. Score)", value=loc_score, format="{value:.3f}", default_color="gray",
                          font_size="12pt", styles={"flex": "1"})
         if has_cov:
-            q_ind = Number(name="FT-adj. q-value", value=q_adj, format="{value:.3e}", default_color="purple",
+            model_label = (covariate_inference_labels(adata, contrast).loc[site_id]
+                           if has_provenance else "FT-adj.")
+            q_ind = Number(name=f"{model_label} q-value", value=q_adj, format="{value:.3e}", default_color="purple",
                            font_size="12pt", styles={"flex": "1"})
-            lfc_ind = Number(name="FT-adj. log₂ FC", value=lfc_adj, format="{value:.3f}", default_color="purple",
+            lfc_ind = Number(name=f"{model_label} log₂ FC", value=lfc_adj, format="{value:.3f}", default_color="purple",
                              font_size="12pt", styles={"flex": "1"})
             covp_ind = Number(name="Covariate part", value=cov_piece, format="{value:.3f}", default_color="gray",
                           font_size="12pt", styles={"flex": "1"})
@@ -1008,7 +1020,7 @@ def overview_tab_phospho(state: SessionState):
         if has_cov:
             df_fc = views["df_log2fc"]
             df_q  = views["df_q"]
-            hdr_suffix = " (adj.)"
+            hdr_suffix = " (model)" if has_provenance else " (adj.)"
         else:
             df_fc = views["df_raw_fc"]
             df_q  = views["df_raw_q"]
@@ -1047,14 +1059,16 @@ def overview_tab_phospho(state: SessionState):
             .reset_index(drop=True)
             .rename(columns={"Site_html": "Site", "Q_sci": "Q-value"})
         )
+        if has_cov and has_provenance:
+            disp["Inference"] = covariate_inference_labels(adata, contrast).reindex(df.index).to_numpy()
 
         # highlight current row
         def _highlight_current(row):
             return ['background-color: rgba(255,235,59,0.35)']*len(row) if row["site_id"] == site_id else ['']*len(row)
 
         def _color_site_col(col):
-            # `col` is the 'Site' Series in display order; use precomputed row_colors
-            return [f'color: {c}' for c in row_colors]
+            # Colors were computed after sorting to the displayed site order.
+            return [f'color: {c}' for c in colors]
 
         styled = (disp.style
             .apply(_highlight_current, axis=1)

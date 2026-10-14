@@ -18,6 +18,7 @@ from components.overview_plots import (
 from components.plot_utils import (
     get_volcano_classification_masks,
     get_nrsc_alignment_mask,
+    pca_axis_options,
 )
 from utils.layout_utils import make_vr
 
@@ -526,14 +527,12 @@ def make_clustering_pane(
     Shared Clustering pane (PCA + MDS/UMAP) with identical layout/styling.
     MDS is used when 'X_mds' is present in adata.obsm; otherwise UMAP.
     """
+    pc_options = pca_axis_options(adata)
     pca_pc_sel = pn.widgets.Select(
         name="PCA axes",
-        options={
-            "PC1 vs PC2": (1, 2),
-            "PC1 vs PC3": (1, 3),
-            "PC2 vs PC3": (2, 3),
-        },
-        value=(1, 2),
+        options=pc_options,
+        value=next(iter(pc_options.values()), None),
+        disabled=not pc_options,
         width=110,
         margin=(0, 0, 0, 10),
         styles={"z-index": "10"},
@@ -555,7 +554,7 @@ def make_clustering_pane(
     def _pca_fig(pc, show_ellipses):
         return plot_pca_2d(
             adata=adata,
-            pc=tuple(pc),
+            pc=tuple(pc) if pc is not None else None,
             color_key=color_key,
             show_ellipses=bool(show_ellipses),
             width=None,

@@ -120,9 +120,9 @@ def overview_tab_pelsa(state: SessionState):
         raise KeyError("Missing adata.uns['pelsa']; PELSA overview requires PELSA export metadata.")
 
     concentration_col = str(pelsa_uns.get("concentration_column", "")).strip()
-    concentration_group_key = "Concentration"
-    conc_values = pd.to_numeric(adata.obs[concentration_col], errors="raise")
-    adata.obs[concentration_group_key] = conc_values.map(lambda x: f"{x:g}").astype(str)
+    # Group on the source dose column. Formatting belongs in plot labels, never obs.
+    concentration_group_key = concentration_col
+    pd.to_numeric(adata.obs[concentration_col], errors="raise")
 
     # Normalize protein/gene names
     def _build_search_options(ad):
