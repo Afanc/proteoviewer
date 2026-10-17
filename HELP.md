@@ -68,6 +68,9 @@ Less sensitive to outliers than CV.
 
 Standard dimensionality reduction methods for sample relationships.
 
+Only available PCA axis pairs are offered. If the result contains fewer than
+two components, the 2D plot shows an informative empty state.
+
 - PCA: https://en.wikipedia.org/wiki/Principal_component_analysis
 - MDS: https://en.wikipedia.org/wiki/Multidimensional_scaling
 
@@ -84,7 +87,8 @@ Volcano plots display differential expression results for a selected contrast.
 
 - **Proteomics / Peptidomics**: standard volcano
 - **Phosphoproteomics**:
-  - **Phospho (adj.)**: covariate-adjusted phospho signal
+  - **Phospho (model)**: producer-selected adjusted or unadjusted fallback statistics;
+    detail shows the inference used when provenance is available.
   - **Phospho (raw)**: raw phospho signal
   - **Flowthrough**: protein-level (covariate) signal
 
@@ -145,7 +149,10 @@ These affect the **barplot and detailed views**, not the volcano itself:
 - **Raw**: original intensities
 - **Log-only**: log-transformed, before normalization
 - **Final / Normalized**: processed intensities used for statistics
-- **Spectral Counts**: number of quantified precursors
+- **Spectral Counts**: number of quantified precursors, when available.
+  Missing evidence hides this option; phospho detail shows “Not available”, not zero.
+
+Normalization distributions retain valid zero and negative log values. 
 
 ---
 
@@ -219,6 +226,24 @@ When exporting from the volcano:
 1. **Single clicked datapoint** → export that protein
 2. **Cohort defined** → export cohort
 3. **Lasso / box selection** → export selected proteins
+
+Phospho CSVs retain the existing `ADJUSTED_*` columns for standard model results
+and add `COVARIATE_ADJUSTED_<CONTRAST>` when provided by ProteoFlux (`False`
+indicates fallback inference). The statistics themselves are unchanged.
+
+### Kinase methods and exports
+
+KSEA displays mean shift and Z-score. PhosX displays signed weighted KS and
+Activity score; shared components identify the producer method in titles,
+details and legends. Kinase CSVs include `METHOD`. PhosX selection columns are
+`KS_SCORE`, `ACTIVITY_SCORE` and `PHOSX_DIRECTION`; its substrate CSV uses
+`PHOSX_ACTIVITY_SCORE`. KSEA retains its previous column names.
+
+### PELSA concentrations
+
+Dose grouping, sorting and curve labels preserve the loaded numeric
+concentrations. "Control" follows the producer's control designation, including
+nonzero/negative control sentinels.
 
 ---
 
