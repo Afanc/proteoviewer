@@ -40,7 +40,7 @@ DEV = os.getenv("PV_DEV", "0") == "1"
 FROZEN = bool(getattr(sys, "frozen", False))
 DESKTOP = (sys.platform == "win32") and FROZEN
 
-APP_VERSION_DESKTOP = "1.10.3"
+APP_VERSION_DESKTOP = "1.10.5"
 
 def _resource_file(name: str) -> Path:
     """
@@ -589,8 +589,8 @@ def build_app():
             try:
                 from anndata import read_h5ad
                 #adata = read_h5ad("data/proteoflux_results_pelsa.h5ad")
-                adata = read_h5ad("data/proteoflux_results_phospho.h5ad")
-                #adata = read_h5ad("data/proteoflux_results.h5ad")
+                #adata = read_h5ad("data/proteoflux_results_phospho.h5ad")
+                adata = read_h5ad("data/proteoflux_results.h5ad")
                 _load(adata, "proteoflux_results.h5ad")
                 logging.info("DEV autoload successful.")
             except Exception:

@@ -585,8 +585,8 @@ def overview_tab(state: SessionState):
 
     layers_sel = pn.widgets.Select(
         name="Protein Data View",
-        description=("Spectral counts are not available for this dataset."
-                     if "spectral_counts" not in adata.layers else "Intensity or precursor evidence"),
+        description=("Spectral counts are not available for this dataset.")
+                     if "spectral_counts" not in adata.layers else None,
         options=layers,
         value=layers[0],
         width=130,
