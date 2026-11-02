@@ -588,7 +588,12 @@ def plot_protein_coverage(adata, uniprot_id: str, contrast: str) -> Optional[go.
     )).lower()
     if analysis_type not in {"dia", "dda", "proteomics"}:
         return None
+    is_group = ";" in str(uniprot_id)
+    reference_id = str(uniprot_id).split(";")[0].strip() if is_group else str(uniprot_id)
+    coverage_title = (f"Protein coverage — {reference_id} (first protein of {uniprot_id})"
+                      if is_group else "Protein coverage")
     block = adata.uns.get("peptides", {})
+    has_coverage_payload = "protein_coverage" in adata.uns
     coverage_fields = (
         "reference_accession", "protein_length_aa", "peptide_start", "peptide_end",
         "peptide_mapping_status", "tryptic_missed_cleavages",
@@ -600,14 +605,16 @@ def plot_protein_coverage(adata, uniprot_id: str, contrast: str) -> Optional[go.
                            x=.5, y=.5, xref="paper", yref="paper", showarrow=False)
         fig.update_layout(height=90, margin=dict(l=10, r=10, t=10, b=10),
                           xaxis_visible=False, yaxis_visible=False)
+        if is_group:
+            fig.update_layout(title=dict(text=coverage_title, x=.5), margin_t=40)
         return fig
 
-    if not all(field in block for field in coverage_fields):
+    if not has_coverage_payload and not all(field in block for field in coverage_fields):
         return unavailable("Protein coverage unavailable<br>Coverage metadata missing from this file.")
 
     rows = list(block.get("rows", []))
     cols = list(map(str, block.get("cols", [])))
-    fields = ("protein_index", "peptide_seq", *coverage_fields)
+    fields = ("protein_index", "peptide_seq") + (() if has_coverage_payload else coverage_fields)
     if not rows or any(np.asarray(block.get(field, [])).shape != (len(rows),) for field in fields):
         return unavailable()
     raw = np.asarray(block.get("raw", []))
@@ -623,15 +630,46 @@ def plot_protein_coverage(adata, uniprot_id: str, contrast: str) -> Optional[go.
     metadata = pd.DataFrame({field: block[field] for field in fields}, index=rows)
     selected = metadata["protein_index"].astype(str).eq(str(uniprot_id))
     metadata = metadata.loc[selected].copy()
-    if metadata.empty or metadata["peptide_mapping_status"].eq("ambiguous_protein_group").any():
+    if has_coverage_payload:
+        # The normalized payload is authoritative. Never fall back to legacy
+        # fields or a later accession when the first reference is unresolved.
+        try:
+            coverage = adata.uns["protein_coverage"]
+            if coverage["version"] != 1:
+                return unavailable()
+            references = pd.DataFrame({field: coverage["references"][field] for field in (
+                "protein_index", "accession", "protein_length_aa", "accession_order",
+            )})
+            references = references.loc[references["protein_index"].eq(str(uniprot_id))]
+            references = references.sort_values("accession_order")
+            if references.empty or references.iloc[0]["accession"] != reference_id:
+                return unavailable()
+            reference = references.iloc[0]
+            mappings = pd.DataFrame({field: coverage["peptide_mappings"][field] for field in (
+                "protein_index", "peptide_id", "accession", *coverage_fields[2:],
+            )})
+            mappings = mappings.loc[mappings["protein_index"].eq(str(uniprot_id))
+                                    & mappings["accession"].eq(reference["accession"])]
+            require_unique_labels(mappings["peptide_id"], "Coverage peptide axis")
+            metadata = metadata.join(mappings.set_index("peptide_id")[list(coverage_fields[2:])])
+            metadata["reference_accession"] = reference["accession"]
+            metadata["protein_length_aa"] = reference["protein_length_aa"]
+        except (KeyError, TypeError, ValueError):
+            return unavailable()
+    if metadata.empty or (not is_group and metadata["peptide_mapping_status"].eq("ambiguous_protein_group").any()):
         return unavailable()
     for field in ("protein_length_aa", "peptide_start", "peptide_end", "tryptic_missed_cleavages"):
         metadata[field] = pd.to_numeric(metadata[field], errors="coerce")
 
     references = metadata["reference_accession"].astype(str)
-    resolved = references.ne("")
+    # Keep group quantities, but draw only coordinates explicitly exported for
+    # its first accession. Never reuse another member's coordinate system.
+    resolved = references.eq(reference_id) if is_group else references.ne("")
+    if is_group and not (resolved & metadata["peptide_mapping_status"].eq("mapped")).any():
+        return unavailable("Protein coverage unavailable/ambiguous<br>"
+                           f"No exported peptide coordinates for first accession {reference_id}.")
     lengths = metadata.loc[resolved, "protein_length_aa"].unique()
-    if (not resolved.any() or not references[resolved].eq(str(uniprot_id)).all()
+    if (not resolved.any() or not references[resolved].eq(reference_id).all()
             or len(lengths) != 1 or not np.isfinite(lengths[0])
             or lengths[0] < 1 or lengths[0] != int(lengths[0])):
         return unavailable()
@@ -657,6 +695,10 @@ def plot_protein_coverage(adata, uniprot_id: str, contrast: str) -> Optional[go.
     )
     metadata = metadata.join(diagnostics)
 
+    # Match Peptide Trends' sequence colors before filtering drawable mappings.
+    palette = px.colors.qualitative.Prism
+    sequences = sorted(metadata["peptide_seq"].astype(str).unique())
+    hover_colors = {seq: palette[i % len(palette)] for i, seq in enumerate(sequences)}
     start, end = metadata["peptide_start"], metadata["peptide_end"]
     missed = metadata["tryptic_missed_cleavages"]
     valid = (
@@ -702,6 +744,7 @@ def plot_protein_coverage(adata, uniprot_id: str, contrast: str) -> Optional[go.
             y=[sd if valid_sd else 0], yaxis="y" if valid_sd else "y2", orientation="h",
             width=2 * peptide_halfheight if valid_sd else (0.5 if has_sd else 0.08),
             marker=marker,
+            hoverlabel=dict(bgcolor=hover_colors[str(row["peptide_seq"])]),
             customdata=[hover], showlegend=False,
             hovertemplate=("Peptide: %{customdata[0]}<br>Start/end: %{customdata[1]}–%{customdata[2]}<br>"
                            "Observed samples: %{customdata[4]} / %{customdata[5]}<br>"
@@ -709,7 +752,7 @@ def plot_protein_coverage(adata, uniprot_id: str, contrast: str) -> Optional[go.
                            + sd_hover + fc_hover + "<extra></extra>"),
         ))
     fig.update_layout(
-        title=dict(text="Protein coverage", x=.5), template="plotly", height=285,
+        title=dict(text=coverage_title, x=.5), template="plotly", height=285,
         # Reserve colorbar space even when every peptide is grey.
         # Without auto expansion, reserve axis-label space plus padding below it.
         barmode="overlay", margin=dict(l=55, r=80, t=50, b=60, autoexpand=False),

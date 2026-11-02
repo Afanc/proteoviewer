@@ -177,6 +177,12 @@ ProteoFlux. Both diagnostics use **log2 of positive, finite raw peptide
 intensities**, restricted to the selected contrast. They do not use imputed
 protein values, and the Raw/Log-only/Processed selector does not change them.
 
+For multi-protein groups, the title identifies the **first accession** selected
+for coverage. Only coordinates explicitly exported for that accession are drawn;
+peptide quantities still belong to the selected group. If those coordinates are
+absent or ambiguous, the plot says so rather than using another member or mapping
+a sequence in Viewer.
+
 **Peptide SD** is pooled within-condition variation. For each peptide, subtract
 its mean within each condition, then calculate:
 
@@ -216,6 +222,14 @@ Viewer retains those identities, including modifications retained by the produce
 Missing or duplicate sequence identities are left unscored rather than aggregated.
 Other eligible peptides contribute even if their coordinates cannot be drawn.
 This calculation does not use exported protein abundance or rerun protein rollup.
+
+**Reference log2FC** is this median of other peptides' raw-intensity log2FCs, specific
+to the peptide being scored because that peptide is excluded. A single-peptide
+protein therefore has no reference. It is distinct from the protein-level log2FC shown
+in volcano detail, which comes from ProteoFlux's exported `varm.log2fc` model
+coefficients on processed protein quantities. Protein rollup, normalization,
+missing-data handling and model design can make that value differ from this
+median of raw peptide fold changes.
 
 Disagreement is in **log2 units**, with zero meaning the same estimated FC as
 the reference. The sequential color scale is fixed across proteins at **0–2**;
