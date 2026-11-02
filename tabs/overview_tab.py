@@ -11,6 +11,7 @@ from components.overview_plots import (
     plot_intensity_by_protein,
     get_protein_info,
     plot_peptide_trends_centered,
+    plot_protein_coverage,
 )
 from components.selection_export import (
     make_volcano_selection_downloader,
@@ -384,6 +385,7 @@ def overview_tab(state: SessionState):
     )
 
     wire_min_meas_disabled_by_min_precursors(
+        adata=adata,
         min_meas_sel=min_meas_sel,
         min_prec_sel=min_prec_sel,
         min_prec_value_fn=_min_prec_value,
@@ -907,6 +909,7 @@ def overview_tab(state: SessionState):
     info_holder = pn.Column()
     bar_holder  = pn.Column()
     pep_holder  = pn.Column()
+    coverage_holder = pn.Column(visible=False)
 
     #detail_panel = pn.Row(
     #    pn.Column(
@@ -924,6 +927,7 @@ def overview_tab(state: SessionState):
         bar_holder,
         pn.Spacer(height=20),
         pep_holder,
+        coverage_holder,
         width=840,
     )
 
@@ -1080,6 +1084,8 @@ def overview_tab(state: SessionState):
         _sync_detail_mode()
 
     def _update_pep(_=None):
+        coverage_holder.clear()
+        coverage_holder.visible = False
         if not search_input.value:
             pep_holder.loading = False
             pep_holder[:] = [pn.Spacer(width=800, height=320)]
@@ -1087,6 +1093,16 @@ def overview_tab(state: SessionState):
         pep_holder.loading = True
         try:
             pep_holder[:] = [_render_pep()]
+            uid = _current_uniprot_id()
+            if uid:
+                coverage = plot_protein_coverage(state.adata, uid, contrast_sel.value)
+                if coverage is not None:
+                    coverage_holder[:] = [pn.pane.Plotly(
+                        coverage, height=235, width=800,
+                        margin=(15, 0, 0, 0),
+                        styles={'border-radius': '8px', 'box-shadow': '3px 3px 5px #bcbcbc'},
+                    )]
+                    coverage_holder.visible = True
         finally:
             pep_holder.loading = False
         _sync_detail_mode()

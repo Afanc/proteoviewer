@@ -482,6 +482,7 @@ def overview_tab_phospho(state: SessionState):
     )
 
     wire_min_meas_disabled_by_min_precursors(
+        adata=adata,
         min_meas_sel=min_meas_sel,
         min_prec_sel=min_prec_sel,
         min_prec_value_fn=_min_prec_value,

@@ -1,6 +1,7 @@
 import panel as pn
 from concurrent.futures import ThreadPoolExecutor
 from utils.session_state import SessionState
+from tabs.overview_shared import make_id_sort_toggle, sort_arg
 from components.preprocessing_plots import (
     plot_filter_histograms,
     plot_dynamic_range,
@@ -144,20 +145,36 @@ def preprocessing_tab(state: SessionState):
         styles={"z-index": "10"},
     )
 
-    mc_plot_holder = pn.Column(sizing_mode="stretch_width")
+    mc_sort = make_id_sort_toggle(margin=(0, 0, 0, 10), width=170)
+    mc_unavailable = _placeholder_plot("Missed cleavages")
+    mc_plot = plotly_section(mc_unavailable, height=400, flex="1")
+    mc_payload = adata.uns.get("preprocessing", {}).get("distributions", {}).get(
+        "missed_cleavages_per_sample") or {}
+    mc_samples = list(map(str, mc_payload.get("samples", [])))
+    mc_conditions = adata.obs["CONDITION"].astype(str).to_dict()
 
-    def _render_mc_plot(mode: str):
-        fig = missed_cleav_raw_fig if mode == "Raw" else missed_cleav_w_fig
+    def _render_mc_plot(_event=None):
+        fig = missed_cleav_raw_fig if mc_mode.value == "Raw" else missed_cleav_w_fig
         if fig is None:
-            fig = _placeholder_plot("Missed cleavages")
-        mc_plot_holder[:] = [plotly_section(fig, height=400, flex="1")]
+            fig = mc_unavailable
+        if sort_arg(mc_sort.value) == "condition":
+            order = sorted(mc_samples, key=lambda sample: (mc_conditions.get(sample, "Unknown"), sample))
+        else:
+            order = sorted(mc_samples)
+        # Only the category order changes; both stored series retain their values.
+        fig.update_xaxes(categoryorder="array", categoryarray=order)
+        if mc_plot.object is fig:
+            mc_plot.param.trigger("object")
+        else:
+            mc_plot.object = fig
 
-    _render_mc_plot(mc_mode.value)
-    mc_mode.param.watch(lambda e: _render_mc_plot(e.new), "value")
+    _render_mc_plot()
+    mc_mode.param.watch(_render_mc_plot, "value")
+    mc_sort.param.watch(_render_mc_plot, "value")
 
     missed_cleav_pane = pn.Column(
-        pn.Row(mc_mode, styles={"z-index": "10"}, margin=(10, 0, 0, 0)),
-        pn.Row(mc_plot_holder, margin=(-30, 5, 0, 0)),
+        pn.Row(mc_mode, mc_sort, styles={"z-index": "10"}, margin=(10, 0, 0, 0)),
+        pn.Row(mc_plot, margin=(-30, 5, 0, 0)),
         sizing_mode="stretch_width",
         styles={"flex": "0.4"},
     )

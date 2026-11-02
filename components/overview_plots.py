@@ -531,6 +531,214 @@ def resolve_exact_list_to_uniprot_ids(adata, field: str, items: List[str] | Set[
 
         return set(u for u in ids_arr if u in items_norm)
 
+def _protein_coverage_diagnostics(
+    log_values: pd.DataFrame, conditions: pd.Series, groups: list[str],
+    peptide_sequences: pd.Series,
+) -> pd.DataFrame:
+    """Local diagnostics on labelled log2 peptide measurements for one contrast.
+
+    SD pools residuals about each condition's own peptide mean, dividing their
+    sum of squares by N_valid - K_valid (not by N_valid - 1). No residual degrees
+    of freedom means NA, whereas sufficient constant measurements give SD zero.
+
+    Peptide log2FC is mean(groups[0]) - mean(groups[1]), requiring at least two
+    finite observations in each condition. Disagreement is the absolute distance
+    from the median log2FC of at least two OTHER eligible peptide sequences.
+    Individual FCs are calculated before taking the median. Exported sequence
+    identities already collapse charge states; missing or duplicate identities
+    are left unscored rather than inventing an aggregation. No values are filled.
+    See HELP.md for interpretation and limits of this local diagnostic.
+    """
+    values = log_values.where(np.isfinite(log_values))
+    conditions = conditions.reindex(values.columns)
+    residual_ss = pd.Series(0.0, index=values.index)
+    residual_df = pd.Series(0, index=values.index)
+    for condition in conditions.dropna().unique():
+        group = values.loc[:, conditions.eq(condition)]
+        residuals = group.sub(group.mean(axis=1), axis=0)
+        residual_ss += residuals.pow(2).sum(axis=1)
+        residual_df += (group.count(axis=1) - 1).clip(lower=0)
+    within_sd = np.sqrt(residual_ss / residual_df.where(residual_df > 0))
+
+    a = values.loc[:, conditions.eq(groups[0])]
+    b = values.loc[:, conditions.eq(groups[1])]
+    sequences = peptide_sequences.reindex(values.index)
+    eligible = (a.count(axis=1).ge(2) & b.count(axis=1).ge(2)
+                & sequences.notna() & sequences.ne("") & ~sequences.duplicated(keep=False))
+    peptide_fc = (a.mean(axis=1) - b.mean(axis=1)).where(eligible)
+    reference_fc = pd.Series(np.nan, index=values.index)
+    for peptide in values.index[eligible]:
+        other_fc = peptide_fc.loc[sequences.ne(sequences.loc[peptide])].dropna()
+        if len(other_fc) >= 2:
+            reference_fc.loc[peptide] = other_fc.median()
+    return pd.DataFrame({
+        "within_sd": within_sd, "peptide_log2fc": peptide_fc,
+        "reference_log2fc": reference_fc, "disagreement": (peptide_fc - reference_fc).abs(),
+    })
+
+
+def plot_protein_coverage(adata, uniprot_id: str, contrast: str) -> Optional[go.Figure]:
+    """Display exported peptide coordinates with local log2 intensity diagnostics.
+
+    No sequence mapping or isoform fallback is performed. Missing optional
+    coverage metadata and unusable mappings get a compact unavailable state.
+    """
+    analysis_type = str(adata.uns.get("analysis", {}).get(
+        "analysis_type", adata.uns.get("preprocessing", {}).get("analysis_type", "")
+    )).lower()
+    if analysis_type not in {"dia", "dda", "proteomics"}:
+        return None
+    block = adata.uns.get("peptides", {})
+    coverage_fields = (
+        "reference_accession", "protein_length_aa", "peptide_start", "peptide_end",
+        "peptide_mapping_status", "tryptic_missed_cleavages",
+    )
+
+    def unavailable(message="Protein coverage unavailable/ambiguous"):
+        fig = go.Figure()
+        fig.add_annotation(text=message,
+                           x=.5, y=.5, xref="paper", yref="paper", showarrow=False)
+        fig.update_layout(height=90, margin=dict(l=10, r=10, t=10, b=10),
+                          xaxis_visible=False, yaxis_visible=False)
+        return fig
+
+    if not all(field in block for field in coverage_fields):
+        return unavailable("Protein coverage unavailable<br>Coverage metadata missing from this file.")
+
+    rows = list(block.get("rows", []))
+    cols = list(map(str, block.get("cols", [])))
+    fields = ("protein_index", "peptide_seq", *coverage_fields)
+    if not rows or any(np.asarray(block.get(field, [])).shape != (len(rows),) for field in fields):
+        return unavailable()
+    raw = np.asarray(block.get("raw", []))
+    if raw.shape != (len(rows), len(cols)):
+        return unavailable()
+    try:
+        require_unique_labels(rows, "Peptide row axis")
+        require_unique_labels(cols, "Peptide sample axis")
+        require_unique_labels(adata.obs_names, "Sample axis")
+    except ValueError:
+        return unavailable()
+
+    metadata = pd.DataFrame({field: block[field] for field in fields}, index=rows)
+    selected = metadata["protein_index"].astype(str).eq(str(uniprot_id))
+    metadata = metadata.loc[selected].copy()
+    if metadata.empty or metadata["peptide_mapping_status"].eq("ambiguous_protein_group").any():
+        return unavailable()
+    for field in ("protein_length_aa", "peptide_start", "peptide_end", "tryptic_missed_cleavages"):
+        metadata[field] = pd.to_numeric(metadata[field], errors="coerce")
+
+    references = metadata["reference_accession"].astype(str)
+    resolved = references.ne("")
+    lengths = metadata.loc[resolved, "protein_length_aa"].unique()
+    if (not resolved.any() or not references[resolved].eq(str(uniprot_id)).all()
+            or len(lengths) != 1 or not np.isfinite(lengths[0])
+            or lengths[0] < 1 or lengths[0] != int(lengths[0])):
+        return unavailable()
+    length = int(lengths[0])
+
+    groups = str(contrast).split("_vs_")
+    if len(groups) != 2 or "CONDITION" not in adata.obs:
+        return unavailable()
+    conditions = adata.obs["CONDITION"].astype(str)
+    if not all(conditions.eq(group).any() for group in groups):
+        return unavailable()
+    samples = adata.obs_names[conditions.isin(groups)]
+    # uns tables have independent axes. Absent sample columns remain missing,
+    # and still contribute to the selected-contrast denominator.
+    values = pd.DataFrame(raw[selected.to_numpy()], index=metadata.index, columns=cols)
+    values = values.reindex(columns=samples).astype(float)
+    values = values.where(np.isfinite(values))
+    metadata["mean_intensity"] = values.mean(axis=1)
+    metadata["observed"] = values.notna().sum(axis=1)
+    # Exported peptide raw quantities are linear. No pseudocount or imputation.
+    diagnostics = _protein_coverage_diagnostics(
+        np.log2(values.where(values > 0)), conditions, groups, metadata["peptide_seq"],
+    )
+    metadata = metadata.join(diagnostics)
+
+    start, end = metadata["peptide_start"], metadata["peptide_end"]
+    missed = metadata["tryptic_missed_cleavages"]
+    valid = (
+        metadata["peptide_mapping_status"].eq("mapped") & resolved
+        & start.ge(1) & end.ge(start) & end.le(length)
+        & start.eq(np.floor(start)) & end.eq(np.floor(end))
+        & missed.ge(0) & np.isfinite(missed) & missed.eq(np.floor(missed))
+    )
+    metadata = metadata.loc[valid]
+    if metadata.empty:
+        return unavailable()
+
+    colorscale = "Sunset"
+    darker_sunset = px.colors.sequential.Sunset[1:]
+    colorscale = darker_sunset
+
+    finite_sd = metadata.loc[np.isfinite(metadata["within_sd"]), "within_sd"].to_numpy()
+    has_sd = bool(len(finite_sd))
+    has_na = len(finite_sd) < len(metadata)
+    peptide_halfheight = max(0.025 * float(np.ptp(finite_sd)) if has_sd else 0, 0.04)
+    max_sd = float(finite_sd.max()) if has_sd else 0
+    y_max = max(1.0, max_sd)
+    fig = go.Figure()
+    for peptide_id, row in metadata.iterrows():
+        sd, disagreement = row["within_sd"], row["disagreement"]
+        valid_sd = np.isfinite(sd)
+        marker = (dict(color=[min(disagreement, 2)], coloraxis="coloraxis", line_width=0)
+                  if valid_sd and np.isfinite(disagreement) else dict(color="#9e9e9e", line_width=0))
+        hover = [row["peptide_seq"], int(row["peptide_start"]), int(row["peptide_end"]),
+                 row["mean_intensity"], int(row["observed"]), len(samples),
+                 int(row["tryptic_missed_cleavages"]), peptide_id,
+                 f"{sd:.3f}" if np.isfinite(sd) else "NA",
+                 disagreement, row["peptide_log2fc"], row["reference_log2fc"]]
+        fc_hover = "".join(
+            f"{label}: " + (f"%{{customdata[{i}]:.3f}}" if np.isfinite(hover[i]) else "NA") + "<br>"
+            for i, label in enumerate(("Disagreement (log2)", "Peptide log2FC", "Reference log2FC"), start=9)
+        )
+        sd_hover = "SD: %{customdata[8]}" + ("" if valid_sd else " (insufficient observations)") + "<br>"
+        fig.add_trace(go.Bar(
+            base=[row["peptide_start"]],
+            x=[row["peptide_end"] - row["peptide_start"]],
+            # Missing SD uses a separate labelled lane, never numeric SD zero.
+            y=[sd if valid_sd else 0], yaxis="y" if valid_sd else "y2", orientation="h",
+            width=2 * peptide_halfheight if valid_sd else (0.5 if has_sd else 0.08),
+            marker=marker,
+            customdata=[hover], showlegend=False,
+            hovertemplate=("Peptide: %{customdata[0]}<br>Start/end: %{customdata[1]}–%{customdata[2]}<br>"
+                           "Observed samples: %{customdata[4]} / %{customdata[5]}<br>"
+                           "Missed cleavages: %{customdata[6]}<br>"
+                           + sd_hover + fc_hover + "<extra></extra>"),
+        ))
+    fig.update_layout(
+        title=dict(text="Protein coverage", x=.5), template="plotly", height=285,
+        # Reserve colorbar space even when every peptide is grey.
+        # Without auto expansion, reserve axis-label space plus padding below it.
+        barmode="overlay", margin=dict(l=55, r=80, t=50, b=60, autoexpand=False),
+        xaxis=dict(title="Protein position (aa)", range=[1, length]),
+        # Symmetric padding keeps rectangles clear of both vertical edges.
+        yaxis=dict(title="Peptide SD", type="linear", range=[-0.05 * y_max, 1.05 * y_max],
+                   tickmode="linear", tick0=0, dtick=1, showgrid=True, gridcolor="white",
+                   minor=dict(tick0=0, dtick=0.5, showgrid=True, gridcolor="white", ticks=""),
+                   zeroline=True, zerolinecolor="white"),
+        coloraxis=dict(colorscale=colorscale, cmin=0, cmax=2,
+                       colorbar=dict(title="Disagr.", tickmode="array",
+                                     tickvals=[0, 1, 2], ticktext=["0", "1", "≥2"],
+                                     len=1.0, thickness=7, ticks="")),
+    )
+    if has_na:
+        # Share protein coordinates while keeping NA outside the numeric SD axis.
+        # When no SD is available, show just the coverage lane and its NA label.
+        fig.update_layout(
+            xaxis=dict(anchor="y2"),
+            yaxis=dict(domain=[0.25, 1] if has_sd else [0, 1], visible=has_sd),
+            yaxis2=dict(
+                anchor="x", domain=[0, 0.14] if has_sd else [0, 1], range=[-0.5, 0.5],
+                title=None if has_sd else "Peptide SD", tickmode="array", tickvals=[0], ticktext=["NA"],
+                showgrid=False, zeroline=False,
+            ),
+        )
+    return fig
+
+
 @log_time("Plotting Peptide Trends (centered)")
 def plot_peptide_trends_centered(adata, uniprot_id: str, contrast: str) -> go.Figure:
     ## pull & slice matrices

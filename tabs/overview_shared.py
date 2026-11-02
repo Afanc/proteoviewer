@@ -725,6 +725,7 @@ def wire_min_meas_disabled_by_min_precursors(
     min_prec_sel: pn.widgets.Select,
     min_prec_value_fn: Callable[[str], int],
     contrast_sel: Optional[pn.widgets.Select] = None,
+    adata=None,
 ) -> Callable[[], None]:
     """
     Disable the non-imputed measurements-per-condition selector when the
@@ -732,13 +733,21 @@ def wire_min_meas_disabled_by_min_precursors(
 
     Rationale:
     once min consistent peptide/precursor evidence is used, the additional
-    min/condition control becomes confusing. We therefore force min/condition
-    to its maximum value and grey it out.
+    min/condition control becomes confusing. Use the smaller contrasted group
+    size and grey it out; retain the legacy maximum without pairwise context.
     """
     previous_enabled_value = {"value": min_meas_sel.value}
 
-    def _max_min_meas_label() -> str:
+    def _forced_min_meas_label() -> str:
         opts = list(min_meas_sel.options or [])
+        if adata is not None and contrast_sel is not None:
+            groups = str(contrast_sel.value).split("_vs_")
+            if len(groups) == 2 and "CONDITION" in adata.obs:
+                counts = adata.obs["CONDITION"].astype(str).value_counts()
+                sizes = [int(counts.get(group, 0)) for group in groups]
+                label = f"≥{min(sizes)}"
+                if min(sizes) > 0 and label in opts:
+                    return label
         return opts[-1] if opts else min_meas_sel.value
 
     def _prec_filter_active() -> bool:
@@ -758,9 +767,9 @@ def wire_min_meas_disabled_by_min_precursors(
             if not min_meas_sel.disabled:
                 previous_enabled_value["value"] = min_meas_sel.value
             min_meas_sel.disabled = True
-            max_label = _max_min_meas_label()
-            if max_label is not None:
-                min_meas_sel.value = max_label
+            forced_label = _forced_min_meas_label()
+            if forced_label is not None:
+                min_meas_sel.value = forced_label
             return
 
         min_meas_sel.disabled = False
@@ -772,9 +781,8 @@ def wire_min_meas_disabled_by_min_precursors(
     min_prec_sel.param.watch(_sync, "value")
 
     if contrast_sel is not None:
-        def _sync_after_contrast(_event=None) -> None:
-            pn.state.curdoc.add_next_tick_callback(_sync)
-        contrast_sel.param.watch(_sync_after_contrast, "value")
+        # make_min_meas_select registers its option refresh before this watcher.
+        contrast_sel.param.watch(_sync, "value")
 
     _sync()
     return _sync
