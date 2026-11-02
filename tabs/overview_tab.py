@@ -1098,7 +1098,7 @@ def overview_tab(state: SessionState):
                 coverage = plot_protein_coverage(state.adata, uid, contrast_sel.value)
                 if coverage is not None:
                     coverage_holder[:] = [pn.pane.Plotly(
-                        coverage, height=235, width=800,
+                        coverage, height=230, width=800,
                         margin=(15, 0, 0, 0),
                         styles={'border-radius': '8px', 'box-shadow': '3px 3px 5px #bcbcbc'},
                     )]

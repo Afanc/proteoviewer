@@ -1,7 +1,8 @@
 import panel as pn
+import plotly.graph_objects as go
 from concurrent.futures import ThreadPoolExecutor
 from utils.session_state import SessionState
-from tabs.overview_shared import make_id_sort_toggle, sort_arg
+from components.plot_utils import _abbr
 from components.preprocessing_plots import (
     plot_filter_histograms,
     plot_dynamic_range,
@@ -140,14 +141,29 @@ def preprocessing_tab(state: SessionState):
         name="",
         options=["Raw", "Intensity-normalized"],
         value="Raw",
-        width=160,
+        width=180,
+        margin=(5, 5, 5, 5),
+        align="center",
         button_type="default",
         styles={"z-index": "10"},
     )
 
-    mc_sort = make_id_sort_toggle(margin=(0, 0, 0, 10), width=170)
+    mc_sort = pn.widgets.RadioButtonGroup(
+        name="Order", options=["By condition", "By sample"], value="By condition",
+        width=180, margin=(5, 5, 5, 5), align="center", button_type="default",
+        styles={"z-index": "10"},
+    )
+    mc_title = pn.pane.HTML(
+        "Missed cleavages per sample", sizing_mode="stretch_width", margin=0, align="center",
+        styles={"text-align": "center", "white-space": "nowrap", "font-size": "17px",
+                "font-family": '"Open Sans", verdana, arial, sans-serif', "color": "#2a3f5f"},
+    )
     mc_unavailable = _placeholder_plot("Missed cleavages")
-    mc_plot = plotly_section(mc_unavailable, height=400, flex="1")
+    mc_unavailable.add_annotation(text="Not available for this dataset", x=.5, y=.5,
+                                  xref="paper", yref="paper", showarrow=False)
+    mc_plot = plotly_section(None, height=400, flex="1")
+    # Updates are explicit; live linking would echo stale orders into cached figures.
+    mc_plot.link_figure = False
     mc_payload = adata.uns.get("preprocessing", {}).get("distributions", {}).get(
         "missed_cleavages_per_sample") or {}
     mc_samples = list(map(str, mc_payload.get("samples", [])))
@@ -157,24 +173,29 @@ def preprocessing_tab(state: SessionState):
         fig = missed_cleav_raw_fig if mc_mode.value == "Raw" else missed_cleav_w_fig
         if fig is None:
             fig = mc_unavailable
-        if sort_arg(mc_sort.value) == "condition":
+        # Panel shallow-copies layout: edit a fresh figure so axis changes emit
+        # a browser update instead of silently mutating the mounted model too.
+        fig = go.Figure(fig)
+        if mc_sort.value == "By condition":
             order = sorted(mc_samples, key=lambda sample: (mc_conditions.get(sample, "Unknown"), sample))
         else:
             order = sorted(mc_samples)
-        # Only the category order changes; both stored series retain their values.
-        fig.update_xaxes(categoryorder="array", categoryarray=order)
-        if mc_plot.object is fig:
-            mc_plot.param.trigger("object")
-        else:
-            mc_plot.object = fig
+            print(order)
+        # A cached figure's fixed width would undo the pane's browser resize.
+        # The common title lives in the controls row; series values stay untouched.
+        fig.update_layout(width=None, height=400, autosize=True, title_text="")
+        fig.update_xaxes(type="category", categoryorder="array", categoryarray=order,
+                         tickmode="array", tickvals=order, ticktext=[_abbr(s) for s in order])
+        mc_plot.object = fig
 
     _render_mc_plot()
     mc_mode.param.watch(_render_mc_plot, "value")
     mc_sort.param.watch(_render_mc_plot, "value")
 
     missed_cleav_pane = pn.Column(
-        pn.Row(mc_mode, mc_sort, styles={"z-index": "10"}, margin=(10, 0, 0, 0)),
-        pn.Row(mc_plot, margin=(-30, 5, 0, 0)),
+        pn.Row(mc_mode, mc_title, mc_sort, sizing_mode="stretch_width",
+               styles={"z-index": "10"}, margin=(10, 5, 0, 0)),
+        pn.Row(mc_plot, sizing_mode="stretch_width", margin=(-30, 5, 0, 0)),
         sizing_mode="stretch_width",
         styles={"flex": "0.4"},
     )
