@@ -577,7 +577,9 @@ def _protein_coverage_diagnostics(
     })
 
 
-def plot_protein_coverage(adata, uniprot_id: str, contrast: str) -> Optional[go.Figure]:
+def plot_protein_coverage(
+    adata, uniprot_id: str, contrast: str, reference_accession: Optional[str] = None,
+) -> Optional[go.Figure]:
     """Display exported peptide coordinates with local log2 intensity diagnostics.
 
     No sequence mapping or isoform fallback is performed. Missing optional
@@ -589,9 +591,9 @@ def plot_protein_coverage(adata, uniprot_id: str, contrast: str) -> Optional[go.
     if analysis_type not in {"dia", "dda", "proteomics"}:
         return None
     is_group = ";" in str(uniprot_id)
-    reference_id = str(uniprot_id).split(";")[0].strip() if is_group else str(uniprot_id)
-    coverage_title = (f"Protein coverage — {reference_id} (first protein of {uniprot_id})"
-                      if is_group else "Protein coverage")
+    reference_id = (reference_accession if reference_accession is not None
+                    else str(uniprot_id).split(";")[0].strip())
+    coverage_title = f"Protein coverage ({reference_id})"
     block = adata.uns.get("peptides", {})
     has_coverage_payload = "protein_coverage" in adata.uns
     coverage_fields = (
@@ -628,11 +630,14 @@ def plot_protein_coverage(adata, uniprot_id: str, contrast: str) -> Optional[go.
         return unavailable()
 
     metadata = pd.DataFrame({field: block[field] for field in fields}, index=rows)
+    best_precursor_pep = np.asarray(block.get("best_precursor_pep", []))
+    if best_precursor_pep.shape == (len(rows),):
+        metadata["best_precursor_pep"] = pd.to_numeric(best_precursor_pep, errors="coerce")
     selected = metadata["protein_index"].astype(str).eq(str(uniprot_id))
     metadata = metadata.loc[selected].copy()
     if has_coverage_payload:
         # The normalized payload is authoritative. Never fall back to legacy
-        # fields or a later accession when the first reference is unresolved.
+        # fields or another accession when the selected reference is unresolved.
         try:
             coverage = adata.uns["protein_coverage"]
             if coverage["version"] != 1:
@@ -642,7 +647,10 @@ def plot_protein_coverage(adata, uniprot_id: str, contrast: str) -> Optional[go.
             )})
             references = references.loc[references["protein_index"].eq(str(uniprot_id))]
             references = references.sort_values("accession_order")
-            if references.empty or references.iloc[0]["accession"] != reference_id:
+            if reference_accession is None and (references.empty or references.iloc[0]["accession"] != reference_id):
+                return unavailable()
+            references = references.loc[references["accession"].eq(reference_id)]
+            if len(references) != 1:
                 return unavailable()
             reference = references.iloc[0]
             mappings = pd.DataFrame({field: coverage["peptide_mappings"][field] for field in (
@@ -663,11 +671,11 @@ def plot_protein_coverage(adata, uniprot_id: str, contrast: str) -> Optional[go.
 
     references = metadata["reference_accession"].astype(str)
     # Keep group quantities, but draw only coordinates explicitly exported for
-    # its first accession. Never reuse another member's coordinate system.
+    # the selected accession. Never reuse another member's coordinate system.
     resolved = references.eq(reference_id) if is_group else references.ne("")
     if is_group and not (resolved & metadata["peptide_mapping_status"].eq("mapped")).any():
         return unavailable("Protein coverage unavailable/ambiguous<br>"
-                           f"No exported peptide coordinates for first accession {reference_id}.")
+                           f"No exported peptide coordinates for accession {reference_id}.")
     lengths = metadata.loc[resolved, "protein_length_aa"].unique()
     if (not resolved.any() or not references[resolved].eq(reference_id).all()
             or len(lengths) != 1 or not np.isfinite(lengths[0])
@@ -737,6 +745,11 @@ def plot_protein_coverage(adata, uniprot_id: str, contrast: str) -> Optional[go.
             for i, label in enumerate(("Disagreement (log2)", "Peptide log2FC", "Reference log2FC"), start=9)
         )
         sd_hover = "SD: %{customdata[8]}" + ("" if valid_sd else " (insufficient observations)") + "<br>"
+        pep_hover = ""
+        if "best_precursor_pep" in metadata:
+            hover.append(row["best_precursor_pep"])
+            pep_hover = ("Best prec. PEP: %{customdata[12]:.4g}<br>" if np.isfinite(row["best_precursor_pep"])
+                         else "")
         fig.add_trace(go.Bar(
             base=[row["peptide_start"]],
             x=[row["peptide_end"] - row["peptide_start"]],
@@ -749,7 +762,7 @@ def plot_protein_coverage(adata, uniprot_id: str, contrast: str) -> Optional[go.
             hovertemplate=("Peptide: %{customdata[0]}<br>Start/end: %{customdata[1]}–%{customdata[2]}<br>"
                            "Observed samples: %{customdata[4]} / %{customdata[5]}<br>"
                            "Missed cleavages: %{customdata[6]}<br>"
-                           + sd_hover + fc_hover + "<extra></extra>"),
+                           + sd_hover + fc_hover + pep_hover + "<extra></extra>"),
         ))
     fig.update_layout(
         title=dict(text=coverage_title, x=.5), template="plotly", height=285,
@@ -819,6 +832,11 @@ def plot_peptide_trends_centered(adata, uniprot_id: str, contrast: str) -> go.Fi
     X = X_all[keep, :]
     seqs = seqs[keep]
     labels = labels[keep]
+    peptide_ids = np.asarray(rows)[keep]
+    best_precursor_pep = np.asarray(block.get("best_precursor_pep", []))
+    has_pep = proteomics_mode and best_precursor_pep.shape == (len(rows),)
+    if has_pep:
+        best_precursor_pep = pd.to_numeric(best_precursor_pep, errors="coerce")[keep]
     if src_key == "precursors":
         chg = chg[keep]
 
@@ -861,7 +879,7 @@ def plot_peptide_trends_centered(adata, uniprot_id: str, contrast: str) -> go.Fi
     def _truncate_name(name, max_len=10):
         return name if len(name) <= max_len else name[:max_len - 1] + "…"
 
-    for y, lab in zip(X, labels):
+    for i, (y, lab, peptide_id) in enumerate(zip(X, labels, peptide_ids)):
         if np.isnan(y).all():
             continue
         valid = ~np.isnan(y)
@@ -875,6 +893,12 @@ def plot_peptide_trends_centered(adata, uniprot_id: str, contrast: str) -> go.Fi
                 if run.size == 1:
                     singleton_sizes[run[0]] = 7.0  # only this point gets a marker
 
+        hover = np.c_[np.full_like(y, lab, dtype=object), cond_labels]
+        pep_hover = ""
+        if has_pep:
+            hover = np.c_[hover, np.full_like(y, best_precursor_pep[i])]
+            pep_hover = ("<br>Best precursor PEP: %{customdata[2]:.4g}" if np.isfinite(best_precursor_pep[i])
+                         else "")
         fig.add_trace(go.Scatter(
             x=sample_labels,
             y=y,
@@ -882,11 +906,11 @@ def plot_peptide_trends_centered(adata, uniprot_id: str, contrast: str) -> go.Fi
             name=_truncate_name(str(lab)),
             line=dict(color=line_cmap[lab], width=2, dash="dash"),
             marker=dict(size=singleton_sizes, color=line_cmap[lab]),
-            customdata=np.c_[np.full_like(y, lab, dtype=object), cond_labels],
+            meta=str(peptide_id), customdata=hover,
             hovertemplate="<b>%{customdata[0]}</b><br>"
                           "Sample: %{x}<br>"
                           "Cond: %{customdata[1]}<br>"
-                          "Value: %{y:.3f}<extra></extra>",
+                          "Value: %{y:.3f}" + pep_hover + "<extra></extra>",
             showlegend=True,
         ))
 

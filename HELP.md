@@ -168,6 +168,10 @@ Values depend on the selected data view.
 
 Peptide trends are **centered per peptide** (not absolute intensity values)
 
+When exported, **Best precursor PEP** appears in both peptide-trend and Protein
+Coverage hover: the minimum contributing precursor/elution-group PEP, not a
+peptide-level statistical PEP. Missing values or absent metadata omit the line.
+
 ---
 
 ### Protein Coverage: Peptide SD and Fold-Change Disagreement
@@ -177,11 +181,14 @@ ProteoFlux. Both diagnostics use **log2 of positive, finite raw peptide
 intensities**, restricted to the selected contrast. They do not use imputed
 protein values, and the Raw/Log-only/Processed selector does not change them.
 
-For multi-protein groups, the title identifies the **first accession** selected
-for coverage. Only coordinates explicitly exported for that accession are drawn;
-peptide quantities still belong to the selected group. If those coordinates are
-absent or ambiguous, the plot says so rather than using another member or mapping
-a sequence in Viewer.
+The title identifies the selected accession: `Protein coverage (accession)`.
+When multiple references have drawable mappings, a dropdown left of the title
+lists group accessions in their original order, defaulting to the first.
+Only that accession's exported coordinates are drawn; peptide quantities still
+belong to the group. Missing/ambiguous mappings stay unavailable until another
+reference is explicitly selected. Switching references preserves trend focus.
+Click a coverage peptide to isolate its trend; click it again to show all trends.
+This uses the same visibility state as the trend legend.
 
 **Peptide SD** is pooled within-condition variation. For each peptide, subtract
 its mean within each condition, then calculate:

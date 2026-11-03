@@ -1,6 +1,7 @@
 import os
 import re
 import panel as pn
+import plotly.graph_objects as go
 import textwrap
 from functools import lru_cache
 from utils.session_state import SessionState
@@ -1083,6 +1084,22 @@ def overview_tab(state: SessionState):
             bar_holder.loading = False
         _sync_detail_mode()
 
+    def _focus_peptide_trend(event):
+        points = (event.new or {}).get("points", [])
+        if not points or not pep_holder or not isinstance(pep_holder[0], pn.pane.Plotly):
+            return
+        peptide = points[0].get("customdata", [])
+        if len(peptide) < 8:
+            return
+        fig = pep_holder[0].object
+        matches = [trace.meta == peptide[7] for trace in fig.data]
+        if not any(matches):
+            return
+        # Legend double-click and coverage clicks share Plotly trace visibility.
+        visible = [trace.visible not in (False, "legendonly") for trace in fig.data]
+        restore = visible == matches
+        fig.plotly_restyle({"visible": [True if restore or match else "legendonly" for match in matches]})
+
     def _update_pep(_=None):
         coverage_holder.clear()
         coverage_holder.visible = False
@@ -1097,11 +1114,48 @@ def overview_tab(state: SessionState):
             if uid:
                 coverage = plot_protein_coverage(state.adata, uid, contrast_sel.value)
                 if coverage is not None:
-                    coverage_holder[:] = [pn.pane.Plotly(
-                        coverage, height=230, width=800,
+                    # Prepare once for this protein/contrast. Switching references
+                    # changes only coverage, leaving trend visibility and statistics intact.
+                    first_reference = str(uid).split(";")[0].strip()
+                    figures = {first_reference: coverage}
+                    payload = state.adata.uns.get("protein_coverage", {})
+                    if isinstance(payload, dict) and payload.get("version") == 1:
+                        references = payload.get("references", {})
+                        try:
+                            ordered = sorted(zip(references["accession_order"], references["protein_index"],
+                                                 references["accession"], strict=True))
+                        except (KeyError, TypeError, ValueError):
+                            ordered = []
+                        for _, protein, accession in ordered:
+                            if protein == uid and accession not in figures:
+                                figures[accession] = plot_protein_coverage(
+                                    state.adata, uid, contrast_sel.value, reference_accession=accession,
+                                )
+                    if sum(bool(fig.data) for fig in figures.values()) > 1:
+                        buttons = [dict(label=ref, method="relayout", args=[{"meta": {"coverage_reference": ref}}])
+                                   for ref in figures]
+                        for i, (ref, fig) in enumerate(figures.items()):
+                            fig.update_layout(
+                                meta=dict(coverage_reference=ref),
+                                updatemenus=[dict(buttons=buttons, active=i, x=0, xanchor="left",
+                                                  y=1, yanchor="bottom", pad=dict(b=12), font=dict(size=11))],
+                                margin_l=55, margin_t=50,
+                            )
+                    coverage_pane = pn.pane.Plotly(
+                        go.Figure(coverage), height=230, width=800, link_figure=False,
                         margin=(15, 0, 0, 0),
                         styles={'border-radius': '8px', 'box-shadow': '3px 3px 5px #bcbcbc'},
-                    )]
+                    )
+
+                    def _select_coverage_reference(event):
+                        reference = (event.new or {}).get("meta", {}).get("coverage_reference")
+                        if reference in figures:
+                            # Panel can share nested layout dictionaries; keep cached figures pristine.
+                            coverage_pane.object = go.Figure(figures[reference])
+
+                    coverage_pane.param.watch(_select_coverage_reference, "relayout_data")
+                    coverage_pane.param.watch(_focus_peptide_trend, "click_data")
+                    coverage_holder[:] = [coverage_pane]
                     coverage_holder.visible = True
         finally:
             pep_holder.loading = False
