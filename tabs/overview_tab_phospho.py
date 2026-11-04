@@ -269,6 +269,11 @@ def _build_pipeline_summary(adata) -> str:
             extras.append(f"tn_perc={imputation['knn_tn_perc']}")
     if "rf" in imp_method and "rf_max_iter" in imputation:
         extras.append(f"rf_max_iter={imputation['rf_max_iter']}")
+    if "lc_conmed" in imp_method:
+        # Files predating explicit modes used standard (complete) imputation.
+        lc_conmed_mode = imputation.get("lc_conmed_mode", "standard")
+        extras.append("complete" if lc_conmed_mode == "standard" else lc_conmed_mode)
+
     if "lc_conmed" in imp_method and "lc_conmed_lod_k" in imputation:
         lc_conmed_lod_k = preproc.get("imputation").get("lc_conmed_lod_k", "NA")
         lc_conmed_min_obs = preproc.get("imputation").get("lc_conmed_in_min_obs")
