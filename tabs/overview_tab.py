@@ -243,6 +243,14 @@ def overview_tab(state: SessionState):
         if pilot_mode
         else f"eBayes via {ebayes_method}{batch_txt}"
     )
+    coverage_filenames = metadata_list(
+        adata.uns.get("protein_coverage", {}).get("fasta_filenames")
+    )
+    coverage_text = ", ".join(map(str, coverage_filenames)) or "Not recorded in this file"
+    protein_coverage_summary = (
+        f"- **Protein Coverage**: {coverage_text}"
+        if proteomics_mode else ""
+    )
 
     # build a single Markdown string
     summary_md = textwrap.dedent(f"""
@@ -264,6 +272,7 @@ def overview_tab(state: SessionState):
         - **Normalization**: {norm_methods}
         - **Imputation**: {imp_method}
         - **Differential expression**: {differential_expression_txt}
+        {protein_coverage_summary}
 
         **Proteoflux Version** {pf_version}
     """).strip()
